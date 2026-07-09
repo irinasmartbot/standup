@@ -11,3 +11,7 @@ bookings.db-*
 *.jpg
 *.jpeg
 *.png
+
+# рабочие документы — не часть кода
+*.docx
+*.doc
