@@ -1,0 +1,4 @@
+aiogram>=3.7,<4
+aiohttp>=3.9,<4
+Pillow>=10,<12
+python-dotenv>=1,<2

@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.log
+bookings.db
+bookings.db-*
+
+# медиафайлы — хранятся локально и позже переедут в S3
+*.jpg
+*.jpeg
+*.png
