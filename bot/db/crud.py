@@ -44,6 +44,58 @@ def create_booking(telegram_id, username, name, phone, event_date, event_time, e
     return booking_id
 
 
+def get_active_bookings_by_user(telegram_id):
+    """Все активные брони пользователя."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT * FROM bookings WHERE telegram_id=? AND status IN ('booked', 'confirmed') ORDER BY event_date",
+        (telegram_id,),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def get_last_phone(telegram_id):
+    """Возвращает последний номер телефона пользователя из его броней."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT phone FROM bookings WHERE telegram_id=? AND phone IS NOT NULL AND phone != '' ORDER BY id DESC LIMIT 1",
+        (telegram_id,),
+    )
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def get_booking_by_id(booking_id):
+    """Возвращает бронь по id вне зависимости от статуса."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM bookings WHERE id=?", (booking_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+
+def save_confirm_message_id(booking_id, message_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE bookings SET confirm_message_id=? WHERE id=?", (message_id, booking_id))
+    conn.commit()
+    conn.close()
+
+
+def save_ticket_message_id(booking_id, message_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE bookings SET ticket_message_id=? WHERE id=?", (message_id, booking_id))
+    conn.commit()
+    conn.close()
+
+
 def update_booking_status(booking_id, status):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()

@@ -27,6 +27,8 @@ def init_db():
         "reminder_24h_sent": "ALTER TABLE bookings ADD COLUMN reminder_24h_sent INTEGER DEFAULT 0",
         "reminder_day_sent": "ALTER TABLE bookings ADD COLUMN reminder_day_sent INTEGER DEFAULT 0",
         "annulled_at": "ALTER TABLE bookings ADD COLUMN annulled_at TEXT",
+        "ticket_message_id": "ALTER TABLE bookings ADD COLUMN ticket_message_id INTEGER",
+        "confirm_message_id": "ALTER TABLE bookings ADD COLUMN confirm_message_id INTEGER",
     }
     for column, sql in migrations.items():
         if column not in columns:
