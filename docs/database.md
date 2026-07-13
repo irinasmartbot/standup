@@ -183,6 +183,16 @@ python scripts/import_events_from_sheets.py
 
 Скрипт делает upsert по связке `format + event_date + event_time + location`: если мероприятие уже есть, оно обновляется.
 
+### Синхронизация мероприятий раз в час
+
+Скрипт `scripts/sync_events_hourly.py` запускает импорт мероприятий в цикле раз в час:
+
+```bash
+python scripts/sync_events_hourly.py
+```
+
+По умолчанию он синхронизирует лист «Проверка материала». На VPS его нужно будет подключить к постоянному запуску через `systemd` на Шаге 3.
+
 ### Перенос броней из SQLite
 
 Скрипт `scripts/migrate_bookings_from_sqlite.py` переносит активные будущие брони из локальной SQLite-базы в PostgreSQL.
