@@ -163,6 +163,24 @@ events (id) ←── bookings (event_id)
 2. **Из Google Таблицы** → таблица `bookings` (только активные брони на будущие мероприятия)
 3. Сопоставление по номеру телефона — если телефон уже есть в `users`, дубль не создаётся
 
+### Импорт мероприятий из Google Sheets
+
+Скрипт `scripts/import_events_from_sheets.py` импортирует актуальные будущие мероприятия из опубликованного CSV Google Sheets в таблицу `events`.
+
+Перед запуском в `.env` должна быть переменная:
+
+```env
+DATABASE_URL=postgresql://standup_user:password@localhost:5432/standup_db
+```
+
+Запуск для текущего листа «Проверка материала»:
+
+```bash
+python scripts/import_events_from_sheets.py
+```
+
+Скрипт делает upsert по связке `format + event_date + event_time + location`: если мероприятие уже есть, оно обновляется.
+
 ---
 
 ## Эксплуатация PostgreSQL на VPS

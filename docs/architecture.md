@@ -140,7 +140,7 @@ standup/
 
 - [x] Спроектировать таблицы `events`, `users`, `bookings`
 - [x] Подготовить PostgreSQL-схему для серверной БД
-- [ ] Сделать скрипт импорта мероприятий из Google Sheets в PostgreSQL
+- [x] Сделать скрипт импорта мероприятий из Google Sheets в PostgreSQL
 - [ ] Сделать скрипт переноса броней из SQLite / Google Sheets
 - [ ] Настроить синхронизацию событий из Google Sheets раз в час
 - [ ] Переключить серверного бота на чтение событий из PostgreSQL
