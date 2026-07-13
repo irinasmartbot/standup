@@ -181,6 +181,23 @@ python scripts/import_events_from_sheets.py
 
 Скрипт делает upsert по связке `format + event_date + event_time + location`: если мероприятие уже есть, оно обновляется.
 
+### Перенос броней из SQLite
+
+Скрипт `scripts/migrate_bookings_from_sqlite.py` переносит активные будущие брони из локальной SQLite-базы в PostgreSQL.
+
+Запускать его нужно после импорта мероприятий, потому что каждая бронь привязывается к записи в таблице `events`.
+
+```bash
+python scripts/migrate_bookings_from_sqlite.py
+```
+
+По умолчанию скрипт берёт:
+
+- SQLite-файл из `DB_PATH` или `bookings.db`
+- PostgreSQL-подключение из `DATABASE_URL`
+
+Переносятся только брони со статусом `booked` или `confirmed` на будущие даты. Если соответствующее мероприятие не найдено в `events`, бронь пропускается и выводится в отчёте.
+
 ---
 
 ## Эксплуатация PostgreSQL на VPS
