@@ -1,0 +1,35 @@
+name: Deploy dev to VPS
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy over SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/vps_key
+          chmod 600 ~/.ssh/vps_key
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/vps_key "$VPS_USER@$VPS_HOST" <<'EOF'
+          set -euo pipefail
+          cd /home/standup/app
+          git fetch origin dev
+          git checkout dev
+          git pull --ff-only origin dev
+          /home/standup/app/venv/bin/python -m pip install -r requirements.txt
+          sudo /usr/bin/systemctl restart standup-bot
+          sudo /usr/bin/systemctl is-active --quiet standup-bot
+          EOF
