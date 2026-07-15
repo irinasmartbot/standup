@@ -186,6 +186,23 @@ PostgreSQL backup настроен через `cron`: база `standup_db` со
 
 Порядок ручного обновления системы и PostgreSQL описан в `docs/database.md`.
 
+### Серверный запуск Telegram-бота
+
+Серверная копия проекта находится в `/home/standup/app`. Рабочая ветка для настройки и тестирования сервера — `dev`; каждый `push` в `dev` запускает автодеплой через GitHub Actions.
+
+Настройки сервера лежат в `/home/standup/app/.env`. Токены и пароли не хранятся в GitHub. Чтобы переключить тестового бота на другой Telegram-токен, нужно изменить `BOT_TOKEN` в `.env` и перезапустить сервис:
+
+```bash
+sudo systemctl restart standup-bot
+sudo systemctl status standup-bot
+```
+
+Посмотреть последние логи бота:
+
+```bash
+sudo journalctl -u standup-bot -n 100 --no-pager
+```
+
 ### Шаг 4 — Расширение Telegram-бота
 
 - [x] Доработать ветку «Проверка материала»
