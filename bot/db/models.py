@@ -1,8 +1,11 @@
 import sqlite3
-from bot.config import DB_PATH
+from bot.config import BOOKINGS_SOURCE, DB_PATH
 
 
 def init_db():
+    if BOOKINGS_SOURCE == "postgres":
+        return
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
