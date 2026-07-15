@@ -311,3 +311,46 @@ psql "$RESTORE_URL" -c "\dt"
 ```
 
 Успешная проверка: в тестовой базе видны таблицы `bookings`, `events`, `users`.
+
+### Ручное обновление системы и PostgreSQL
+
+Перед обновлением нужно убедиться, что есть свежий backup:
+
+```bash
+/home/standup/app/scripts/backup_postgres.sh
+ls -lh /home/standup/backups/postgres
+```
+
+Обновление пакетов на VPS:
+
+```bash
+sudo apt update
+sudo apt upgrade
+```
+
+После обновления проверить PostgreSQL и бота:
+
+```bash
+sudo systemctl status postgresql
+sudo systemctl status standup-bot
+```
+
+Если система просит перезагрузку, выполнить её только после проверки backup'а:
+
+```bash
+sudo reboot
+```
+
+После перезагрузки снова проверить сервисы:
+
+```bash
+sudo systemctl status postgresql
+sudo systemctl status standup-bot
+```
+
+Если бот не запущен:
+
+```bash
+sudo systemctl restart standup-bot
+sudo journalctl -u standup-bot -n 100 --no-pager
+```
