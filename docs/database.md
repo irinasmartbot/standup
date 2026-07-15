@@ -223,7 +223,14 @@ python scripts/import_events_from_sheets.py
 python scripts/sync_events_hourly.py
 ```
 
-По умолчанию он синхронизирует лист «Проверка материала». На VPS его нужно будет подключить к постоянному запуску через `systemd` на Шаге 3.
+На VPS синхронизация запущена как `systemd`-служба `standup-events-sync.service`:
+
+```bash
+sudo systemctl status standup-events-sync
+sudo journalctl -u standup-events-sync -n 100 --no-pager
+```
+
+Для текущей версии синхронизируется лист «Афиша бесплатников» в формат `proverka`.
 
 ### Перенос броней из SQLite
 
