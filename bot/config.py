@@ -27,6 +27,8 @@ MANAGER_LINK = os.getenv("MANAGER_LINK", "https://t.me/ccoverr")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/MoscowStandupShow")
 MANAGER_PHONE = os.getenv("MANAGER_PHONE", "89648772410")
 DB_PATH = os.getenv("DB_PATH", "bookings.db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+EVENTS_SOURCE = os.getenv("EVENTS_SOURCE", "postgres" if DATABASE_URL else "sheets")
 TICKET_TEMPLATE = os.getenv("TICKET_TEMPLATE", "photo_2023-06-26_15-06-46.jpg")
 
 if not BOT_TOKEN:

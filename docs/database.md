@@ -232,6 +232,14 @@ sudo journalctl -u standup-events-sync -n 100 --no-pager
 
 Для текущей версии синхронизируется лист «Афиша бесплатников» в формат `proverka`.
 
+Серверный бот читает события из таблицы `events`, а не напрямую из Google Sheets. Источник выбирается переменной `EVENTS_SOURCE`:
+
+```env
+EVENTS_SOURCE=postgres
+```
+
+Если `EVENTS_SOURCE` не задан, но есть `DATABASE_URL`, бот использует PostgreSQL. Для локальной разработки без PostgreSQL можно оставить `EVENTS_SOURCE=sheets`.
+
 ### Перенос броней из SQLite
 
 Скрипт `scripts/migrate_bookings_from_sqlite.py` переносит активные будущие брони из локальной SQLite-базы в PostgreSQL.
