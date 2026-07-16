@@ -11,6 +11,7 @@ router = Router()
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
+_VENUE_ALBUM_MESSAGE_IDS = {}
 
 FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
 
@@ -58,6 +59,11 @@ async def _delete_previous_menu_message(call: CallbackQuery):
     text = call.message.text or call.message.caption or ""
     if WELCOME_MARKER in text:
         return
+    for message_id in _VENUE_ALBUM_MESSAGE_IDS.pop(call.message.message_id, []):
+        try:
+            await call.bot.delete_message(call.message.chat.id, message_id)
+        except Exception:
+            pass
     try:
         await call.message.delete()
     except Exception:
@@ -97,10 +103,15 @@ async def show_venues(call: CallbackQuery):
         if os.path.exists(path):
             media.add_photo(FSInputFile(path))
     album = media.build()
+    album_messages = []
     if album:
-        await call.message.answer_media_group(media=album)
+        album_messages = await call.message.answer_media_group(media=album)
 
-    await call.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    text_message = await call.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    if album_messages:
+        _VENUE_ALBUM_MESSAGE_IDS[text_message.message_id] = [
+            message.message_id for message in album_messages
+        ]
     await call.answer()
 
 
