@@ -156,23 +156,24 @@ async def check_dates_kb():
             label = date
         kb.button(text=label, callback_data=f"date_{date}")
     kb.button(text="📍 Выбор по площадке", callback_data="by_venue")
-    # Даты по 2 в ряд, кнопка площадки — отдельной строкой
+    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    # Даты по 2 в ряд, служебные кнопки — отдельными строками
     n = len(dates)
     widths = [2] * (n // 2)
     if n % 2:
         widths.append(1)
-    widths.append(1)
+    widths.extend([1, 1])
     kb.adjust(*widths)
     return kb.as_markup()
 
 
-async def send_event_card(message, event):
+async def send_event_card(message, event, back_callback="check_dates"):
     date_str = format_date(event["date"])
     text = f"{date_str}\n{event['weekday']}\n\n{event['time']}\n{event['address']}\n{event['description']}"
     kb = InlineKeyboardBuilder()
     kb.button(text="🎟 Забронировать билеты", callback_data=f"book_event_{event['date']}_{event['time']}")
     kb.button(text="📋 Правила бронирования", callback_data="booking_rules")
-    kb.button(text="◀️ Назад", callback_data="check_dates")
+    kb.button(text="◀️ Назад", callback_data=back_callback)
     kb.adjust(1)
     try:
         await message.answer_photo(photo=event["image"], caption=text, reply_markup=kb.as_markup())
@@ -214,13 +215,14 @@ async def by_venue(call: CallbackQuery):
     for venue in venues:
         kb.button(text=venue, callback_data=f"venue_{venue}")
     kb.button(text="📅 Выбор по дате", callback_data="check_dates")
-    # Площадки по 1 в ряд, кнопка "по дате" — отдельной строкой
-    kb.adjust(*([1] * len(venues)), 1)
+    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    # Площадки по 1 в ряд, служебные кнопки — отдельными строками
+    kb.adjust(*([1] * len(venues)), 1, 1)
     await _answer_with_check_photo(call.message, "Выбирай локацию 👇", reply_markup=kb.as_markup())
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("venue_"))
+@router.callback_query(F.data.startswith("venue_") & ~F.data.startswith("venue_event_"))
 async def venue_events(call: CallbackQuery):
     await _delete_previous_menu_message(call)
     venue = call.data.replace("venue_", "")
@@ -236,8 +238,8 @@ async def venue_events(call: CallbackQuery):
             label = f"📅 {d.strftime('%d ') + MONTHS[d.strftime('%B')]} ({e['weekday']}) {e['time']}"
         except Exception:
             label = e["date"]
-        kb.button(text=label, callback_data=f"event_{e['date']}_{e['time']}")
-    kb.button(text="📍 К локациям", callback_data="by_venue")
+        kb.button(text=label, callback_data=f"venue_event_{venue}_{e['date']}_{e['time']}")
+    kb.button(text="📍 Назад к выбору локации", callback_data="by_venue")
     kb.button(text="📅 Выбор по дате", callback_data="check_dates")
     kb.adjust(1)
     await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
@@ -273,6 +275,23 @@ async def show_specific_event(call: CallbackQuery):
     event = next((e for e in events if e["date"] == event_date and e["time"] == event_time), None)
     if event:
         await send_event_card(call.message, event)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("venue_event_"))
+async def show_specific_venue_event(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    venue, event_date, event_time = call.data.replace("venue_event_", "", 1).rsplit("_", 2)
+    events = await load_events()
+    event = next(
+        (
+            e for e in events
+            if e["location"] == venue and e["date"] == event_date and e["time"] == event_time
+        ),
+        None,
+    )
+    if event:
+        await send_event_card(call.message, event, back_callback=f"venue_{venue}")
     await call.answer()
 
 
@@ -594,6 +613,7 @@ async def cancel_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
+    await _delete_previous_menu_message(call)
     bookings = get_active_bookings_by_user(call.from_user.id)
 
     if len(bookings) > 1:
@@ -629,6 +649,7 @@ async def cancel_select(call: CallbackQuery):
         await call.message.answer("Бронь не найдена.")
         await call.answer()
         return
+    await _delete_previous_menu_message(call)
     date_label = f"{format_date(booking[5])} {booking[6]}"
     kb = InlineKeyboardBuilder()
     kb.button(text="Подтверждаю", callback_data=f"cancel_do_{booking_id}")
@@ -667,6 +688,7 @@ async def cancel_do(call: CallbackQuery):
     await _remove_ticket_button(booking_id, call.from_user.id)
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
+    await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="Перейти в главное меню", callback_data="main_menu")
     kb.adjust(1)
@@ -689,6 +711,7 @@ async def change_date_do(call: CallbackQuery):
     booking_id = int(call.data.replace("change_date_do_", ""))
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
+    await _delete_previous_menu_message(call)
     await call.message.answer("Бронь отменена. Выбери новую дату 👇", reply_markup=await check_dates_kb())
     await call.answer()
 
@@ -703,6 +726,7 @@ async def change_date_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
+    await _delete_previous_menu_message(call)
     bookings = get_active_bookings_by_user(call.from_user.id)
 
     if len(bookings) > 1:
@@ -738,6 +762,7 @@ async def change_date_select(call: CallbackQuery):
         await call.message.answer("Бронь не найдена.")
         await call.answer()
         return
+    await _delete_previous_menu_message(call)
     date_label = f"{format_date(booking[5])} {booking[6]}"
     kb = InlineKeyboardBuilder()
     kb.button(text="Подтверждаю", callback_data=f"change_date_do_{booking_id}")
