@@ -27,6 +27,13 @@ def main_menu_kb():
     return kb.as_markup()
 
 
+async def _delete_previous_menu_message(call: CallbackQuery):
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+
+
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     await state.clear()
@@ -36,5 +43,6 @@ async def start(message: Message, state: FSMContext):
 @router.callback_query(lambda c: c.data == "main_menu")
 async def back_to_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
+    await _delete_previous_menu_message(call)
     await call.message.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
     await call.answer()

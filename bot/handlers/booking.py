@@ -23,6 +23,7 @@ router = Router()
 # Корень проекта — два уровня выше bot/handlers/booking.py
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
+WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
 
 
 def _random_check_photo():
@@ -41,6 +42,33 @@ def _random_check_photo():
     if os.path.exists(fallback):
         return FSInputFile(fallback)
     return None
+
+
+async def _answer_with_check_photo(message, text: str, reply_markup=None, parse_mode=None):
+    """Отправляет сообщение с рандомным фото проверки, если фото доступны."""
+    photo = _random_check_photo()
+    if photo:
+        try:
+            await message.answer_photo(
+                photo=photo,
+                caption=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+            return
+        except Exception:
+            pass
+    await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+
+async def _delete_previous_menu_message(call: CallbackQuery):
+    text = call.message.text or call.message.caption or ""
+    if WELCOME_MARKER in text:
+        return
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
 
 
 def _manage_kb(booking_id):
@@ -149,55 +177,32 @@ async def send_event_card(message, event):
 
 @router.callback_query(lambda c: c.data == "check")
 async def check_format(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="📅 Выбрать по дате", callback_data="check_dates")
     kb.button(text="📍 Выбор по площадке", callback_data="by_venue")
     kb.adjust(1)
-    photo = _random_check_photo()
-    try:
-        if photo:
-            await call.message.answer_photo(
-                photo=photo,
-                caption=(
-                    "Привет! 😊 Я помогу тебе забронировать места на <b>Проверку материала</b> "
-                    "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇"
-                ),
-                reply_markup=kb.as_markup(),
-                parse_mode="HTML",
-            )
-        else:
-            await call.message.answer(
-                "Привет! 😊 Выбирай формат поиска мероприятий 👇",
-                reply_markup=kb.as_markup(),
-            )
-    except Exception:
-        await call.message.answer(
-            "Привет! 😊 Выбирай формат поиска мероприятий 👇",
-            reply_markup=kb.as_markup(),
-        )
+    await _answer_with_check_photo(
+        call.message,
+        "Привет! 😊 Я помогу тебе забронировать места на <b>Проверку материала</b> "
+        "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
     await call.answer()
 
 
 @router.callback_query(lambda c: c.data == "check_dates")
 async def check_dates(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     kb = await check_dates_kb()
-    photo = _random_check_photo()
-    try:
-        if photo:
-            await call.message.answer_photo(
-                photo=photo,
-                caption="Выбирай дату 👇",
-                reply_markup=kb,
-            )
-        else:
-            await call.message.answer("Выбирай дату 👇", reply_markup=kb)
-    except Exception:
-        await call.message.answer("Выбирай дату 👇", reply_markup=kb)
+    await _answer_with_check_photo(call.message, "Выбирай дату 👇", reply_markup=kb)
     await call.answer()
 
 
 @router.callback_query(lambda c: c.data == "by_venue")
 async def by_venue(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     events = await load_events()
     venues = sorted(set(e["location"] for e in events))
     kb = InlineKeyboardBuilder()
@@ -206,12 +211,13 @@ async def by_venue(call: CallbackQuery):
     kb.button(text="📅 Выбор по дате", callback_data="check_dates")
     # Площадки по 1 в ряд, кнопка "по дате" — отдельной строкой
     kb.adjust(*([1] * len(venues)), 1)
-    await call.message.answer("Выбирай локацию 👇", reply_markup=kb.as_markup())
+    await _answer_with_check_photo(call.message, "Выбирай локацию 👇", reply_markup=kb.as_markup())
     await call.answer()
 
 
 @router.callback_query(F.data.startswith("venue_"))
 async def venue_events(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     venue = call.data.replace("venue_", "")
     events = await load_events()
     filtered = sorted(
@@ -234,6 +240,7 @@ async def venue_events(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("date_"))
 async def show_event(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     date = call.data.replace("date_", "")
     events = await load_events()
     day_events = [e for e in events if e["date"] == date]
@@ -254,6 +261,7 @@ async def show_event(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("event_"))
 async def show_specific_event(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     event_date, event_time = call.data.replace("event_", "", 1).split("_", 1)
     events = await load_events()
     event = next((e for e in events if e["date"] == event_date and e["time"] == event_time), None)

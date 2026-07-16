@@ -9,6 +9,7 @@ from bot.config import MANAGER_LINK, CHANNEL_LINK
 router = Router()
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
 
 FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
 
@@ -52,8 +53,19 @@ def _nav_kb():
     return kb.as_markup()
 
 
+async def _delete_previous_menu_message(call: CallbackQuery):
+    text = call.message.text or call.message.caption or ""
+    if WELCOME_MARKER in text:
+        return
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+
+
 @router.callback_query(lambda c: c.data == "formats")
 async def show_formats(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="🎟 Бронь Формат StandUp BEST", callback_data="best")
     kb.button(text="🎟 Бронь Формат StandUp Проверка материала", callback_data="check")
@@ -65,6 +77,7 @@ async def show_formats(call: CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "venues")
 async def show_venues(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     photo_files = ["temple_bar.jpg", "escobar.jpg", "nebar.jpg"]
     text = """Мероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус: для любителей вкусно покушать — рестораны с изысканной кухней разных народов мира, для поклонников шумных вечеринок — бары, для любителей попеть — заведения с караоке, везде можно остаться после шоу.
 
@@ -92,25 +105,40 @@ async def show_venues(call: CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "rules")
 async def show_rules(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     await call.message.answer(RULES_TEXT, reply_markup=_nav_kb(), parse_mode="HTML")
     await call.answer()
 
 
 @router.callback_query(lambda c: c.data == "book")
 async def book(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="STANDUP BEST", callback_data="best")
     kb.button(text="StandUp Проверка материала", callback_data="check")
     kb.adjust(1)
     await call.message.answer(
-        "Привет! 😊 Я помогу тебе забронировать места на мероприятия от Moscow StandUp Show 🎤\n\nВыбирай формат шоу 👇",
+        "Выбирай формат шоу 👇\n\n"
+        "<b>Формат StandUp BEST:</b>\n"
+        "Только лучший, уже проверенный стэндап материал от троих комиков, "
+        "именитых участников многочисленных телевизионных проектов. "
+        "Вы не услышите ни одной несмешной шутки, только BEST!!\n"
+        "Билеты - от 500 рублей.\n\n"
+        "<b>Формат StandUp проверка материала:</b>\n"
+        "5-7 опытных комиков, участников известных проектов ТНТ и YouTube, "
+        "рассказывают по 10-15 минут свежих, но не проверенных шуток, "
+        "Вы услышите настоящий эксклюзив и поможете комикам понять, "
+        "что смешно, а что стоит убрать из материала 🙈\n"
+        "Вход бесплатный.",
         reply_markup=kb.as_markup(),
+        parse_mode="HTML",
     )
     await call.answer()
 
 
 @router.callback_query(lambda c: c.data == "best")
 async def best_format(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
