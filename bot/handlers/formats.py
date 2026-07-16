@@ -1,9 +1,14 @@
+import os
+
 from aiogram import Router
 from aiogram.types import CallbackQuery, FSInputFile
+from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK
 
 router = Router()
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
 
@@ -60,27 +65,28 @@ async def show_formats(call: CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "venues")
 async def show_venues(call: CallbackQuery):
-    venues_info = [
-        ("temple_bar.jpg", "<b>Temple Bar</b> — это английская респектабельность, ирландское жизнелюбие и русское гостеприимство в одном ресторане, где каждый гость будет чувствовать демократическую атмосферу, и сможет насладиться великолепными стейками, большим ассортиментом коктейлей, а также отменными блюдами из мяса и овощей на мангале."),
-        ("escobar.jpg", "<b>Escobar</b> — бар с неординарной кухней, расположенный в комплексе исторических зданий 18-19 веков, брутальный дизайн в эстетике фильмов Квентина Тарантино, с легким оттенком латиноамериканской расслабленности."),
-        ("nebar.jpg", "<b>Небар</b> — один из самых популярных и громких баров столицы с уникальным стилем. Авторская коктейльная карта для тех, кто любит эксперименты, насчитывает 13 сезонных коктейлей на любой вкус, названных в честь известных городов мира."),
-    ]
+    photo_files = ["temple_bar.jpg", "escobar.jpg", "nebar.jpg"]
+    text = """Мероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус: для любителей вкусно покушать — рестораны с изысканной кухней разных народов мира, для поклонников шумных вечеринок — бары, для любителей попеть — заведения с караоке, везде можно остаться после шоу.
+
+Наши площадки:
+
+<b>Temple Bar</b> - это английская респектабельность, ирландское жизнелюбие и русское гостеприимство в одном ресторане, где каждый гость будет чувствовать демократическую атмосферу, и сможет насладиться великолепными стейками, большим ассортиментом коктейлей, а также отменными блюдами из мяса и овощей на мангале.
+
+<b>Escobar</b> - бар с неординарной кухней, расположенный в комплексе исторических зданий 18-19 веков, брутальный дизайн в эстетике фильмов Квентина Тарантино, с легким оттенком латиноамериканской расслабленности.
+
+<b>Небар</b> - один из самых популярных и громких баров столицы с уникальным стилем. Авторская коктейльная карта для тех, кто любит эксперименты, насчитывает 13 сезонных коктейлей на любой вкус, названных в честь известных городов мира."""
     kb = _nav_kb()
-    await call.message.answer(
-        "📍 <b>Наши площадки:</b>\n\nМероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус!",
-        parse_mode="HTML",
-    )
-    for i, (photo_file, caption) in enumerate(venues_info):
-        is_last = i == len(venues_info) - 1
-        try:
-            await call.message.answer_photo(
-                photo=FSInputFile(photo_file),
-                caption=caption,
-                parse_mode="HTML",
-                reply_markup=kb if is_last else None,
-            )
-        except Exception:
-            await call.message.answer(caption, parse_mode="HTML", reply_markup=kb if is_last else None)
+
+    media = MediaGroupBuilder()
+    for photo_file in photo_files:
+        path = os.path.join(_PROJECT_ROOT, photo_file)
+        if os.path.exists(path):
+            media.add_photo(FSInputFile(path))
+    album = media.build()
+    if album:
+        await call.message.answer_media_group(media=album)
+
+    await call.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await call.answer()
 
 
