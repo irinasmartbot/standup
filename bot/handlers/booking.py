@@ -24,6 +24,7 @@ router = Router()
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
+VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
 
 
 def _random_check_photo():
@@ -32,7 +33,9 @@ def _random_check_photo():
     try:
         files = [
             f for f in os.listdir(PHOTOS_DIR)
-            if f.lower().endswith((".jpg", ".jpeg", ".png")) and f != ticket_name
+            if f.lower().endswith((".jpg", ".jpeg", ".png"))
+            and f != ticket_name
+            and f.lower() not in VENUE_PHOTO_FILES
         ]
     except FileNotFoundError:
         files = []
