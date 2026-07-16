@@ -232,6 +232,7 @@ async def venue_events(call: CallbackQuery):
         except Exception:
             label = e["date"]
         kb.button(text=label, callback_data=f"event_{e['date']}_{e['time']}")
+    kb.button(text="📍 К локациям", callback_data="by_venue")
     kb.button(text="📅 Выбор по дате", callback_data="check_dates")
     kb.adjust(1)
     await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
