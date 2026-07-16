@@ -9,6 +9,7 @@ from bot.config import MANAGER_LINK, CHANNEL_LINK
 router = Router()
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
 
 FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
@@ -92,7 +93,7 @@ async def show_venues(call: CallbackQuery):
 
     media = MediaGroupBuilder()
     for photo_file in photo_files:
-        path = os.path.join(_PROJECT_ROOT, photo_file)
+        path = os.path.join(PHOTOS_DIR, photo_file)
         if os.path.exists(path):
             media.add_photo(FSInputFile(path))
     album = media.build()
