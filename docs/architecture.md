@@ -191,7 +191,7 @@ PostgreSQL backup настроен через `cron`: база `standup_db` со
 
 Серверный бот читает события из PostgreSQL при `EVENTS_SOURCE=postgres` или при наличии `DATABASE_URL` без явного `EVENTS_SOURCE`.
 
-Серверный бот записывает новые брони и пользователей в PostgreSQL при `BOOKINGS_SOURCE=postgres` или при наличии `DATABASE_URL` без явного `BOOKINGS_SOURCE`. Тестовые записи из серверного `bookings.db` не переносились.
+Серверный бот записывает новые брони и пользователей в PostgreSQL при `BOOKINGS_SOURCE=postgres` или при наличии `DATABASE_URL` без явного `BOOKINGS_SOURCE`. Тестовые записи из серверного `bookings.db` не переносились. Проверены создание брони, изменение количества гостей и отмена.
 
 ### Серверный запуск Telegram-бота
 
