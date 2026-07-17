@@ -231,6 +231,11 @@ async def venue_events(call: CallbackQuery):
         [e for e in events if e["location"] == venue],
         key=lambda x: datetime.strptime(x["date"], "%d.%m.%Y"),
     )
+    if len(filtered) == 1:
+        await send_event_card(call.message, filtered[0], back_callback="by_venue")
+        await call.answer()
+        return
+
     kb = InlineKeyboardBuilder()
     for e in filtered:
         try:
