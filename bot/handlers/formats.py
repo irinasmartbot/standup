@@ -329,7 +329,7 @@ async def best_venue_events(call: CallbackQuery):
     for event in events:
         try:
             d = datetime.strptime(event["date"], "%d.%m.%Y")
-            label = f"📅 {d.strftime('%d ') + MONTHS[d.strftime('%B')]} ({event['weekday']}) {event['time']}"
+            label = f"{d.strftime('%d ') + MONTHS[d.strftime('%B')]} ({event['weekday']}) {event['time']}"
         except Exception:
             label = f"{event['date']} {event['time']}"
         kb.button(text=label, callback_data=f"best_event_{event['id']}_venue")
