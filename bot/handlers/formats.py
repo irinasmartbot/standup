@@ -119,6 +119,21 @@ def _event_sort_key(event):
         return datetime.max
 
 
+def _best_event_by_id(events, event_id):
+    return next((e for e in events if str(e["id"]) == event_id), None)
+
+
+def _parse_best_event_callback(data):
+    payload = data.replace("best_event_", "", 1)
+    if "_date_" in payload:
+        event_id, date = payload.split("_date_", 1)
+        return event_id, f"best_date_{date}"
+    if "_venue_" in payload:
+        event_id, venue = payload.split("_venue_", 1)
+        return event_id, f"best_venue_{venue}"
+    return payload, "best_dates"
+
+
 def _best_event_text(event):
     parts = [
         f"<b>{format_date(event['date'])}</b>",
@@ -332,7 +347,7 @@ async def best_venue_events(call: CallbackQuery):
             label = f"{d.strftime('%d ') + MONTHS[d.strftime('%B')]} ({event['weekday']}) {event['time']}"
         except Exception:
             label = f"{event['date']} {event['time']}"
-        kb.button(text=label, callback_data=f"best_event_{event['id']}_venue")
+        kb.button(text=label, callback_data=f"best_event_{event['id']}_venue_{venue}")
     kb.button(text="📍 Назад к выбору локации", callback_data="best_venues")
     kb.button(text="📅 Выбор по дате", callback_data="best_dates")
     kb.adjust(1)
@@ -358,7 +373,7 @@ async def best_date(call: CallbackQuery):
     for event in events:
         kb.button(
             text=f"🕐 {event['time']} — {event['location']}",
-            callback_data=f"best_event_{event['id']}",
+            callback_data=f"best_event_{event['id']}_date_{date}",
         )
     kb.button(text="◀️ Назад к датам", callback_data="best_dates")
     kb.adjust(1)
@@ -369,10 +384,9 @@ async def best_date(call: CallbackQuery):
 @router.callback_query(lambda c: c.data.startswith("best_event_"))
 async def best_event(call: CallbackQuery):
     await _delete_previous_menu_message(call)
-    event_id = call.data.replace("best_event_", "", 1).replace("_venue", "")
-    event = next((e for e in await load_events("best") if str(e["id"]) == event_id), None)
+    event_id, back_callback = _parse_best_event_callback(call.data)
+    event = _best_event_by_id(await load_events("best"), event_id)
     if event:
-        back_callback = "best_venues" if call.data.endswith("_venue") else "best_dates"
         await _send_best_event_card(call.message, event, back_callback=back_callback)
     else:
         await call.message.answer("Мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await _best_dates_kb())
