@@ -55,15 +55,19 @@ def _nav_kb():
     return kb.as_markup()
 
 
-async def _delete_previous_menu_message(call: CallbackQuery):
-    text = call.message.text or call.message.caption or ""
-    if WELCOME_MARKER in text:
-        return
+async def delete_linked_venue_album(call: CallbackQuery):
     for message_id in _VENUE_ALBUM_MESSAGE_IDS.pop(call.message.message_id, []):
         try:
             await call.bot.delete_message(call.message.chat.id, message_id)
         except Exception:
             pass
+
+
+async def _delete_previous_menu_message(call: CallbackQuery):
+    text = call.message.text or call.message.caption or ""
+    if WELCOME_MARKER in text:
+        return
+    await delete_linked_venue_album(call)
     try:
         await call.message.delete()
     except Exception:

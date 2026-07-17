@@ -4,6 +4,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK
+from bot.handlers.formats import delete_linked_venue_album
 
 router = Router()
 
@@ -28,6 +29,7 @@ def main_menu_kb():
 
 
 async def _delete_previous_menu_message(call: CallbackQuery):
+    await delete_linked_venue_album(call)
     try:
         await call.message.delete()
     except Exception:
