@@ -2,6 +2,7 @@ import os
 
 from aiogram import Router
 from aiogram.types import CallbackQuery, FSInputFile
+from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK
 
@@ -10,6 +11,7 @@ router = Router()
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
+_VENUE_ALBUM_MESSAGE_IDS = {}
 
 FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
 
@@ -57,6 +59,11 @@ async def _delete_previous_menu_message(call: CallbackQuery):
     text = call.message.text or call.message.caption or ""
     if WELCOME_MARKER in text:
         return
+    for message_id in _VENUE_ALBUM_MESSAGE_IDS.pop(call.message.message_id, []):
+        try:
+            await call.bot.delete_message(call.message.chat.id, message_id)
+        except Exception:
+            pass
     try:
         await call.message.delete()
     except Exception:
@@ -90,20 +97,21 @@ async def show_venues(call: CallbackQuery):
 <b>Небар</b> - один из самых популярных и громких баров столицы с уникальным стилем. Авторская коктейльная карта для тех, кто любит эксперименты, насчитывает 13 сезонных коктейлей на любой вкус, названных в честь известных городов мира."""
     kb = _nav_kb()
 
-    photo = None
+    media = MediaGroupBuilder()
     for photo_file in photo_files:
         path = os.path.join(PHOTOS_DIR, photo_file)
         if os.path.exists(path):
-            photo = FSInputFile(path)
-            break
-    if photo:
-        try:
-            await call.message.answer_photo(photo=photo, caption=text, parse_mode="HTML", reply_markup=kb)
-        except Exception:
-            await call.message.answer_photo(photo=photo)
-            await call.message.answer(text, parse_mode="HTML", reply_markup=kb)
-    else:
-        await call.message.answer(text, parse_mode="HTML", reply_markup=kb)
+            media.add_photo(FSInputFile(path))
+    album = media.build()
+    album_messages = []
+    if album:
+        album_messages = await call.message.answer_media_group(media=album)
+
+    text_message = await call.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    if album_messages:
+        _VENUE_ALBUM_MESSAGE_IDS[text_message.message_id] = [
+            message.message_id for message in album_messages
+        ]
     await call.answer()
 
 
