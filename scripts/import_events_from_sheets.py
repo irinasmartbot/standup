@@ -170,7 +170,7 @@ def main():
     load_env_file()
     parser = argparse.ArgumentParser(description="Import Google Sheets events into PostgreSQL.")
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL"))
-    parser.add_argument("--csv-url", default=os.getenv("CSV_URL", DEFAULT_CSV_URL))
+    parser.add_argument("--csv-url")
     parser.add_argument("--format", default="proverka", choices=["proverka", "1plus1", "best", "masterclass", "hitloto"])
     parser.add_argument("--source-sheet", default="Проверка материала")
     args = parser.parse_args()
@@ -178,7 +178,14 @@ def main():
     if not args.database_url:
         raise SystemExit("DATABASE_URL is not set. Add it to .env or pass --database-url.")
 
-    csv_text = fetch_csv(args.csv_url)
+    csv_url = args.csv_url
+    if not csv_url:
+        if args.format == "best":
+            csv_url = os.getenv("BEST_CSV_URL", DEFAULT_BEST_CSV_URL)
+        else:
+            csv_url = os.getenv("CSV_URL", DEFAULT_CSV_URL)
+
+    csv_text = fetch_csv(csv_url)
     events = parse_events(csv_text, args.format, args.source_sheet)
     import_events(args.database_url, events)
     print(f"Imported events: {len(events)}")

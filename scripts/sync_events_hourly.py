@@ -45,7 +45,7 @@ def main():
         ("proverka", args.csv_url, "Проверка материала"),
         ("best", args.best_csv_url, "StandUp BEST"),
     ]
-    if args.format != "proverka":
+    if args.format not in ("", "proverka"):
         sources = [(args.format, args.csv_url, args.source_sheet)]
 
     while True:
