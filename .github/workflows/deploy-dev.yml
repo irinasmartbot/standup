@@ -31,7 +31,10 @@ jobs:
           git pull --ff-only origin dev
           /home/standup/app/venv/bin/python -m pip install -r requirements.txt
           sudo /usr/bin/systemctl restart standup-bot
-          sudo /usr/bin/systemctl restart standup-events-sync
           sudo /usr/bin/systemctl is-active --quiet standup-bot
-          sudo /usr/bin/systemctl is-active --quiet standup-events-sync
+          if sudo /usr/bin/systemctl list-unit-files standup-events-sync.service --no-legend | grep -q standup-events-sync.service; then
+            sudo /usr/bin/systemctl restart standup-events-sync || echo "standup-events-sync restart failed; bot deploy continues"
+          else
+            echo "standup-events-sync.service not found; skipping restart"
+          fi
           EOF
