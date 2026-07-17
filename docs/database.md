@@ -213,7 +213,7 @@ python scripts/sync_events_hourly.py
 
 Скрипт `scripts/import_events_from_sheets.py` импортирует актуальные будущие мероприятия из опубликованного CSV Google Sheets в таблицу `events`.
 
-Сейчас скрипт покрывает текущий лист «Проверка материала». Остальные листы (`1+1`, BEST, МК, Хит-лото) добавляются позже вместе с реализацией соответствующих веток бота, когда будут понятны реальные колонки и ссылки CSV.
+Сейчас скрипт покрывает листы «Проверка материала» и `StandUp BEST`. Остальные листы (`1+1`, МК, Хит-лото) добавляются позже вместе с реализацией соответствующих веток бота, когда будут понятны реальные колонки и ссылки CSV.
 
 Перед запуском в `.env` должна быть переменная:
 
@@ -225,6 +225,15 @@ DATABASE_URL=postgresql://standup_user:password@localhost:5432/standup_db
 
 ```bash
 python scripts/import_events_from_sheets.py
+```
+
+Запуск для листа `StandUp BEST`:
+
+```bash
+python scripts/import_events_from_sheets.py \
+  --csv-url "$BEST_CSV_URL" \
+  --format best \
+  --source-sheet "StandUp BEST"
 ```
 
 Скрипт делает upsert по связке `format + event_date + event_time + location`: если мероприятие уже есть, оно обновляется.

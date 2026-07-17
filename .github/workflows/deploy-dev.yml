@@ -31,5 +31,7 @@ jobs:
           git pull --ff-only origin dev
           /home/standup/app/venv/bin/python -m pip install -r requirements.txt
           sudo /usr/bin/systemctl restart standup-bot
+          sudo /usr/bin/systemctl restart standup-events-sync
           sudo /usr/bin/systemctl is-active --quiet standup-bot
+          sudo /usr/bin/systemctl is-active --quiet standup-events-sync
           EOF

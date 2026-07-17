@@ -1,10 +1,14 @@
 import os
+from datetime import datetime
+from html import escape
 
 from aiogram import Router
 from aiogram.types import CallbackQuery, FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK
+from bot.services.sheets import load_events
+from bot.utils.ticket import MONTHS, format_date
 
 router = Router()
 
@@ -41,6 +45,70 @@ RULES_TEXT = """📋 <b>Правила посещения шоу:</b>
 
 5️⃣ <b>Тишина</b>
 Во время шоу запрещено громко разговаривать, выкрикивать с места, говорить по телефону. При многократном нарушении администратор может попросить Вас удалиться из зала без возможности возврата средств."""
+
+
+async def _best_dates_kb():
+    events = await load_events("best")
+    dates = sorted(set(e["date"] for e in events))
+    kb = InlineKeyboardBuilder()
+    for date in dates:
+        try:
+            d = datetime.strptime(date, "%d.%m.%Y")
+            label = d.strftime("%d ") + MONTHS[d.strftime("%B")]
+        except Exception:
+            label = date
+        kb.button(text=label, callback_data=f"best_date_{date}")
+    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    if dates:
+        widths = [2] * (len(dates) // 2)
+        if len(dates) % 2:
+            widths.append(1)
+        widths.append(1)
+        kb.adjust(*widths)
+    else:
+        kb.adjust(1)
+    return kb.as_markup()
+
+
+def _best_event_text(event):
+    price = event.get("price") or 0
+    host = event.get("host") or ""
+    parts = [
+        f"<b>{format_date(event['date'])}</b>",
+        escape(event.get("weekday") or ""),
+        "",
+        f"<b>{escape(event.get('time') or '')}</b>",
+        escape(event.get("address") or ""),
+        escape(event.get("description") or ""),
+    ]
+    if host:
+        parts.extend(["", f"<b>Кто выступает:</b>\n{escape(host)}"])
+    if price:
+        parts.extend(["", f"<b>Стоимость:</b> от {price} ₽"])
+    return "\n".join(parts)
+
+
+async def _send_best_event_card(message, event):
+    kb = InlineKeyboardBuilder()
+    payment_url = event.get("payment_url") or ""
+    if payment_url:
+        kb.button(text="🎟 Купить билет", url=payment_url)
+    else:
+        kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+    kb.button(text="◀️ Назад к датам", callback_data="best")
+    kb.adjust(1)
+    text = _best_event_text(event)
+    image = event.get("image") or ""
+    if image:
+        try:
+            await message.answer_photo(photo=image, caption=text, reply_markup=kb.as_markup(), parse_mode="HTML")
+            return
+        except Exception:
+            try:
+                await message.answer_photo(photo=image)
+            except Exception:
+                pass
+    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
 
 
 def _nav_kb():
@@ -156,15 +224,63 @@ async def book(call: CallbackQuery):
 @router.callback_query(lambda c: c.data == "best")
 async def best_format(call: CallbackQuery):
     await _delete_previous_menu_message(call)
-    kb = InlineKeyboardBuilder()
-    kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
-    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
-    kb.adjust(1)
+    events = await load_events("best")
+    if not events:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+        kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+        kb.adjust(1)
+        await call.message.answer(
+            "Пока нет актуальных мероприятий <b>StandUp BEST</b>. "
+            "Можно уточнить расписание у менеджера 👇",
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML",
+        )
+        await call.answer()
+        return
+
     await call.message.answer(
-        "Формат <b>StandUp BEST</b> — платные шоу с билетами от 500 ₽.\n\n"
-        "Бронирование через бот для этого формата скоро появится. "
-        "Сейчас можно забронировать через менеджера 👇",
-        reply_markup=kb.as_markup(),
+        "Формат <b>StandUp BEST</b> — лучший проверенный материал от опытных комиков.\n\n"
+        "Выбирай дату 👇",
+        reply_markup=await _best_dates_kb(),
         parse_mode="HTML",
     )
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("best_date_"))
+async def best_date(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    date = call.data.replace("best_date_", "", 1)
+    events = [e for e in await load_events("best") if e["date"] == date]
+    if not events:
+        await call.message.answer("Это мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await _best_dates_kb())
+        await call.answer()
+        return
+    if len(events) == 1:
+        await _send_best_event_card(call.message, events[0])
+        await call.answer()
+        return
+
+    kb = InlineKeyboardBuilder()
+    for event in events:
+        kb.button(
+            text=f"🕐 {event['time']} — {event['location']}",
+            callback_data=f"best_event_{event['id']}",
+        )
+    kb.button(text="◀️ Назад к датам", callback_data="best")
+    kb.adjust(1)
+    await call.message.answer("На эту дату несколько мероприятий, выбери нужное 👇", reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("best_event_"))
+async def best_event(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    event_id = call.data.replace("best_event_", "", 1)
+    event = next((e for e in await load_events("best") if str(e["id"]) == event_id), None)
+    if event:
+        await _send_best_event_card(call.message, event)
+    else:
+        await call.message.answer("Мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await _best_dates_kb())
     await call.answer()

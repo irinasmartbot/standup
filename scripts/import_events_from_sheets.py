@@ -13,6 +13,11 @@ DEFAULT_CSV_URL = (
     "2PACX-1vQTZS9GmN4Gkffl6xrUt7W_dDIksHB7z4xAjFDVeR-x4rgWeGJLJPGVfMfY5eQESZcXfBH-ZbrUeMXh/"
     "pub?gid=907191184&single=true&output=csv"
 )
+DEFAULT_BEST_CSV_URL = (
+    "https://docs.google.com/spreadsheets/d/e/"
+    "2PACX-1vQTZS9GmN4Gkffl6xrUt7W_dDIksHB7z4xAjFDVeR-x4rgWeGJLJPGVfMfY5eQESZcXfBH-ZbrUeMXh/"
+    "pub?gid=0&single=true&output=csv"
+)
 
 
 def load_env_file(path=".env"):
@@ -53,6 +58,53 @@ def fetch_csv(csv_url):
         return response.read().decode("utf-8-sig")
 
 
+def _parse_proverka_row(row, row_number, event_format, source_sheet):
+    extra = parse_int(row[9])
+    return {
+        "format": event_format,
+        "event_date": parse_date(row[1]),
+        "weekday": row[2].strip(),
+        "event_time": parse_time(row[3]),
+        "address": row[4].strip(),
+        "location": row[10].strip(),
+        "description": row[5].strip(),
+        "image_url": row[6].strip(),
+        "price": 0,
+        "payment_url": None,
+        "host": None,
+        "max_seats": 60 + abs(extra),
+        "status": "active",
+        "source_sheet": source_sheet,
+        "source_row": row_number,
+    }
+
+
+def _parse_best_row(row, row_number, event_format, source_sheet):
+    return {
+        "format": event_format,
+        "event_date": parse_date(row[1]),
+        "weekday": row[2].strip(),
+        "event_time": parse_time(row[3]),
+        "address": row[10].strip(),
+        "location": row[4].strip(),
+        "description": row[5].strip(),
+        "image_url": row[7].strip(),
+        "price": parse_int(row[6]),
+        "payment_url": row[9].strip() or None,
+        "host": row[11].strip() or None,
+        "max_seats": parse_int(row[0]),
+        "status": "active",
+        "source_sheet": source_sheet,
+        "source_row": row_number,
+    }
+
+
+def parse_event_row(row, row_number, event_format, source_sheet):
+    if event_format == "best":
+        return _parse_best_row(row, row_number, event_format, source_sheet)
+    return _parse_proverka_row(row, row_number, event_format, source_sheet)
+
+
 def parse_events(csv_text, event_format, source_sheet):
     reader = csv.reader(StringIO(csv_text))
     rows = list(reader)
@@ -66,34 +118,15 @@ def parse_events(csv_text, event_format, source_sheet):
             continue
 
         try:
-            event_date = parse_date(row[1])
-            event_time = parse_time(row[3])
-        except ValueError:
+            event = parse_event_row(row, row_number, event_format, source_sheet)
+        except (IndexError, ValueError):
             continue
 
+        event_date = event["event_date"]
         if event_date < today:
             continue
 
-        extra = parse_int(row[9])
-        events.append(
-            {
-                "format": event_format,
-                "event_date": event_date,
-                "weekday": row[2].strip(),
-                "event_time": event_time,
-                "address": row[4].strip(),
-                "location": row[10].strip(),
-                "description": row[5].strip(),
-                "image_url": row[6].strip(),
-                "price": 0,
-                "payment_url": None,
-                "host": None,
-                "max_seats": 60 + abs(extra),
-                "status": "active",
-                "source_sheet": source_sheet,
-                "source_row": row_number,
-            }
-        )
+        events.append(event)
 
     return events
 

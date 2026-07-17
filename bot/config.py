@@ -23,6 +23,10 @@ CSV_URL = os.getenv(
     "CSV_URL",
     "https://docs.google.com/spreadsheets/d/e/2PACX-1vQTZS9GmN4Gkffl6xrUt7W_dDIksHB7z4xAjFDVeR-x4rgWeGJLJPGVfMfY5eQESZcXfBH-ZbrUeMXh/pub?gid=907191184&single=true&output=csv",
 )
+BEST_CSV_URL = os.getenv(
+    "BEST_CSV_URL",
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vQTZS9GmN4Gkffl6xrUt7W_dDIksHB7z4xAjFDVeR-x4rgWeGJLJPGVfMfY5eQESZcXfBH-ZbrUeMXh/pub?gid=0&single=true&output=csv",
+)
 MANAGER_LINK = os.getenv("MANAGER_LINK", "https://t.me/ccoverr")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/MoscowStandupShow")
 MANAGER_PHONE = os.getenv("MANAGER_PHONE", "89648772410")
