@@ -30,6 +30,7 @@ jobs:
           git checkout dev
           git pull --ff-only origin dev
           /home/standup/app/venv/bin/python -m pip install -r requirements.txt
+          /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format proverka --source-sheet "Проверка материала"
           /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format best --source-sheet "StandUp BEST"
           sudo /usr/bin/systemctl restart standup-bot
           sudo /usr/bin/systemctl is-active --quiet standup-bot

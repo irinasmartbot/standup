@@ -146,7 +146,7 @@ class BookingState(StatesGroup):
 
 async def check_dates_kb():
     events = await load_events()
-    dates = sorted(set(e["date"] for e in events))
+    dates = sorted(set(e["date"] for e in events), key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
     kb = InlineKeyboardBuilder()
     for date in dates:
         try:

@@ -82,7 +82,7 @@ async def _answer_with_format_photo(message, text: str, reply_markup=None, parse
 
 async def _best_dates_kb():
     events = await load_events("best")
-    dates = sorted(set(e["date"] for e in events))
+    dates = sorted(set(e["date"] for e in events), key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
     kb = InlineKeyboardBuilder()
     for date in dates:
         try:
