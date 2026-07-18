@@ -17,6 +17,7 @@ from bot.db.crud import (
 )
 from bot.services.sheets import load_events, get_event
 from bot.utils.ticket import format_date, guests_word, generate_ticket, MONTHS, parse_event_datetime
+from bot.utils.nav_messages import remember_booking_nav, forget_booking_nav, delete_booking_nav
 
 router = Router()
 
@@ -49,27 +50,32 @@ def _random_check_photo():
     return None
 
 
-async def _answer_with_check_photo(message, text: str, reply_markup=None, parse_mode=None):
+async def _answer_with_check_photo(message, text: str, reply_markup=None, parse_mode=None, track_nav=False):
     """Отправляет сообщение с рандомным фото проверки, если фото доступны."""
+    sent = None
     photo = _random_check_photo()
     if photo:
         try:
-            await message.answer_photo(
+            sent = await message.answer_photo(
                 photo=photo,
                 caption=text,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
             )
-            return
         except Exception:
-            pass
-    await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            sent = None
+    if sent is None:
+        sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    if track_nav and sent:
+        remember_booking_nav(message.chat.id, sent.message_id)
+    return sent
 
 
 async def _delete_previous_menu_message(call: CallbackQuery):
     text = call.message.text or call.message.caption or ""
     if WELCOME_MARKER in text:
         return
+    forget_booking_nav(call.message.chat.id, call.message.message_id)
     try:
         await call.message.delete()
     except Exception:
@@ -194,6 +200,7 @@ async def check_format(call: CallbackQuery):
         "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇",
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
+        track_nav=True,
     )
     await call.answer()
 
@@ -202,7 +209,7 @@ async def check_format(call: CallbackQuery):
 async def check_dates(call: CallbackQuery):
     await _delete_previous_menu_message(call)
     kb = await check_dates_kb()
-    await _answer_with_check_photo(call.message, "Выбирай дату 👇", reply_markup=kb)
+    await _answer_with_check_photo(call.message, "Выбирай дату 👇", reply_markup=kb, track_nav=True)
     await call.answer()
 
 
@@ -218,7 +225,7 @@ async def by_venue(call: CallbackQuery):
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     # Площадки по 1 в ряд, служебные кнопки — отдельными строками
     kb.adjust(*([1] * len(venues)), 1, 1)
-    await _answer_with_check_photo(call.message, "Выбирай локацию 👇", reply_markup=kb.as_markup())
+    await _answer_with_check_photo(call.message, "Выбирай локацию 👇", reply_markup=kb.as_markup(), track_nav=True)
     await call.answer()
 
 
@@ -255,7 +262,8 @@ async def venue_events(call: CallbackQuery):
         widths.append(1)
     widths.append(1)
     kb.adjust(*widths)
-    await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
+    sent = await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
+    remember_booking_nav(call.message.chat.id, sent.message_id)
     await call.answer()
 
 

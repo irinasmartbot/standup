@@ -10,6 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK, TICKET_TEMPLATE
 from bot.services.sheets import load_events
 from bot.utils.ticket import MONTHS, format_date
+from bot.utils.nav_messages import remember_booking_nav, forget_booking_nav, delete_booking_nav
 
 router = Router()
 
@@ -69,15 +70,19 @@ def _random_format_photo():
     return None
 
 
-async def _answer_with_format_photo(message, text: str, reply_markup=None, parse_mode=None):
+async def _answer_with_format_photo(message, text: str, reply_markup=None, parse_mode=None, track_nav=False):
+    sent = None
     photo = _random_format_photo()
     if photo:
         try:
-            await message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
-            return
+            sent = await message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
         except Exception:
-            pass
-    await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            sent = None
+    if sent is None:
+        sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    if track_nav and sent:
+        remember_booking_nav(message.chat.id, sent.message_id)
+    return sent
 
 
 async def _best_dates_kb():
@@ -198,6 +203,7 @@ async def _delete_previous_menu_message(call: CallbackQuery):
     text = call.message.text or call.message.caption or ""
     if WELCOME_MARKER in text:
         return
+    forget_booking_nav(call.message.chat.id, call.message.message_id)
     await delete_linked_venue_album(call)
     try:
         await call.message.delete()
@@ -207,6 +213,7 @@ async def _delete_previous_menu_message(call: CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "formats")
 async def show_formats(call: CallbackQuery):
+    await delete_booking_nav(call.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="🎟 Бронь Формат StandUp BEST", callback_data="best")
@@ -259,6 +266,7 @@ async def show_rules(call: CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "book")
 async def book(call: CallbackQuery):
+    await delete_booking_nav(call.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="STANDUP BEST", callback_data="best")
@@ -313,6 +321,7 @@ async def best_format(call: CallbackQuery):
         "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇",
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
+        track_nav=True,
     )
     await call.answer()
 
@@ -320,14 +329,18 @@ async def best_format(call: CallbackQuery):
 @router.callback_query(lambda c: c.data == "best_dates")
 async def best_dates(call: CallbackQuery):
     await _delete_previous_menu_message(call)
-    await _answer_with_format_photo(call.message, "Выбирай дату 👇", reply_markup=await _best_dates_kb())
+    await _answer_with_format_photo(
+        call.message, "Выбирай дату 👇", reply_markup=await _best_dates_kb(), track_nav=True
+    )
     await call.answer()
 
 
 @router.callback_query(lambda c: c.data == "best_venues")
 async def best_venues(call: CallbackQuery):
     await _delete_previous_menu_message(call)
-    await _answer_with_format_photo(call.message, "Выбирай локацию 👇", reply_markup=await _best_venues_kb())
+    await _answer_with_format_photo(
+        call.message, "Выбирай локацию 👇", reply_markup=await _best_venues_kb(), track_nav=True
+    )
     await call.answer()
 
 
@@ -359,7 +372,8 @@ async def best_venue_events(call: CallbackQuery):
         widths.append(1)
     widths.append(1)
     kb.adjust(*widths)
-    await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
+    sent = await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
+    remember_booking_nav(call.message.chat.id, sent.message_id)
     await call.answer()
 
 
