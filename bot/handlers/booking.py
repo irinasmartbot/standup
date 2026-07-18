@@ -222,7 +222,11 @@ async def by_venue(call: CallbackQuery):
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("venue_") & ~F.data.startswith("venue_event_"))
+@router.callback_query(
+    F.data.startswith("venue_")
+    & ~F.data.startswith("venue_event_")
+    & ~F.data.startswith("venue_date_")
+)
 async def venue_events(call: CallbackQuery):
     await _delete_previous_menu_message(call)
     venue = call.data.replace("venue_", "")
@@ -236,18 +240,53 @@ async def venue_events(call: CallbackQuery):
         await call.answer()
         return
 
+    dates = sorted(set(e["date"] for e in filtered), key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
     kb = InlineKeyboardBuilder()
-    for e in filtered:
+    for date in dates:
         try:
-            d = datetime.strptime(e["date"], "%d.%m.%Y")
-            label = f"📅 {d.strftime('%d ') + MONTHS[d.strftime('%B')]} ({e['weekday']}) {e['time']}"
+            d = datetime.strptime(date, "%d.%m.%Y")
+            label = d.strftime("%d ") + MONTHS[d.strftime("%B")]
         except Exception:
-            label = e["date"]
-        kb.button(text=label, callback_data=f"venue_event_{venue}_{e['date']}_{e['time']}")
+            label = date
+        kb.button(text=label, callback_data=f"venue_date_{date}_{venue}")
     kb.button(text="📍 Назад к выбору локации", callback_data="by_venue")
-    kb.button(text="📅 Выбор по дате", callback_data="check_dates")
-    kb.adjust(1)
+    widths = [2] * (len(dates) // 2)
+    if len(dates) % 2:
+        widths.append(1)
+    widths.append(1)
+    kb.adjust(*widths)
     await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("venue_date_"))
+async def venue_date_events(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    payload = call.data.replace("venue_date_", "", 1)
+    date, venue = payload.split("_", 1)
+    events = await load_events()
+    day_events = sorted(
+        [e for e in events if e["location"] == venue and e["date"] == date],
+        key=lambda x: x["time"],
+    )
+    if not day_events:
+        await call.message.answer("Это мероприятие уже прошло 😊", reply_markup=await check_dates_kb())
+        await call.answer()
+        return
+    if len(day_events) == 1:
+        await send_event_card(call.message, day_events[0], back_callback=f"venue_{venue}")
+        await call.answer()
+        return
+
+    kb = InlineKeyboardBuilder()
+    for e in day_events:
+        kb.button(
+            text=f"{e['time']} — {e['location']}",
+            callback_data=f"venue_event_{venue}_{e['date']}_{e['time']}",
+        )
+    kb.button(text="◀️ Назад", callback_data=f"venue_{venue}")
+    kb.adjust(1)
+    await call.message.answer("На эту дату несколько мероприятий, выбери нужное 👇", reply_markup=kb.as_markup())
     await call.answer()
 
 

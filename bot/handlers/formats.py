@@ -354,11 +354,10 @@ async def best_venue_events(call: CallbackQuery):
             label = date
         kb.button(text=label, callback_data=f"best_vdate_{date}_{venue}")
     kb.button(text="📍 Назад к выбору локации", callback_data="best_venues")
-    kb.button(text="📅 Выбор по дате", callback_data="best_dates")
     widths = [2] * (len(dates) // 2)
     if len(dates) % 2:
         widths.append(1)
-    widths.extend([1, 1])
+    widths.append(1)
     kb.adjust(*widths)
     await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
     await call.answer()
