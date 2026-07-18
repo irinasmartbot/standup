@@ -16,6 +16,7 @@ router = Router()
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
+VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
 _VENUE_ALBUM_MESSAGE_IDS = {}
 
 FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
@@ -57,7 +58,9 @@ def _random_format_photo():
     try:
         files = [
             f for f in os.listdir(PHOTOS_DIR)
-            if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")) and f != ticket_name
+            if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+            and f != ticket_name
+            and f.lower() not in VENUE_PHOTO_FILES
         ]
     except FileNotFoundError:
         files = []
@@ -88,15 +91,16 @@ async def _best_dates_kb():
         except Exception:
             label = date
         kb.button(text=label, callback_data=f"best_date_{date}")
+    kb.button(text="📍 Выбор по площадкам", callback_data="best_venues")
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     if dates:
         widths = [2] * (len(dates) // 2)
         if len(dates) % 2:
             widths.append(1)
-        widths.append(1)
+        widths.extend([1, 1])
         kb.adjust(*widths)
     else:
-        kb.adjust(1)
+        kb.adjust(1, 1)
     return kb.as_markup()
 
 
@@ -340,18 +344,53 @@ async def best_venue_events(call: CallbackQuery):
         await call.answer()
         return
 
+    dates = sorted(set(e["date"] for e in events), key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
     kb = InlineKeyboardBuilder()
-    for event in events:
+    for date in dates:
         try:
-            d = datetime.strptime(event["date"], "%d.%m.%Y")
-            label = f"{d.strftime('%d ') + MONTHS[d.strftime('%B')]} ({event['weekday']}) {event['time']}"
+            d = datetime.strptime(date, "%d.%m.%Y")
+            label = d.strftime("%d ") + MONTHS[d.strftime("%B")]
         except Exception:
-            label = f"{event['date']} {event['time']}"
-        kb.button(text=label, callback_data=f"best_event_{event['id']}_venue_{venue}")
+            label = date
+        kb.button(text=label, callback_data=f"best_vdate_{date}_{venue}")
     kb.button(text="📍 Назад к выбору локации", callback_data="best_venues")
     kb.button(text="📅 Выбор по дате", callback_data="best_dates")
-    kb.adjust(1)
+    widths = [2] * (len(dates) // 2)
+    if len(dates) % 2:
+        widths.append(1)
+    widths.extend([1, 1])
+    kb.adjust(*widths)
     await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("best_vdate_"))
+async def best_venue_date(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    payload = call.data.replace("best_vdate_", "", 1)
+    date, venue = payload.split("_", 1)
+    events = sorted(
+        [e for e in await load_events("best") if e["location"] == venue and e["date"] == date],
+        key=_event_sort_key,
+    )
+    if not events:
+        await call.message.answer("Это мероприятие уже прошло 😊", reply_markup=await _best_venues_kb())
+        await call.answer()
+        return
+    if len(events) == 1:
+        await _send_best_event_card(call.message, events[0], back_callback=f"best_venue_{venue}")
+        await call.answer()
+        return
+
+    kb = InlineKeyboardBuilder()
+    for event in events:
+        kb.button(
+            text=f"{event['time']} — {event['location']}",
+            callback_data=f"best_event_{event['id']}_venue_{venue}",
+        )
+    kb.button(text="◀️ Назад", callback_data=f"best_venue_{venue}")
+    kb.adjust(1)
+    await call.message.answer("На эту дату несколько мероприятий, выбери нужное 👇", reply_markup=kb.as_markup())
     await call.answer()
 
 
