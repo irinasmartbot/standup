@@ -745,6 +745,11 @@ def update_raffle_submission_status(submission_id, status, reject_reason=None):
         conn.commit()
 
 
+def cancel_raffle_submission(submission_id, reason="send_failed"):
+    """Снимает pending, если скрин не удалось отправить в чат модерации."""
+    update_raffle_submission_status(submission_id, "rejected", reject_reason=reason)
+
+
 def save_raffle_nav(telegram_id, dates_message_id=None, card_message_id=None):
     if not _use_postgres():
         return

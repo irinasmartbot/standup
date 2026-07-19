@@ -37,6 +37,7 @@ from bot.config import (
 from bot.db.crud import (
     clear_raffle_nav,
     create_booking,
+    cancel_raffle_submission,
     create_raffle_submission,
     ensure_user,
     get_active_raffle_booking,
@@ -384,10 +385,15 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
         await message.answer(NOT_IMAGE_TEXT)
         return
 
-    if get_pending_raffle_submission(message.from_user.id):
-        await message.answer("Ваш скрин на модерации, ожидайте ⏳")
-        await state.clear()
-        return
+    pending = get_pending_raffle_submission(message.from_user.id)
+    if pending:
+        # если заявка «pending», но в чат так и не ушла — не блокируем повтор
+        if not pending[4]:
+            cancel_raffle_submission(pending[0], reason="stale_undelivered")
+        else:
+            await message.answer("Ваш скрин на модерации, ожидайте ⏳")
+            await state.clear()
+            return
 
     # сразу снимаем «ожидание», чтобы повтор/гонка не отправили второй пост
     await state.clear()
@@ -404,23 +410,42 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
         await message.answer("Не удалось отправить скрин на проверку. Попробуй позже или напиши менеджеру.")
         return
 
-    await message.answer(SCREEN_OK_TEXT)
-    await _send_to_moderation(submission_id, message.from_user.id, username, full_name, kind, file_id)
+    sent_ok = await _send_to_moderation(
+        submission_id, message.from_user.id, username, full_name, kind, file_id
+    )
+    if sent_ok:
+        await message.answer(SCREEN_OK_TEXT)
+        return
+
+    # иначе клиент думает, что всё ок, а в чате модерации пусто
+    cancel_raffle_submission(submission_id, reason="moderation_send_failed")
+    await message.answer(
+        "Не удалось отправить скрин менеджеру 😔\n"
+        "Попробуй ещё раз через кнопку ниже или напиши @ccoverr."
+    )
+    kb = InlineKeyboardBuilder()
+    if kind == "review":
+        kb.button(text="Отправить скрин", callback_data="rz_review_send")
+    else:
+        kb.button(text="Я выложил, вот те скрин", callback_data="rz_post_screen")
+    kb.adjust(1)
+    await message.answer("Можешь отправить скрин ещё раз 👇", reply_markup=kb.as_markup())
 
 
-async def _send_to_moderation(submission_id, telegram_id, username, full_name, kind, file_id):
+async def _send_to_moderation(submission_id, telegram_id, username, full_name, kind, file_id) -> bool:
     chat_id = _mod_chat_id()
     if not chat_id:
         logger.error("MODERATION_CHAT_ID is not set or invalid")
-        return
+        return False
     if kind not in {"post", "review"}:
         logger.error("Refusing moderation post with invalid kind=%s", kind)
-        return
+        return False
     kind_label = "отзыва" if kind == "review" else "поста"
     uname = f"@{username}" if username else f"id {telegram_id}"
     caption = (
         f"moscowstandupshow.ru\n\n"
-        f"{escape(full_name)} {escape(uname)} прислал СКРИН {kind_label}"
+        f"{escape(full_name)} {escape(uname)} прислал СКРИН {kind_label}\n"
+        f"Заявка #{submission_id} · клиент {telegram_id}"
     )
     kb = InlineKeyboardBuilder()
     kb.button(text="ПРИНЯТЬ", callback_data=f"rz_mod_ok_{submission_id}")
@@ -436,8 +461,10 @@ async def _send_to_moderation(submission_id, telegram_id, username, full_name, k
             parse_mode="HTML",
         )
         save_raffle_moderation_message(submission_id, chat_id, sent.message_id)
+        return True
     except Exception:
-        logger.exception("Failed to send screenshot to moderation chat")
+        logger.exception("Failed to send screenshot to moderation chat %s", chat_id)
+        return False
 
 
 # ─── модерация ────────────────────────────────────────────────────────────────

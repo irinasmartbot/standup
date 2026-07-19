@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from bot.config import bot, dp
+from bot.config import MODERATION_CHAT_ID, bot, dp
 from bot.db.models import init_db
 from bot.db.crud import ensure_raffle_tables
 from bot.handlers import start, formats, booking, rozygrysh
@@ -10,11 +10,18 @@ from bot.handlers.rozygrysh_reminders import raffle_reminder_loop
 from bot.middlewares import ModerationChatSilenceMiddleware
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 async def main():
     init_db()
     ensure_raffle_tables()
+    if MODERATION_CHAT_ID:
+        logger.info("MODERATION_CHAT_ID is set (%s…)", str(MODERATION_CHAT_ID)[:6])
+    else:
+        logger.error(
+            "MODERATION_CHAT_ID is NOT set — raffle screenshots will not reach moderation chat"
+        )
     silence = ModerationChatSilenceMiddleware()
     dp.message.middleware(silence)
     dp.callback_query.middleware(silence)
