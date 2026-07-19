@@ -477,9 +477,8 @@ async def _send_to_moderation(submission_id, telegram_id, username, full_name, k
     kind_label = "отзыва" if kind == "review" else "поста"
     uname = f"@{username}" if username else f"id {telegram_id}"
     caption = (
-        f"moscowstandupshow.ru\n\n"
         f"{escape(full_name)} {escape(uname)} прислал СКРИН {kind_label}\n"
-        f"Заявка #{submission_id} · клиент {telegram_id}"
+        f"Заявка #{submission_id}"
     )
     kb = InlineKeyboardBuilder()
     kb.button(text="ПРИНЯТЬ", callback_data=f"rz_mod_ok_{submission_id}")
@@ -513,9 +512,8 @@ def _client_label(row) -> str:
 async def _mod_caption_fallback(row) -> str:
     kind_label = "отзыва" if row[4] == "review" else "поста"
     return (
-        f"moscowstandupshow.ru\n\n"
         f"{_client_label(row)} прислал СКРИН {kind_label}\n"
-        f"Заявка #{row[0]} · клиент {row[1]}"
+        f"Заявка #{row[0]}"
     )
 
 
