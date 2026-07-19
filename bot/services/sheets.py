@@ -146,6 +146,6 @@ async def load_events(event_format="proverka"):
     return events
 
 
-async def get_event(event_date, event_time):
-    events = await load_events()
+async def get_event(event_date, event_time, event_format="proverka"):
+    events = await load_events(event_format)
     return next((e for e in events if e["date"] == event_date and e["time"] == event_time), None)

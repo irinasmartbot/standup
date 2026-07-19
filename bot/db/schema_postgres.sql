@@ -83,3 +83,32 @@ CREATE INDEX IF NOT EXISTS idx_bookings_reminders
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_booking_per_user_event
     ON bookings (user_id, event_id)
     WHERE status IN ('booked', 'confirmed');
+
+
+CREATE TABLE IF NOT EXISTS raffle_submissions (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    telegram_id BIGINT NOT NULL,
+    username TEXT,
+    full_name TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('post', 'review')),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected')),
+    photo_file_id TEXT NOT NULL,
+    moderation_chat_id BIGINT,
+    moderation_message_id BIGINT,
+    reject_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_raffle_submissions_user_status
+    ON raffle_submissions (telegram_id, status);
+
+
+CREATE TABLE IF NOT EXISTS raffle_nav (
+    telegram_id BIGINT PRIMARY KEY,
+    dates_message_id BIGINT,
+    card_message_id BIGINT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

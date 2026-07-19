@@ -981,8 +981,9 @@ async def process_new_guests(message: Message, state: FSMContext):
     await state.clear()
 
 
-@router.message()
+@router.message(F.chat.type == "private")
 async def unknown_message(message: Message, state: FSMContext):
+    # Только личка: в группах/чате модерации бот не отвечает на произвольный текст
     if await state.get_state() is None:
         from bot.handlers.start import main_menu_kb
         await message.answer("Пожалуйста, выбери вариант из кнопок ниже 👇", reply_markup=main_menu_kb())

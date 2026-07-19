@@ -292,22 +292,20 @@ async def book(call: CallbackQuery):
     await call.answer()
 
 
-@router.callback_query(lambda c: c.data == "best")
-async def best_format(call: CallbackQuery):
-    await _delete_previous_menu_message(call)
+async def best_format_entry(message):
+    """Точка входа в платную ветку BEST (меню или deep link afisha_plat)."""
     events = await load_events("best")
     if not events:
         kb = InlineKeyboardBuilder()
         kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
         kb.button(text="◀️ Назад в меню", callback_data="main_menu")
         kb.adjust(1)
-        await call.message.answer(
+        await message.answer(
             "Пока нет актуальных мероприятий <b>StandUp BEST</b>. "
             "Можно уточнить расписание у менеджера 👇",
             reply_markup=kb.as_markup(),
             parse_mode="HTML",
         )
-        await call.answer()
         return
 
     kb = InlineKeyboardBuilder()
@@ -316,13 +314,19 @@ async def best_format(call: CallbackQuery):
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     kb.adjust(1)
     await _answer_with_format_photo(
-        call.message,
+        message,
         "Привет 😊 Я помогу тебе выбрать билеты на <b>StandUp BEST</b> "
         "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇",
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
         track_nav=True,
     )
+
+
+@router.callback_query(lambda c: c.data == "best")
+async def best_format(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    await best_format_entry(call.message)
     await call.answer()
 
 

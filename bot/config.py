@@ -35,6 +35,15 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 EVENTS_SOURCE = os.getenv("EVENTS_SOURCE", "postgres" if DATABASE_URL else "sheets")
 BOOKINGS_SOURCE = os.getenv("BOOKINGS_SOURCE", "postgres" if DATABASE_URL else "sqlite")
 TICKET_TEMPLATE = os.getenv("TICKET_TEMPLATE", "photo_2023-06-26_15-06-46.jpg")
+MODERATION_CHAT_ID = os.getenv("MODERATION_CHAT_ID")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "MoscowStandupShow")
+AFISHA_REVIEW_URL = os.getenv(
+    "AFISHA_REVIEW_URL",
+    "https://afisha.yandex.ru/moscow/standup/stand-up-ot-komikov-iz-tv-i-youtube-proektov?source=rubric",
+)
+ROZYGRYSH_STICKER_FILE_ID = os.getenv("ROZYGRYSH_STICKER_FILE_ID", "")
+SITE_URL = os.getenv("SITE_URL", "https://MoscowStandUpshow.ru")
+PAID_BEST_START = "afisha_plat"
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set. Create .env from .env.example and fill in the token.")

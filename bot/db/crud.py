@@ -101,8 +101,23 @@ def _upsert_user(cur, telegram_id, username, name, phone):
     return cur.fetchone()[0]
 
 
-def _find_event_id(cur, event_date, event_time, event_location: Optional[str] = None):
-    params = [_parse_event_date(event_date), _parse_event_time(event_time)]
+def _find_event_id(
+    cur,
+    event_date,
+    event_time,
+    event_location: Optional[str] = None,
+    event_format: str = "proverka",
+    event_id: Optional[int] = None,
+):
+    if event_id:
+        cur.execute(
+            "SELECT id FROM events WHERE id = %s AND format = %s LIMIT 1",
+            (event_id, event_format),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    params = [event_format, _parse_event_date(event_date), _parse_event_time(event_time)]
     location_sql = ""
     if event_location:
         location_sql = " AND location = %s"
@@ -112,7 +127,7 @@ def _find_event_id(cur, event_date, event_time, event_location: Optional[str] = 
         f"""
         SELECT id
         FROM events
-        WHERE format = 'proverka'
+        WHERE format = %s
           AND event_date = %s
           AND event_time = %s
           {location_sql}
@@ -175,28 +190,51 @@ def get_active_booking_by_id(booking_id):
     return row
 
 
-def create_booking(telegram_id, username, name, phone, event_date, event_time, event_address, event_location, guests):
+def create_booking(
+    telegram_id,
+    username,
+    name,
+    phone,
+    event_date,
+    event_time,
+    event_address,
+    event_location,
+    guests,
+    booking_format: str = "proverka",
+    event_format: str = "proverka",
+    event_id: Optional[int] = None,
+):
     if _use_postgres():
         with _pg_connect() as conn:
             with conn.cursor() as cur:
                 user_id = _upsert_user(cur, telegram_id, username, name, phone)
-                event_id = _find_event_id(cur, event_date, event_time, event_location)
-                if not event_id:
-                    raise RuntimeError(f"Event not found for booking: {event_date} {event_time} {event_location}")
+                found_event_id = _find_event_id(
+                    cur,
+                    event_date,
+                    event_time,
+                    event_location,
+                    event_format=event_format,
+                    event_id=event_id,
+                )
+                if not found_event_id:
+                    raise RuntimeError(
+                        f"Event not found for booking: {event_format} {event_date} {event_time} {event_location}"
+                    )
 
                 cur.execute(
                     """
                     INSERT INTO bookings (user_id, event_id, guests, format, source, status, created_at)
-                    VALUES (%s, %s, %s, 'proverka', 'telegram', 'booked', %s)
+                    VALUES (%s, %s, %s, %s, 'telegram', 'booked', %s)
                     ON CONFLICT (user_id, event_id)
                     WHERE status IN ('booked', 'confirmed')
                     DO UPDATE SET
                         guests = EXCLUDED.guests,
                         status = 'booked',
+                        format = EXCLUDED.format,
                         updated_at = now()
                     RETURNING id
                     """,
-                    (user_id, event_id, guests, datetime.now()),
+                    (user_id, found_event_id, guests, booking_format, datetime.now()),
                 )
                 booking_id = cur.fetchone()[0]
             conn.commit()
@@ -458,13 +496,19 @@ def annul_booking(booking_id):
     conn.close()
 
 
-def get_booked_for_reminders():
+def get_booked_for_reminders(booking_format: str = "proverka"):
     if _use_postgres():
         with _pg_connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(REMINDER_SELECT_SQL + " WHERE b.status = 'booked'")
+                cur.execute(
+                    REMINDER_SELECT_SQL + " WHERE b.status = 'booked' AND b.format = %s",
+                    (booking_format,),
+                )
                 return _fetchall_tuples(cur)
 
+    # SQLite path historically only has proverka-like rows
+    if booking_format != "proverka":
+        return []
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
@@ -476,3 +520,287 @@ def get_booked_for_reminders():
     rows = c.fetchall()
     conn.close()
     return rows
+
+
+def ensure_user(telegram_id, username=None, name=None, phone=None):
+    if not _use_postgres():
+        return None
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            user_id = _upsert_user(cur, telegram_id, username, name, phone)
+        conn.commit()
+    return user_id
+
+
+def get_rozygrysh_used(telegram_id) -> bool:
+    if not _use_postgres():
+        return False
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(rozygrysh_used, false) FROM users WHERE telegram_id = %s",
+                (telegram_id,),
+            )
+            row = cur.fetchone()
+            return bool(row[0]) if row else False
+
+
+def set_rozygrysh_used(telegram_id, used: bool):
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            _upsert_user(cur, telegram_id, None, None, None)
+            cur.execute(
+                """
+                UPDATE users
+                SET rozygrysh_used = %s, last_active_at = %s
+                WHERE telegram_id = %s
+                """,
+                (used, datetime.now(), telegram_id),
+            )
+        conn.commit()
+
+
+def get_active_raffle_booking(telegram_id):
+    if not _use_postgres():
+        return None
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                BOOKING_SELECT_SQL
+                + """
+                WHERE u.telegram_id = %s
+                  AND b.format = 'rozygrysh'
+                  AND b.status IN ('booked', 'confirmed')
+                ORDER BY e.event_date, e.event_time
+                LIMIT 1
+                """,
+                (telegram_id,),
+            )
+            return _fetchone_tuple(cur)
+
+
+def get_booking_format(booking_id) -> Optional[str]:
+    if not _use_postgres():
+        return "proverka"
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT format FROM bookings WHERE id = %s", (booking_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
+
+
+def ensure_raffle_tables():
+    """Создаёт таблицы модерации/навигации розыгрыша, если их ещё нет."""
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS raffle_submissions (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+                    telegram_id BIGINT NOT NULL,
+                    username TEXT,
+                    full_name TEXT,
+                    kind TEXT NOT NULL CHECK (kind IN ('post', 'review')),
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'approved', 'rejected')),
+                    photo_file_id TEXT NOT NULL,
+                    moderation_chat_id BIGINT,
+                    moderation_message_id BIGINT,
+                    reject_reason TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    reviewed_at TIMESTAMPTZ
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_raffle_submissions_user_status
+                ON raffle_submissions (telegram_id, status)
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS raffle_nav (
+                    telegram_id BIGINT PRIMARY KEY,
+                    dates_message_id BIGINT,
+                    card_message_id BIGINT,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+        conn.commit()
+
+
+def get_pending_raffle_submission(telegram_id):
+    if not _use_postgres():
+        return None
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, kind, status, photo_file_id, moderation_message_id
+                FROM raffle_submissions
+                WHERE telegram_id = %s AND status = 'pending'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (telegram_id,),
+            )
+            return _fetchone_tuple(cur)
+
+
+def create_raffle_submission(telegram_id, username, full_name, kind, photo_file_id):
+    if not _use_postgres():
+        raise RuntimeError("Raffle submissions require PostgreSQL")
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            user_id = _upsert_user(cur, telegram_id, username, full_name, None)
+            cur.execute(
+                """
+                INSERT INTO raffle_submissions
+                    (user_id, telegram_id, username, full_name, kind, status, photo_file_id)
+                VALUES (%s, %s, %s, %s, %s, 'pending', %s)
+                RETURNING id
+                """,
+                (user_id, telegram_id, username, full_name, kind, photo_file_id),
+            )
+            submission_id = cur.fetchone()[0]
+        conn.commit()
+    return submission_id
+
+
+def save_raffle_moderation_message(submission_id, chat_id, message_id):
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE raffle_submissions
+                SET moderation_chat_id = %s, moderation_message_id = %s
+                WHERE id = %s
+                """,
+                (chat_id, message_id, submission_id),
+            )
+        conn.commit()
+
+
+def get_raffle_submission(submission_id):
+    if not _use_postgres():
+        return None
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, telegram_id, username, full_name, kind, status, photo_file_id,
+                       moderation_chat_id, moderation_message_id, reject_reason
+                FROM raffle_submissions
+                WHERE id = %s
+                """,
+                (submission_id,),
+            )
+            return _fetchone_tuple(cur)
+
+
+def get_raffle_submission_by_mod_message(moderation_chat_id, moderation_message_id):
+    if not _use_postgres():
+        return None
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, telegram_id, username, full_name, kind, status, photo_file_id,
+                       moderation_chat_id, moderation_message_id, reject_reason
+                FROM raffle_submissions
+                WHERE moderation_chat_id = %s
+                  AND moderation_message_id = %s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (moderation_chat_id, moderation_message_id),
+            )
+            return _fetchone_tuple(cur)
+
+
+def update_raffle_submission_status(submission_id, status, reject_reason=None):
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE raffle_submissions
+                SET status = %s,
+                    reject_reason = %s,
+                    reviewed_at = %s
+                WHERE id = %s
+                """,
+                (status, reject_reason, datetime.now(), submission_id),
+            )
+        conn.commit()
+
+
+def save_raffle_nav(telegram_id, dates_message_id=None, card_message_id=None):
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO raffle_nav (telegram_id, dates_message_id, card_message_id, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (telegram_id) DO UPDATE SET
+                    dates_message_id = COALESCE(EXCLUDED.dates_message_id, raffle_nav.dates_message_id),
+                    card_message_id = COALESCE(EXCLUDED.card_message_id, raffle_nav.card_message_id),
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (telegram_id, dates_message_id, card_message_id, datetime.now()),
+            )
+        conn.commit()
+
+
+def get_raffle_nav(telegram_id):
+    if not _use_postgres():
+        return None
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT dates_message_id, card_message_id FROM raffle_nav WHERE telegram_id = %s",
+                (telegram_id,),
+            )
+            return _fetchone_tuple(cur)
+
+
+def clear_raffle_nav(telegram_id):
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM raffle_nav WHERE telegram_id = %s", (telegram_id,))
+        conn.commit()
+
+
+def get_confirmed_raffle_past_for_cleanup():
+    """Подтверждённые розыгрыш-брони после окончания шоу — для очистки UI."""
+    if not _use_postgres():
+        return []
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT u.telegram_id
+                FROM bookings b
+                JOIN users u ON u.id = b.user_id
+                JOIN events e ON e.id = b.event_id
+                JOIN raffle_nav n ON n.telegram_id = u.telegram_id
+                WHERE b.format = 'rozygrysh'
+                  AND b.status = 'confirmed'
+                  AND (e.event_date + e.event_time) < now()
+                """
+            )
+            return [row[0] for row in cur.fetchall()]
