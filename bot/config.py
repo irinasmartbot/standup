@@ -44,6 +44,13 @@ AFISHA_REVIEW_URL = os.getenv(
 ROZYGRYSH_STICKER_FILE_ID = os.getenv("ROZYGRYSH_STICKER_FILE_ID", "")
 SITE_URL = os.getenv("SITE_URL", "https://MoscowStandUpshow.ru")
 PAID_BEST_START = "afisha_plat"
+# Временно: 1 = не проверять подписку на канал (пока тестовый бот не админ канала)
+ROZYGRYSH_SKIP_SUB_CHECK = os.getenv("ROZYGRYSH_SKIP_SUB_CHECK", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set. Create .env from .env.example and fill in the token.")

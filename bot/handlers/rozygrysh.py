@@ -28,6 +28,7 @@ from bot.config import (
     MANAGER_LINK,
     MANAGER_PHONE,
     MODERATION_CHAT_ID,
+    ROZYGRYSH_SKIP_SUB_CHECK,
     ROZYGRYSH_STICKER_FILE_ID,
     SITE_URL,
     TICKET_TEMPLATE,
@@ -631,6 +632,10 @@ async def rz_mod_reject_reason(message: Message, state: FSMContext):
 
 
 async def _is_subscribed(telegram_id: int) -> bool:
+    # Временная заглушка для теста, пока бот не админ канала
+    if ROZYGRYSH_SKIP_SUB_CHECK:
+        logger.info("ROZYGRYSH_SKIP_SUB_CHECK=1 — skip channel check for %s", telegram_id)
+        return True
     try:
         member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", telegram_id)
         return member.status in {
