@@ -7,6 +7,7 @@ from html import escape
 from aiogram import F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.enums import ChatMemberStatus
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -31,6 +32,7 @@ from bot.config import (
     ROZYGRYSH_SKIP_SUB_CHECK,
     ROZYGRYSH_STICKER_FILE_ID,
     SITE_URL,
+    TEST_ADMIN_IDS,
     TICKET_TEMPLATE,
     bot,
 )
@@ -49,6 +51,7 @@ from bot.db.crud import (
     get_raffle_submission_by_mod_message,
     get_rozygrysh_used,
     get_total_guests,
+    reset_raffle_for_user,
     save_confirm_message_id,
     save_raffle_moderation_message,
     save_raffle_nav,
@@ -231,6 +234,34 @@ async def can_enter_raffle(telegram_id: int) -> tuple[bool, str]:
     if get_active_raffle_booking(telegram_id):
         return False, "У тебя уже есть активная бронь по розыгрышу. Дождись шоу или отмени бронь 😊"
     return True, ""
+
+
+def _can_reset_raffle(telegram_id: int) -> bool:
+    # В тестовом режиме — любой в личке; иначе только TEST_ADMIN_IDS
+    if ROZYGRYSH_SKIP_SUB_CHECK:
+        return True
+    return telegram_id in TEST_ADMIN_IDS
+
+
+@router.message(Command("reset_rozygrysh"), F.chat.type == "private")
+async def reset_rozygrysh_cmd(message: Message, state: FSMContext):
+    """Сброс своей ветки розыгрыша для повторного теста (без рестарта бота)."""
+    if not _can_reset_raffle(message.from_user.id):
+        await message.answer("Команда недоступна.")
+        return
+
+    stats = reset_raffle_for_user(message.from_user.id)
+    _SUB_CHECK_MESSAGES.pop(message.from_user.id, None)
+    await state.clear()
+    await message.answer(
+        "Розыгрыш сброшен для тебя ✅\n\n"
+        f"• флаг использован: сброшен\n"
+        f"• отменено броней: {stats['bookings_cancelled']}\n"
+        f"• снято заявок на модерации: {stats['submissions_cancelled']}\n\n"
+        "Можно снова открыть:\n"
+        "https://t.me/StandUp_Show_bot?start=standup_rozygr\n"
+        "(или /start standup_rozygr у тестового бота)"
+    )
 
 
 async def send_raffle_start(message: Message, state: FSMContext):

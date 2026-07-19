@@ -51,6 +51,14 @@ ROZYGRYSH_SKIP_SUB_CHECK = os.getenv("ROZYGRYSH_SKIP_SUB_CHECK", "1").strip().lo
     "yes",
     "on",
 }
+# Telegram id через запятую — кто может /reset_rozygrysh даже без тестового режима.
+# В тестовом режиме (ROZYGRYSH_SKIP_SUB_CHECK=1) сброс доступен всем в личке.
+_TEST_ADMIN_RAW = os.getenv("TEST_ADMIN_IDS", "")
+TEST_ADMIN_IDS = {
+    int(part.strip())
+    for part in _TEST_ADMIN_RAW.split(",")
+    if part.strip().isdigit()
+}
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set. Create .env from .env.example and fill in the token.")

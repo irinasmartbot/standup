@@ -581,6 +581,65 @@ def get_active_raffle_booking(telegram_id):
             return _fetchone_tuple(cur)
 
 
+def reset_raffle_for_user(telegram_id) -> dict:
+    """Сброс ветки розыгрыша для теста: флаг, pending, активные брони, nav."""
+    result = {
+        "rozygrysh_used_cleared": False,
+        "bookings_cancelled": 0,
+        "submissions_cancelled": 0,
+        "nav_cleared": False,
+    }
+    if not _use_postgres():
+        return result
+
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            _upsert_user(cur, telegram_id, None, None, None)
+            cur.execute(
+                """
+                UPDATE users
+                SET rozygrysh_used = false, last_active_at = %s
+                WHERE telegram_id = %s
+                """,
+                (datetime.now(), telegram_id),
+            )
+            result["rozygrysh_used_cleared"] = cur.rowcount > 0
+
+            cur.execute(
+                """
+                UPDATE bookings b
+                SET status = 'cancelled',
+                    cancelled_at = %s,
+                    updated_at = now()
+                FROM users u
+                WHERE b.user_id = u.id
+                  AND u.telegram_id = %s
+                  AND b.format = 'rozygrysh'
+                  AND b.status IN ('booked', 'confirmed')
+                """,
+                (datetime.now(), telegram_id),
+            )
+            result["bookings_cancelled"] = cur.rowcount or 0
+
+            cur.execute(
+                """
+                UPDATE raffle_submissions
+                SET status = 'rejected',
+                    reject_reason = 'test_reset',
+                    reviewed_at = %s
+                WHERE telegram_id = %s
+                  AND status = 'pending'
+                """,
+                (datetime.now(), telegram_id),
+            )
+            result["submissions_cancelled"] = cur.rowcount or 0
+
+            cur.execute("DELETE FROM raffle_nav WHERE telegram_id = %s", (telegram_id,))
+            result["nav_cleared"] = cur.rowcount > 0
+        conn.commit()
+    return result
+
+
 def get_booking_format(booking_id) -> Optional[str]:
     if not _use_postgres():
         return "proverka"
