@@ -36,6 +36,21 @@ async def _delete_previous_menu_message(call: CallbackQuery):
         pass
 
 
+@router.message(F.sticker, F.chat.type == "private")
+async def private_sticker_file_id(message: Message, state: FSMContext):
+    """Временно: отвечает file_id стикера — удобно прописать ROZYGRYSH_STICKER_FILE_ID."""
+    if await state.get_state() is not None:
+        return
+    file_id = message.sticker.file_id if message.sticker else ""
+    if not file_id:
+        return
+    await message.answer(
+        f"file_id стикера:\n<code>{file_id}</code>\n\n"
+        f"Скопируй в .env как ROZYGRYSH_STICKER_FILE_ID=",
+        parse_mode="HTML",
+    )
+
+
 @router.message(CommandStart(), F.chat.type == "private")
 async def start(message: Message, state: FSMContext, command: CommandObject):
     await state.clear()
