@@ -984,6 +984,11 @@ async def process_new_guests(message: Message, state: FSMContext):
 @router.message(F.chat.type == "private")
 async def unknown_message(message: Message, state: FSMContext):
     # Только личка: в группах/чате модерации бот не отвечает на произвольный текст
+    # Картинки не должны вызывать главное меню (скрин розыгрыша и т.п.)
+    if message.photo or (
+        message.document and (message.document.mime_type or "").startswith("image/")
+    ):
+        return
     if await state.get_state() is None:
         from bot.handlers.start import main_menu_kb
         await message.answer("Пожалуйста, выбери вариант из кнопок ниже 👇", reply_markup=main_menu_kb())

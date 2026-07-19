@@ -10,6 +10,7 @@ from aiogram.enums import ChatMemberStatus
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
@@ -35,6 +36,7 @@ from bot.config import (
     TEST_ADMIN_IDS,
     TICKET_TEMPLATE,
     bot,
+    dp,
 )
 from bot.db.crud import (
     clear_raffle_nav,
@@ -382,6 +384,14 @@ async def _arm_screenshot_wait(state: FSMContext, kind: str):
     await state.set_state(RaffleState.waiting_screenshot)
 
 
+async def _arm_screenshot_wait_for_telegram_id(telegram_id: int, kind: str):
+    """Как _arm_screenshot_wait, но по telegram_id клиента (нет своего FSMContext, например после отказа модератором)."""
+    key = StorageKey(bot_id=bot.id, chat_id=telegram_id, user_id=telegram_id)
+    ctx = FSMContext(storage=dp.storage, key=key)
+    await ctx.update_data(rz_kind=kind, screen_requested=True, raffle_flow=True)
+    await ctx.set_state(RaffleState.waiting_screenshot)
+
+
 def _mod_chat_id():
     if not MODERATION_CHAT_ID:
         return None
@@ -725,14 +735,8 @@ async def rz_mod_reject_reason(message: Message, state: FSMContext):
     if reason:
         text += f"\n\nКомментарий менеджера: {reason}"
     await bot.send_message(telegram_id, text)
-
-    kb = InlineKeyboardBuilder()
-    if kind == "review":
-        kb.button(text="Отправить скрин", callback_data="rz_review_send")
-    else:
-        kb.button(text="Я выложил, вот те скрин", callback_data="rz_post_screen")
-    kb.adjust(1)
-    await bot.send_message(telegram_id, "Можешь отправить новый скрин 👇", reply_markup=kb.as_markup())
+    # сразу ждём новое фото — без лишней кнопки
+    await _arm_screenshot_wait_for_telegram_id(telegram_id, kind)
 
 
 # ─── подписка ─────────────────────────────────────────────────────────────────
