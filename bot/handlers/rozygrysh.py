@@ -75,12 +75,39 @@ OTZYV_PHOTO_2 = os.path.join(_PROJECT_ROOT, "photo_2024-04-09_12-50-47.jpg")
 
 # telegram_id -> message_ids с кнопкой «Подписка есть» (для очистки)
 _SUB_CHECK_MESSAGES: dict[int, list[int]] = {}
-# moderation_message_id -> submission_id (ждём причину отказа именно к этой карточке)
-_PENDING_REJECT_BY_MSG: dict[int, int] = {}
+# card_message_id -> {submission_id, prompt_message_id}
+_PENDING_REJECT_BY_MSG: dict[int, dict] = {}
 
 
 def is_pending_reject_reply(reply_to_message_id: int) -> bool:
-    return reply_to_message_id in _PENDING_REJECT_BY_MSG
+    if reply_to_message_id in _PENDING_REJECT_BY_MSG:
+        return True
+    return any(
+        data.get("prompt_message_id") == reply_to_message_id
+        for data in _PENDING_REJECT_BY_MSG.values()
+    )
+
+
+def _pending_reject_lookup(message_id: int):
+    """Вернуть (card_message_id, data) по id карточки или подсказки."""
+    data = _PENDING_REJECT_BY_MSG.get(message_id)
+    if data:
+        return message_id, data
+    for card_id, item in _PENDING_REJECT_BY_MSG.items():
+        if item.get("prompt_message_id") == message_id:
+            return card_id, item
+    return None, None
+
+
+async def _delete_mod_chat_messages(chat_id: int, *message_ids):
+    """Чистит служебные сообщения в чате модерации (остаётся только карточка)."""
+    for mid in message_ids:
+        if not mid:
+            continue
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
 
 
 START_TEXT = (
@@ -564,13 +591,17 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
         await call.answer("Уже обработано", show_alert=True)
         return
 
-    _PENDING_REJECT_BY_MSG.pop(call.message.message_id, None)
+    pending = _PENDING_REJECT_BY_MSG.pop(call.message.message_id, None)
+    if pending:
+        await _delete_mod_chat_messages(
+            call.message.chat.id, pending.get("prompt_message_id")
+        )
     update_raffle_submission_status(submission_id, "approved")
     now = datetime.now().strftime("%d.%m.%Y в %H:%M")
     await _set_mod_card_status(
         call.message,
         row,
-        f"\n\n✅ Скрин принят {now}\nОтвет ушёл: {_client_label(row)}",
+        f"\n\n✅ Скрин принят {now}",
     )
 
     # только клиент из этой заявки
@@ -606,18 +637,22 @@ async def rz_mod_no(call: CallbackQuery, state: FSMContext):
         return
 
     # Кнопки снимаем сразу; причина — реплаем на ЭТУ карточку → ЭТОМУ клиенту
-    _PENDING_REJECT_BY_MSG[call.message.message_id] = submission_id
+    card_msg_id = call.message.message_id
     await _set_mod_card_status(
         call.message,
         row,
-        f"\n\n⏳ Ожидаем причину отказа…\nКлиент: {_client_label(row)} · заявка #{submission_id}",
+        f"\n\n⏳ Ожидаем причину отказа…\nЗаявка #{submission_id}",
     )
-    await call.message.reply(
+    prompt = await call.message.reply(
         "Ответьте <b>реплаем на сообщение со скрином выше</b> причиной отказа "
         "(или «-» без причины).\n\n"
         f"Заявка #{submission_id} → {_client_label(row)}",
         parse_mode="HTML",
     )
+    _PENDING_REJECT_BY_MSG[card_msg_id] = {
+        "submission_id": submission_id,
+        "prompt_message_id": prompt.message_id,
+    }
     await call.answer()
 
 
@@ -627,43 +662,59 @@ async def rz_mod_reject_reason(message: Message, state: FSMContext):
     if not _is_moderation_chat(message.chat.id):
         raise SkipHandler
     replied_id = message.reply_to_message.message_id
-    submission_id = _PENDING_REJECT_BY_MSG.get(replied_id)
-    if not submission_id:
-        # могли ответить на подсказку бота — пробуем найти исходную карточку
-        if message.reply_to_message.reply_to_message:
-            replied_id = message.reply_to_message.reply_to_message.message_id
-            submission_id = _PENDING_REJECT_BY_MSG.get(replied_id)
-    if not submission_id:
+    card_msg_id, pending = _pending_reject_lookup(replied_id)
+    if not pending and message.reply_to_message.reply_to_message:
+        card_msg_id, pending = _pending_reject_lookup(
+            message.reply_to_message.reply_to_message.message_id
+        )
+    if not pending:
         raise SkipHandler
 
+    submission_id = pending["submission_id"]
+    prompt_message_id = pending.get("prompt_message_id")
     row = get_raffle_submission(submission_id)
     if not row:
-        row = get_raffle_submission_by_mod_message(message.chat.id, replied_id)
+        row = get_raffle_submission_by_mod_message(message.chat.id, card_msg_id)
     if not row or row[5] != "pending":
-        _PENDING_REJECT_BY_MSG.pop(replied_id, None)
-        await message.reply("Заявка уже обработана.")
+        _PENDING_REJECT_BY_MSG.pop(card_msg_id, None)
+        err = await message.reply("Заявка уже обработана.")
+        await _delete_mod_chat_messages(
+            message.chat.id, prompt_message_id, message.message_id, err.message_id
+        )
         return
-    # защита: id клиента только из записи заявки
     if int(row[0]) != int(submission_id):
-        await message.reply("Ошибка привязки заявки. Нажмите ОТКЛОНИТЬ ещё раз на нужном скрине.")
+        err = await message.reply(
+            "Ошибка привязки заявки. Нажмите ОТКЛОНИТЬ ещё раз на нужном скрине."
+        )
+        await _delete_mod_chat_messages(message.chat.id, err.message_id)
         return
 
     raw = (message.text or "").strip()
     if not raw:
-        await message.reply("Нужен текст причины или «-». Ответьте реплаем на карточку со скрином.")
+        err = await message.reply(
+            "Нужен текст причины или «-». Ответьте реплаем на карточку со скрином."
+        )
+        # ошибку тоже убираем через пару секунд? пока оставим — иначе менеджер не увидит
         return
     reason = "" if raw == "-" else raw
 
-    _PENDING_REJECT_BY_MSG.pop(replied_id, None)
+    _PENDING_REJECT_BY_MSG.pop(card_msg_id, None)
     update_raffle_submission_status(submission_id, "rejected", reject_reason=reason or None)
     now = datetime.now().strftime("%d.%m.%Y в %H:%M")
     mod_chat_id = row[7] or message.chat.id
-    mod_msg_id = row[8] or replied_id
+    mod_msg_id = row[8] or card_msg_id
 
-    status_lines = f"\n\n❌ Скрин отклонен {now}\nОтвет ушёл: {_client_label(row)}"
+    status_lines = f"\n\n❌ Скрин отклонен {now}"
     if reason:
         status_lines += f"\nПричина: {reason}"
     await _set_mod_card_status((mod_chat_id, mod_msg_id), row, status_lines)
+
+    # в чате модерации остаётся только обработанная карточка
+    await _delete_mod_chat_messages(
+        message.chat.id,
+        prompt_message_id,
+        message.message_id,
+    )
 
     kind = row[4]
     telegram_id = int(row[1])
@@ -682,9 +733,6 @@ async def rz_mod_reject_reason(message: Message, state: FSMContext):
         kb.button(text="Я выложил, вот те скрин", callback_data="rz_post_screen")
     kb.adjust(1)
     await bot.send_message(telegram_id, "Можешь отправить новый скрин 👇", reply_markup=kb.as_markup())
-    await message.reply(
-        f"Отказ по заявке #{submission_id} отправлен: {_client_label(row)}"
-    )
 
 
 # ─── подписка ─────────────────────────────────────────────────────────────────
