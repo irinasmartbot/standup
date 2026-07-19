@@ -305,8 +305,8 @@ async def rz_post(call: CallbackQuery, state: FSMContext):
         return
     await _delete_call_message(call)
     kb = InlineKeyboardBuilder()
-    kb.button(text="Я выложил, вот те крест", callback_data="rz_post_cross")
-    kb.button(text="Я выложил, вот те скрин", callback_data="rz_post_screen")
+    kb.button(text="Я выложил, вот те крест", callback_data="rz_post_cross", style="success")
+    kb.button(text="Я выложил, вот те скрин", callback_data="rz_post_screen", style="danger")
     kb.adjust(1)
     await call.message.answer(POST_TEXT, reply_markup=kb.as_markup(), parse_mode="HTML")
     await state.update_data(rz_kind="post")
