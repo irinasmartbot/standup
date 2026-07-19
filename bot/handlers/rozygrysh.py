@@ -259,8 +259,9 @@ async def reset_rozygrysh_cmd(message: Message, state: FSMContext):
         f"• отменено броней: {stats['bookings_cancelled']}\n"
         f"• снято заявок на модерации: {stats['submissions_cancelled']}\n\n"
         "Можно снова открыть:\n"
-        "https://t.me/StandUp_Show_bot?start=standup_rozygr\n"
-        "(или /start standup_rozygr у тестового бота)"
+        "https://t.me/StandUp_Show_bot?start=standup_rozygr\n\n"
+        "Временная тест-ссылка:\n"
+        "https://t.me/ira_test_stend_bot?start=standup_rozygr"
     )
 
 
