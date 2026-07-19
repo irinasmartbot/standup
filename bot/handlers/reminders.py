@@ -35,7 +35,11 @@ async def _clear_prev_buttons(booking_id: int, telegram_id: int):
 def booking_manage_kb(booking_id, include_ticket=True):
     kb = InlineKeyboardBuilder()
     if include_ticket:
-        kb.button(text="🎟 Получить билет", callback_data=f"get_ticket_{booking_id}")
+        kb.button(
+            text="🎟 Получить билет 🎟",
+            callback_data=f"get_ticket_{booking_id}",
+            style="success",
+        )
     kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
     kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
     kb.button(text="Изменить количество гостей", callback_data=f"change_guests_confirm_{booking_id}")

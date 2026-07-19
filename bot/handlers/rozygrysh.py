@@ -63,7 +63,7 @@ from bot.db.crud import (
     update_raffle_submission_status,
 )
 from bot.services.sheets import load_events
-from bot.utils.ticket import MONTHS, format_date, generate_ticket, guests_word
+from bot.utils.ticket import MONTHS, format_date, generate_ticket, guests_word, now_msk
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -71,14 +71,18 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
-OTZYV_PHOTO = os.path.join(PHOTOS_DIR, "rozygrysh_otzyv.png")
-OTZYV_PHOTO_1 = os.path.join(_PROJECT_ROOT, "photo_2024-04-09_12-50-28.jpg")
-OTZYV_PHOTO_2 = os.path.join(_PROJECT_ROOT, "photo_2024-04-09_12-50-47.jpg")
+OTZYV_PHOTO_1 = os.path.join(PHOTOS_DIR, "rozygrysh_otzyv_1.jpg")
+OTZYV_PHOTO_2 = os.path.join(PHOTOS_DIR, "rozygrysh_otzyv_2.jpg")
+# запасные пути (локальная разработка, если ещё не скопировали в фото/)
+_OTZYV_FALLBACK_1 = os.path.join(_PROJECT_ROOT, "photo_2024-04-09_12-50-28.jpg")
+_OTZYV_FALLBACK_2 = os.path.join(_PROJECT_ROOT, "photo_2024-04-09_12-50-47.jpg")
 
 # telegram_id -> message_ids с кнопкой «Подписка есть» (для очистки)
 _SUB_CHECK_MESSAGES: dict[int, list[int]] = {}
 # card_message_id -> {submission_id, prompt_message_id}
 _PENDING_REJECT_BY_MSG: dict[int, dict] = {}
+# media_group_id — уже предупредили про альбом
+_ALBUM_WARNED: set[str] = set()
 
 
 def is_pending_reject_reply(reply_to_message_id: int) -> bool:
@@ -139,6 +143,8 @@ REVIEW_TEXT = (
     "🎫 За 1 отзыв полагается 1 билет"
 )
 
+PAID_BOOKING_LINK = "https://t.me/ira_test_stend_bot?start=afisha_plat"
+
 RULES_TEXT = (
     "<b>Порядок посещения шоу:</b>\n\n"
     "1. Сбор гостей начинается за полчаса до начала шоу\n\n"
@@ -153,10 +159,23 @@ RULES_TEXT = (
 
 NOT_ALONE_TEXT = (
     f"Ваши друзья могут купить билеты на выбранное Вами шоу через "
-    f"<a href=\"https://t.me/StandUp_Show_bot?start=afisha_plat\">систему бронирования</a>, "
-    f"после чего просто напишите нашему <a href=\"{MANAGER_LINK}\">менеджеру</a>, "
-    f"на какие места и на какую дату они взяли билеты, мы уберём из продажи соседнее место "
-    f"специально для Вас и посадим туда 😉"
+    f"<a href=\"{PAID_BOOKING_LINK}\">систему бронирования</a>.\n\n"
+    f"После этого просто напишите нашему <a href=\"{MANAGER_LINK}\">менеджеру</a>, "
+    f"на какие места и на какую дату они взяли билеты.\n\n"
+    f"Мы уберём из продажи соседнее место специально для Вас и посадим туда 😉"
+)
+
+TICKET_ISSUED_TEXT = (
+    "Ждем вас на мероприятии ❤️\n\n"
+    "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
+    "чтобы вас посадили вместе — нажмите кнопку «Что, если я хочу прийти не один?» "
+    "и узнайте информацию.\n"
+    "В противном случае вы будете сидеть на месте, которое предложит администратор рассадки.\n\n"
+    "Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
+    f"При возникновении вопросов — можно писать менеджеру {{manager}} "
+    f"(если срочно — звоните {MANAGER_PHONE})\n\n"
+    f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
+    "(там часто дарят бесплатные билеты на платные шоу 😉)"
 )
 
 SCREEN_OK_TEXT = (
@@ -257,14 +276,20 @@ async def _dates_kb():
     return kb.as_markup(), dates
 
 
-async def can_enter_raffle(telegram_id: int) -> tuple[bool, str]:
+async def can_enter_raffle(telegram_id: int) -> tuple[bool, str, int | None]:
+    """(ok, reason, active_booking_id или None)."""
     if get_pending_raffle_submission(telegram_id):
-        return False, "Ваш скрин на модерации, ожидайте ⏳"
+        return False, "Ваш скрин на модерации, ожидайте ⏳", None
     if get_rozygrysh_used(telegram_id):
-        return False, "Ты уже использовал(а) возможность получить бесплатный билет по розыгрышу 😊"
-    if get_active_raffle_booking(telegram_id):
-        return False, "У тебя уже есть активная бронь по розыгрышу. Дождись шоу или отмени бронь 😊"
-    return True, ""
+        return False, "Ты уже использовал(а) возможность получить бесплатный билет по розыгрышу 😊", None
+    active = get_active_raffle_booking(telegram_id)
+    if active:
+        return (
+            False,
+            "У тебя уже есть активная бронь по розыгрышу. Дождись шоу или отмени бронь 😊",
+            int(active[0]),
+        )
+    return True, "", None
 
 
 def _can_reset_raffle(telegram_id: int) -> bool:
@@ -298,9 +323,15 @@ async def reset_rozygrysh_cmd(message: Message, state: FSMContext):
 
 async def send_raffle_start(message: Message, state: FSMContext):
     ensure_user(message.from_user.id, message.from_user.username, _full_name(message.from_user))
-    ok, reason = await can_enter_raffle(message.from_user.id)
+    ok, reason, booking_id = await can_enter_raffle(message.from_user.id)
     if not ok:
-        await message.answer(reason)
+        markup = None
+        if booking_id:
+            kb = InlineKeyboardBuilder()
+            kb.button(text="Отменить бронирование", callback_data=f"rz_cancel_{booking_id}")
+            kb.adjust(1)
+            markup = kb.as_markup()
+        await message.answer(reason, reply_markup=markup)
         return
     await state.clear()
     await message.answer(START_TEXT, reply_markup=_start_kb(), parse_mode="HTML", disable_web_page_preview=True)
@@ -328,7 +359,7 @@ async def _delete_call_message(call: CallbackQuery):
 async def rz_post(call: CallbackQuery, state: FSMContext):
     if not await _guard_action(call):
         return
-    ok, reason = await can_enter_raffle(call.from_user.id)
+    ok, reason, _ = await can_enter_raffle(call.from_user.id)
     if not ok:
         await call.answer(reason, show_alert=True)
         return
@@ -342,11 +373,24 @@ async def rz_post(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
+def _otzyv_photo_paths():
+    paths = []
+    for primary, fallback in (
+        (OTZYV_PHOTO_1, _OTZYV_FALLBACK_1),
+        (OTZYV_PHOTO_2, _OTZYV_FALLBACK_2),
+    ):
+        if os.path.exists(primary):
+            paths.append(primary)
+        elif os.path.exists(fallback):
+            paths.append(fallback)
+    return paths
+
+
 @router.callback_query(F.data == "rz_review")
 async def rz_review(call: CallbackQuery, state: FSMContext):
     if not await _guard_action(call):
         return
-    ok, reason = await can_enter_raffle(call.from_user.id)
+    ok, reason, _ = await can_enter_raffle(call.from_user.id)
     if not ok:
         await call.answer(reason, show_alert=True)
         return
@@ -354,26 +398,17 @@ async def rz_review(call: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     kb.button(text="Отправить скрин", callback_data="rz_review_send")
     kb.adjust(1)
-    photo_path = OTZYV_PHOTO if os.path.exists(OTZYV_PHOTO) else None
-    if photo_path:
+    for path in _otzyv_photo_paths():
         try:
-            await call.message.answer_photo(
-                photo=FSInputFile(photo_path),
-                caption=REVIEW_TEXT,
-                reply_markup=kb.as_markup(),
-                parse_mode="HTML",
-            )
+            await call.message.answer_photo(FSInputFile(path))
         except Exception:
-            photo_path = None
-    if not photo_path:
-        # два отдельных скрина-инструкции
-        for path in (OTZYV_PHOTO_1, OTZYV_PHOTO_2):
-            if os.path.exists(path):
-                try:
-                    await call.message.answer_photo(FSInputFile(path))
-                except Exception:
-                    pass
-        await call.message.answer(REVIEW_TEXT, reply_markup=kb.as_markup(), parse_mode="HTML")
+            logger.exception("Failed to send review instruction photo %s", path)
+    await call.message.answer(
+        REVIEW_TEXT,
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
     await state.update_data(rz_kind="review")
     await call.answer()
 
@@ -443,6 +478,12 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
         return
 
     if message.media_group_id:
+        group_id = str(message.media_group_id)
+        if group_id in _ALBUM_WARNED:
+            return
+        _ALBUM_WARNED.add(group_id)
+        if len(_ALBUM_WARNED) > 200:
+            _ALBUM_WARNED.clear()
         text = ALBUM_TEXT_REVIEW if kind == "review" else ALBUM_TEXT_POST
         await message.answer(text)
         return
@@ -518,8 +559,16 @@ async def _send_to_moderation(submission_id, telegram_id, username, full_name, k
         f"Заявка #{submission_id}"
     )
     kb = InlineKeyboardBuilder()
-    kb.button(text="ПРИНЯТЬ", callback_data=f"rz_mod_ok_{submission_id}")
-    kb.button(text="ОТКЛОНИТЬ", callback_data=f"rz_mod_no_{submission_id}")
+    kb.button(text="ПРИНЯТЬ", callback_data=f"rz_mod_ok_{submission_id}", style="success")
+    kb.button(
+        text="ОТКЛОНИТЬ без комментария",
+        callback_data=f"rz_mod_no_silent_{submission_id}",
+        style="danger",
+    )
+    kb.button(
+        text="ОТКЛОНИТЬ с комментарием",
+        callback_data=f"rz_mod_no_reason_{submission_id}",
+    )
     kb.adjust(1)
     try:
         # Только наша карточка модерации — без forward произвольных сообщений клиента
@@ -607,7 +656,7 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
             call.message.chat.id, pending.get("prompt_message_id")
         )
     update_raffle_submission_status(submission_id, "approved")
-    now = datetime.now().strftime("%d.%m.%Y в %H:%M")
+    now = now_msk().strftime("%d.%m.%Y в %H:%M")
     await _set_mod_card_status(
         call.message,
         row,
@@ -632,12 +681,36 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("rz_mod_no_"))
-async def rz_mod_no(call: CallbackQuery, state: FSMContext):
+async def _reject_submission(row, reason: str | None, card_ref, cleanup_chat_id=None, *cleanup_ids):
+    """Отклоняет заявку, обновляет карточку, пишет клиенту, чистит служебные сообщения."""
+    submission_id = int(row[0])
+    update_raffle_submission_status(submission_id, "rejected", reject_reason=reason or None)
+    now = now_msk().strftime("%d.%m.%Y в %H:%M")
+    status_lines = f"\n\n❌ Скрин отклонен {now}"
+    if reason:
+        status_lines += f"\nПричина: {reason}"
+    await _set_mod_card_status(card_ref, row, status_lines)
+    if cleanup_chat_id:
+        await _delete_mod_chat_messages(cleanup_chat_id, *cleanup_ids)
+
+    kind = row[4]
+    telegram_id = int(row[1])
+    if kind == "review":
+        text = "К сожалению скрин не прошел модерацию. 😔\nОтправь скрин отзыва еще раз 👇"
+    else:
+        text = "К сожалению скрин не прошел модерацию. 😔\nОтправь скрин поста еще раз 👇"
+    if reason:
+        text += f"\n\nКомментарий менеджера: {reason}"
+    await bot.send_message(telegram_id, text)
+    await _arm_screenshot_wait_for_telegram_id(telegram_id, kind)
+
+
+@router.callback_query(F.data.startswith("rz_mod_no_silent_"))
+async def rz_mod_no_silent(call: CallbackQuery, state: FSMContext):
     if not _is_moderation_chat(call.message.chat.id):
         await call.answer("Недоступно", show_alert=True)
         return
-    submission_id = int(call.data.replace("rz_mod_no_", ""))
+    submission_id = int(call.data.replace("rz_mod_no_silent_", ""))
     row = get_raffle_submission(submission_id)
     if not row:
         await call.answer("Заявка не найдена", show_alert=True)
@@ -646,7 +719,29 @@ async def rz_mod_no(call: CallbackQuery, state: FSMContext):
         await call.answer("Уже обработано", show_alert=True)
         return
 
-    # Кнопки снимаем сразу; причина — реплаем на ЭТУ карточку → ЭТОМУ клиенту
+    pending = _PENDING_REJECT_BY_MSG.pop(call.message.message_id, None)
+    if pending:
+        await _delete_mod_chat_messages(
+            call.message.chat.id, pending.get("prompt_message_id")
+        )
+    await _reject_submission(row, None, call.message)
+    await call.answer("Отклонено")
+
+
+@router.callback_query(F.data.startswith("rz_mod_no_reason_"))
+async def rz_mod_no_reason(call: CallbackQuery, state: FSMContext):
+    if not _is_moderation_chat(call.message.chat.id):
+        await call.answer("Недоступно", show_alert=True)
+        return
+    submission_id = int(call.data.replace("rz_mod_no_reason_", ""))
+    row = get_raffle_submission(submission_id)
+    if not row:
+        await call.answer("Заявка не найдена", show_alert=True)
+        return
+    if row[5] != "pending":
+        await call.answer("Уже обработано", show_alert=True)
+        return
+
     card_msg_id = call.message.message_id
     await _set_mod_card_status(
         call.message,
@@ -654,8 +749,7 @@ async def rz_mod_no(call: CallbackQuery, state: FSMContext):
         f"\n\n⏳ Ожидаем причину отказа…\nЗаявка #{submission_id}",
     )
     prompt = await call.message.reply(
-        "Ответьте <b>реплаем на сообщение со скрином выше</b> причиной отказа "
-        "(или «-» без причины).\n\n"
+        'Напишите причину отказа, нажав «ответить» на сообщение с данным скрином\n\n'
         f"Заявка #{submission_id} → {_client_label(row)}",
         parse_mode="HTML",
     )
@@ -668,7 +762,7 @@ async def rz_mod_no(call: CallbackQuery, state: FSMContext):
 
 @router.message(F.reply_to_message)
 async def rz_mod_reject_reason(message: Message, state: FSMContext):
-    """Причина отказа — только reply на карточку скрина после ОТКЛОНИТЬ."""
+    """Причина отказа — reply на карточку после «ОТКЛОНИТЬ с комментарием»."""
     if not _is_moderation_chat(message.chat.id):
         raise SkipHandler
     replied_id = message.reply_to_message.message_id
@@ -694,49 +788,29 @@ async def rz_mod_reject_reason(message: Message, state: FSMContext):
         return
     if int(row[0]) != int(submission_id):
         err = await message.reply(
-            "Ошибка привязки заявки. Нажмите ОТКЛОНИТЬ ещё раз на нужном скрине."
+            "Ошибка привязки заявки. Нажмите «ОТКЛОНИТЬ с комментарием» ещё раз на нужном скрине."
         )
         await _delete_mod_chat_messages(message.chat.id, err.message_id)
         return
 
-    raw = (message.text or "").strip()
-    if not raw:
-        err = await message.reply(
-            "Нужен текст причины или «-». Ответьте реплаем на карточку со скрином."
+    reason = (message.text or "").strip()
+    if not reason:
+        await message.reply(
+            "Нужен текст причины. Ответьте реплаем на карточку со скрином."
         )
-        # ошибку тоже убираем через пару секунд? пока оставим — иначе менеджер не увидит
         return
-    reason = "" if raw == "-" else raw
 
     _PENDING_REJECT_BY_MSG.pop(card_msg_id, None)
-    update_raffle_submission_status(submission_id, "rejected", reject_reason=reason or None)
-    now = datetime.now().strftime("%d.%m.%Y в %H:%M")
     mod_chat_id = row[7] or message.chat.id
     mod_msg_id = row[8] or card_msg_id
-
-    status_lines = f"\n\n❌ Скрин отклонен {now}"
-    if reason:
-        status_lines += f"\nПричина: {reason}"
-    await _set_mod_card_status((mod_chat_id, mod_msg_id), row, status_lines)
-
-    # в чате модерации остаётся только обработанная карточка
-    await _delete_mod_chat_messages(
+    await _reject_submission(
+        row,
+        reason,
+        (mod_chat_id, mod_msg_id),
         message.chat.id,
         prompt_message_id,
         message.message_id,
     )
-
-    kind = row[4]
-    telegram_id = int(row[1])
-    if kind == "review":
-        text = "К сожалению скрин не прошел модерацию. 😔\nОтправь скрин отзыва еще раз 👇"
-    else:
-        text = "К сожалению скрин не прошел модерацию. 😔\nОтправь скрин поста еще раз 👇"
-    if reason:
-        text += f"\n\nКомментарий менеджера: {reason}"
-    await bot.send_message(telegram_id, text)
-    # сразу ждём новое фото — без лишней кнопки
-    await _arm_screenshot_wait_for_telegram_id(telegram_id, kind)
 
 
 # ─── подписка ─────────────────────────────────────────────────────────────────
@@ -1096,7 +1170,11 @@ async def rz_phone_text(message: Message, state: FSMContext):
 def _manage_kb(booking_id, include_ticket=False):
     kb = InlineKeyboardBuilder()
     if include_ticket:
-        kb.button(text="🎫 Получить билет 🎫", callback_data=f"rz_ticket_{booking_id}")
+        kb.button(
+            text="🎟 Получить билет 🎟",
+            callback_data=f"rz_ticket_{booking_id}",
+            style="success",
+        )
     kb.button(text="Что, если я хочу прийти не один?", callback_data="rz_not_alone")
     kb.button(text="Отменить бронь", callback_data=f"rz_cancel_{booking_id}")
     kb.button(text="Задать вопрос менеджеру", url=MANAGER_LINK)
@@ -1265,18 +1343,12 @@ async def rz_ticket(call: CallbackQuery):
     update_booking_status(booking_id, "confirmed")
     set_rozygrysh_used(call.from_user.id, True)
 
+    caption = TICKET_ISSUED_TEXT.format(manager=_manager_username())
     ticket_msg = await call.message.answer_photo(
         photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
-        caption=(
-            f"Отлично!\n\nДанные по билету:\n\n"
-            f"Ваше имя: {name}\n"
-            f"Дата: {event_date}\n"
-            f"Время: {event_time}\n"
-            f"Место: {event_address}\n"
-            f"Количество гостей: {guests_word(guests)}\n\n"
-            f"Если хочешь прийти не один — друзья могут купить билеты рядом "
-            f"(кнопка «Что, если я хочу прийти не один?» ниже) ❤️"
-        ),
+        caption=caption,
+        reply_markup=_ticket_manage_kb(booking_id),
+        parse_mode="HTML",
     )
     save_ticket_message_id(booking_id, ticket_msg.message_id)
 
@@ -1289,20 +1361,12 @@ async def rz_ticket(call: CallbackQuery):
             )
         except Exception:
             pass
-
-    await call.message.answer(
-        f"Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
-        f"При возникновении вопросов - можно писать менеджеру {_manager_username()} "
-        f"(если срочно - звоните {MANAGER_PHONE})\n\n"
-        f"И не забудь заглянуть на наш <a href='{CHANNEL_LINK}'>канал анонсов</a> "
-        f"(там часто дарят бесплатные билеты на платные шоу 😉)",
-        reply_markup=_ticket_manage_kb(booking_id),
-        parse_mode="HTML",
-    )
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("rz_cancel_"))
+@router.callback_query(
+    F.data.startswith("rz_cancel_") & ~F.data.startswith("rz_cancel_do_")
+)
 async def rz_cancel(call: CallbackQuery):
     booking_id = int(call.data.replace("rz_cancel_", ""))
     row = get_booking_by_id(booking_id)
@@ -1332,6 +1396,9 @@ async def rz_cancel_do(call: CallbackQuery):
     if not row or row[1] != call.from_user.id:
         await call.answer("Бронь не найдена", show_alert=True)
         return
+    if row[10] not in ("booked", "confirmed"):
+        await call.answer("Бронь уже неактивна", show_alert=True)
+        return
 
     await _delete_raffle_ui(call.from_user.id, booking_id)
     update_booking_status(booking_id, "cancelled")
@@ -1348,7 +1415,13 @@ async def rz_cancel_do(call: CallbackQuery):
         f"(там часто дарят бесплатные билеты на платные шоу 😉)",
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
+        disable_web_page_preview=True,
     )
     # после отмены можно снова стартовать розыгрыш
-    await call.message.answer(START_TEXT, reply_markup=_start_kb(), parse_mode="HTML", disable_web_page_preview=True)
+    await call.message.answer(
+        START_TEXT,
+        reply_markup=_start_kb(),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
     await call.answer()

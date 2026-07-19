@@ -385,17 +385,16 @@ async def start_booking(call: CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(event_date=event_date, event_time=event_time)
-    name = call.from_user.first_name or ""
-    if call.from_user.last_name:
-        name += f" {call.from_user.last_name}"
-    await state.update_data(name=name)
-
+    suggested = (call.from_user.first_name or "").strip()
+    if not suggested:
+        suggested = "гость"
+    await state.update_data(name=suggested)
     kb = InlineKeyboardBuilder()
-    kb.button(text="Все верно 👌", callback_data="name_confirm")
-    kb.button(text="Изменить", callback_data="name_change")
-    kb.adjust(2)
+    kb.button(text=f"Да, {suggested}", callback_data="name_confirm")
+    kb.button(text="Изменить имя", callback_data="name_change")
+    kb.adjust(1)
     await call.message.answer(
-        f"Для бронирования вам нужно заполнить некоторые данные\n\nВаше имя <b>{name}</b>, верно?",
+        f"Тебя зовут <b>{suggested}</b>?",
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
     )
@@ -418,13 +417,12 @@ async def name_confirmed(call: CallbackQuery, state: FSMContext):
     if saved_phone:
         await state.update_data(phone=saved_phone)
         kb = InlineKeyboardBuilder()
-        kb.button(text="✅ Да, использовать", callback_data="phone_use_saved")
-        kb.button(text="✏️ Ввести другой номер", callback_data="phone_change")
+        kb.button(text=f"Использовать {saved_phone}", callback_data="phone_use_saved")
+        kb.button(text="Другой номер", callback_data="phone_change")
         kb.adjust(1)
         await call.message.answer(
-            f"Ваш номер телефона: <b>{saved_phone}</b>\nИспользовать его?",
+            "Какой номер телефона использовать?",
             reply_markup=kb.as_markup(),
-            parse_mode="HTML",
         )
     else:
         await call.message.answer("Поделитесь номером телефона или введите вручную:", reply_markup=_phone_kb())
@@ -540,7 +538,11 @@ async def process_guests(message: Message, state: FSMContext):
 
     kb = InlineKeyboardBuilder()
     if days_until <= 1:
-        kb.button(text="🎟 Получить билет 🎟", callback_data=f"get_ticket_{booking_id}")
+        kb.button(
+            text="🎟 Получить билет 🎟",
+            callback_data=f"get_ticket_{booking_id}",
+            style="success",
+        )
     kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
     kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
     kb.button(text="Изменить количество гостей", callback_data=f"change_guests_confirm_{booking_id}")
@@ -597,27 +599,25 @@ async def get_ticket(call: CallbackQuery):
     ticket_buf = generate_ticket(name, event_date, event_time, short_address, guests)
     update_booking_status(booking_id, "confirmed")
 
+    caption = (
+        "Ждем вас на мероприятии ❤️\n\n"
+        "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
+        "чтобы вас посадили вместе — напишите менеджеру, мы поможем с рассадкой.\n"
+        "В противном случае вы будете сидеть на месте, которое предложит администратор рассадки.\n\n"
+        "Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
+        f"При возникновении вопросов — можно писать менеджеру @ccoverr "
+        f"(если срочно — звоните {MANAGER_PHONE})\n\n"
+        f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
+        "(там часто дарят бесплатные билеты на платные шоу 😉)"
+    )
     ticket_msg = await call.message.answer_photo(
         photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
-        caption=(
-            f"Отлично!\n\nДанные по билету:\n\n"
-            f"Ваше имя: {name}\n"
-            f"Дата: {event_date}\n"
-            f"Время: {event_time}\n"
-            f"Место: {event_address}\n"
-            f"Количество гостей: {guests_word(guests)}\n\n"
-            f"Ждем вас на мероприятии ❤️"
-        ),
-    )
-    save_ticket_message_id(booking_id, ticket_msg.message_id)
-    await _remove_ticket_button(booking_id, call.from_user.id)
-    await call.message.answer(
-        f"Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
-        f"При возникновении вопросов - можно писать менеджеру @ccoverr (если срочно - звоните {MANAGER_PHONE})\n\n"
-        f"И не забудь заглянуть на наш <a href='{CHANNEL_LINK}'>канал анонсов</a> (там часто дарят бесплатные билеты на платные шоу 😉)",
+        caption=caption,
         reply_markup=_manage_kb(booking_id),
         parse_mode="HTML",
     )
+    save_ticket_message_id(booking_id, ticket_msg.message_id)
+    await _remove_ticket_button(booking_id, call.from_user.id)
     await call.answer()
 
 

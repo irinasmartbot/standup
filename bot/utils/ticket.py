@@ -1,7 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
+
 from PIL import Image, ImageDraw, ImageFont
+
 from bot.config import TICKET_TEMPLATE
+
+# Москва / GMT+3 (без DST)
+MSK = timezone(timedelta(hours=3))
 
 MONTHS = {
     "January": "января", "February": "февраля", "March": "марта",
@@ -14,6 +19,10 @@ WEEKDAYS_RU = {
     "Monday": "понедельник", "Tuesday": "вторник", "Wednesday": "среда",
     "Thursday": "четверг", "Friday": "пятница", "Saturday": "суббота", "Sunday": "воскресенье",
 }
+
+
+def now_msk() -> datetime:
+    return datetime.now(MSK)
 
 
 def format_date(date_str):
@@ -38,7 +47,7 @@ def parse_created_at(value):
     try:
         return datetime.fromisoformat(value)
     except (TypeError, ValueError):
-        return datetime.now()
+        return now_msk().replace(tzinfo=None)
 
 
 def guests_word(n):
@@ -52,7 +61,7 @@ def guests_word(n):
 
 def generate_ticket(name, date_str, time_str, location, guests):
     try:
-        img = Image.open(TICKET_TEMPLATE).copy()
+        img = Image.open(TICKET_TEMPLATE).convert("RGB").copy()
     except Exception:
         img = Image.new("RGB", (730, 350), color=(30, 30, 30))
 
@@ -81,23 +90,22 @@ def generate_ticket(name, date_str, time_str, location, guests):
                 continue
         return ImageFont.load_default()
 
-    # Масштабируем шрифт под высоту изображения
-    font_big   = load_font(max(10, int(H * 0.078)))
-    font_med   = load_font(max(9,  int(H * 0.068)))
-    font_small = load_font(max(8,  int(H * 0.055)))
+    # Чуть свободнее по вертикали и с меньшим кеглем для длинных строк
+    font_big = load_font(max(10, int(H * 0.070)))
+    font_med = load_font(max(9, int(H * 0.060)))
+    font_small = load_font(max(8, int(H * 0.048)))
 
-    x = rect_x1 + int(W * 0.015)
+    x = rect_x1 + int(W * 0.02)
+    # 4 строки с равными промежутками внутри тёмного блока
+    step = max(1, rect_h // 5)
+    y0 = rect_y1 + int(step * 0.55)
 
-    # Равномерно распределяем 4 строки внутри прямоугольника
-    step = rect_h // 5
-    y0 = rect_y1 + step // 2
-
-    draw.text((x, y0),            name,                           font=font_big,   fill="white")
-    draw.text((x, y0 + step),     f"{date_str}   {time_str}",     font=font_med,   fill="white")
-    draw.text((x, y0 + step * 2), location,                       font=font_small, fill="white")
-    draw.text((x, y0 + step * 3), guests_word(guests),            font=font_med,   fill="white")
+    draw.text((x, y0), name, font=font_big, fill="white")
+    draw.text((x, y0 + step), f"{date_str}  {time_str}", font=font_med, fill="white")
+    draw.text((x, y0 + step * 2), location, font=font_small, fill="white")
+    draw.text((x, y0 + step * 3), guests_word(guests), font=font_med, fill="white")
 
     buf = BytesIO()
-    img.save(buf, format="JPEG")
+    img.save(buf, format="JPEG", quality=90)
     buf.seek(0)
     return buf

@@ -34,7 +34,24 @@ DB_PATH = os.getenv("DB_PATH", "bookings.db")
 DATABASE_URL = os.getenv("DATABASE_URL")
 EVENTS_SOURCE = os.getenv("EVENTS_SOURCE", "postgres" if DATABASE_URL else "sheets")
 BOOKINGS_SOURCE = os.getenv("BOOKINGS_SOURCE", "postgres" if DATABASE_URL else "sqlite")
-TICKET_TEMPLATE = os.getenv("TICKET_TEMPLATE", "photo_2023-06-26_15-06-46.jpg")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_TICKET = os.path.join(_PROJECT_ROOT, "фото", "ticket_template.jpg")
+_LEGACY_TICKET = os.path.join(_PROJECT_ROOT, "photo_2023-06-26_15-06-46.jpg")
+
+
+def _resolve_ticket_template() -> str:
+    raw = (os.getenv("TICKET_TEMPLATE") or "").strip()
+    candidates = []
+    if raw:
+        candidates.append(raw if os.path.isabs(raw) else os.path.join(_PROJECT_ROOT, raw))
+    candidates.extend([_DEFAULT_TICKET, _LEGACY_TICKET])
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    return candidates[0] if candidates else _DEFAULT_TICKET
+
+
+TICKET_TEMPLATE = _resolve_ticket_template()
 MODERATION_CHAT_ID = os.getenv("MODERATION_CHAT_ID")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "MoscowStandupShow")
 AFISHA_REVIEW_URL = os.getenv(

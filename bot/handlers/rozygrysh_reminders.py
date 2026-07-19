@@ -30,7 +30,11 @@ def _manager_username():
 def _raffle_reminder_kb(booking_id, include_ticket=True):
     kb = InlineKeyboardBuilder()
     if include_ticket:
-        kb.button(text="🎫 Получить билет 🎫", callback_data=f"rz_ticket_{booking_id}")
+        kb.button(
+            text="🎟 Получить билет 🎟",
+            callback_data=f"rz_ticket_{booking_id}",
+            style="success",
+        )
     kb.button(text="Отменить бронь", callback_data=f"rz_cancel_{booking_id}")
     kb.adjust(1)
     return kb.as_markup()
