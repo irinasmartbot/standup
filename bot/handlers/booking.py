@@ -30,7 +30,7 @@ MAX_RANDOM_PHOTO_SIZE = 10 * 1024 * 1024
 
 
 def _random_check_photo():
-    """Возвращает случайное фото из папки 'фото', исключая шаблон билета."""
+    """Возвращает случайное фото из папки 'фото', исключая шаблон билета и инструкцию отзыва."""
     ticket_name = os.path.basename(TICKET_TEMPLATE)
     try:
         files = [
@@ -38,6 +38,8 @@ def _random_check_photo():
             if f.lower().endswith((".jpg", ".jpeg", ".png"))
             and f != ticket_name
             and f.lower() not in VENUE_PHOTO_FILES
+            and f.lower() != "ticket_template.jpg"
+            and not f.lower().startswith("rozygrysh_otzyv")
             and os.path.getsize(os.path.join(PHOTOS_DIR, f)) <= MAX_RANDOM_PHOTO_SIZE
         ]
     except FileNotFoundError:

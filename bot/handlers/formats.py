@@ -62,6 +62,8 @@ def _random_format_photo():
             if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
             and f != ticket_name
             and f.lower() not in VENUE_PHOTO_FILES
+            and f.lower() != "ticket_template.jpg"
+            and not f.lower().startswith("rozygrysh_otzyv")
         ]
     except FileNotFoundError:
         files = []
