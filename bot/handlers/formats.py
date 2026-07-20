@@ -563,11 +563,11 @@ async def _send_hitloto_event_card(message, event, back_callback="hitloto_dates"
     kb = InlineKeyboardBuilder()
     payment_url = event.get("payment_url") or ""
     if payment_url:
-        kb.button(text="Купить", url=payment_url)
+        kb.button(text="🎟 Купить билет", url=payment_url)
     else:
         kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
-    kb.button(text="Ведущие", callback_data=f"hitloto_speakers_{event['id']}")
-    kb.button(text="Назад", callback_data="hitloto_dates")
+    kb.button(text="🎤 Ведущие", callback_data=f"hitloto_speakers_{event['id']}")
+    kb.button(text="◀️ Назад", callback_data="hitloto_dates")
     kb.adjust(1)
     text = _hitloto_event_text(event)
     image = event.get("image") or ""
