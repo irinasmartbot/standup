@@ -67,7 +67,7 @@ from bot.db.crud import (
     update_raffle_submission_status,
 )
 from bot.services.sheets import load_events
-from bot.utils.ticket import MONTHS, format_date, generate_ticket, guests_word, now_msk
+from bot.utils.ticket import MONTHS, format_date, generate_ticket, guests_word, now_msk, parse_event_datetime
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -281,19 +281,48 @@ async def _dates_kb():
     return kb.as_markup(), dates
 
 
+USED_RAFFLE_TEXT = (
+    "Ты уже использовал(а) возможность получить бесплатный билет по розыгрышу 😊"
+)
+ACTIVE_BOOKING_TEXT = (
+    "У тебя уже есть активная бронь по розыгрышу. "
+    "Дождись шоу или отмени бронь, если планы поменялись 😊"
+)
+TICKET_ISSUED_BLOCK_TEXT = (
+    "Вы уже забронировали и получили билет по розыгрышу. "
+    "Дождись шоу или отмени бронь, если планы поменялись 😊"
+)
+
+
+def _raffle_event_passed(booking_row) -> bool:
+    """True, если дата/время шоу уже прошли (по GMT+3)."""
+    if not booking_row:
+        return False
+    event_dt = parse_event_datetime(booking_row[5], booking_row[6])
+    if not event_dt:
+        return False
+    return event_dt <= now_msk().replace(tzinfo=None)
+
+
 async def can_enter_raffle(telegram_id: int) -> tuple[bool, str, int | None]:
-    """(ok, reason, active_booking_id или None)."""
+    """(ok, reason, active_booking_id или None для кнопки отмены)."""
     if get_pending_raffle_submission(telegram_id):
         return False, "Ваш скрин на модерации, ожидайте ⏳", None
-    if get_rozygrysh_used(telegram_id):
-        return False, "Ты уже использовал(а) возможность получить бесплатный билет по розыгрышу 😊", None
+
     active = get_active_raffle_booking(telegram_id)
     if active:
-        return (
-            False,
-            "У тебя уже есть активная бронь по розыгрышу. Дождись шоу или отмени бронь 😊",
-            int(active[0]),
-        )
+        booking_id = int(active[0])
+        if _raffle_event_passed(active):
+            # шоу прошло, бронь не отменена — как «уже использовал»
+            return False, USED_RAFFLE_TEXT, None
+        # шоу ещё впереди — можно отменить
+        status = active[10]
+        if status == "confirmed" or get_rozygrysh_used(telegram_id):
+            return False, TICKET_ISSUED_BLOCK_TEXT, booking_id
+        return False, ACTIVE_BOOKING_TEXT, booking_id
+
+    if get_rozygrysh_used(telegram_id):
+        return False, USED_RAFFLE_TEXT, None
     return True, "", None
 
 
