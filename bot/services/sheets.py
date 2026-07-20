@@ -8,6 +8,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from bot.config import BEST_CSV_URL, CSV_URL, DATABASE_URL, EVENTS_SOURCE
+from bot.utils.ticket import now_msk
 
 
 EVENTS_FROM_POSTGRES_SQL = """
@@ -137,7 +138,7 @@ async def load_events(event_format="proverka"):
             date = datetime.strptime(row[1].strip(), "%d.%m.%Y")
         except ValueError:
             continue
-        if date.date() < datetime.now().date():
+        if date.date() < now_msk().date():
             continue
         try:
             events.append(_event_from_csv_row(row, source_row, event_format))

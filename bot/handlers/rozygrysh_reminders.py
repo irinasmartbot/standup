@@ -17,7 +17,7 @@ from bot.db.crud import (
     set_rozygrysh_used,
     update_reminder_flag,
 )
-from bot.utils.ticket import format_date, parse_created_at, parse_event_datetime
+from bot.utils.ticket import format_date, now_msk, parse_created_at, parse_event_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ async def send_raffle_annulled(row):
 
 
 async def process_raffle_reminders():
-    now = datetime.now()
+    now = now_msk().replace(tzinfo=None)
     for telegram_id in get_confirmed_raffle_past_for_cleanup():
         try:
             await _delete_raffle_nav_messages(telegram_id)

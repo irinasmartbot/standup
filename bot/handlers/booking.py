@@ -16,10 +16,13 @@ from bot.db.crud import (
     get_active_bookings_by_user,
 )
 from bot.services.sheets import load_events, get_event
-from bot.utils.ticket import format_date, guests_word, generate_ticket, MONTHS, parse_event_datetime
+from bot.utils.ticket import format_date, guests_word, generate_ticket, MONTHS, now_msk, parse_event_datetime
 from bot.utils.nav_messages import remember_booking_nav, forget_booking_nav, delete_booking_nav
 
 router = Router()
+
+# защита от двойного нажатия «Получить билет» в проверке материала
+_TICKET_IN_PROGRESS: set[int] = set()
 
 # Корень проекта — два уровня выше bot/handlers/booking.py
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -359,7 +362,7 @@ async def show_booking_rules(call: CallbackQuery):
 async def start_booking(call: CallbackQuery, state: FSMContext):
     event_date, event_time = call.data.replace("book_event_", "", 1).split("_", 1)
     try:
-        if datetime.strptime(event_date, "%d.%m.%Y").date() < datetime.now().date():
+        if datetime.strptime(event_date, "%d.%m.%Y").date() < now_msk().date():
             await call.message.answer("Это мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await check_dates_kb())
             await call.answer()
             return
@@ -536,7 +539,7 @@ async def process_guests(message: Message, state: FSMContext):
     await state.set_state(None)
 
     try:
-        days_until = (datetime.strptime(event_date, "%d.%m.%Y").date() - datetime.now().date()).days
+        days_until = (datetime.strptime(event_date, "%d.%m.%Y").date() - now_msk().date()).days
     except Exception:
         days_until = 99
 
@@ -575,54 +578,60 @@ async def process_guests(message: Message, state: FSMContext):
             f"Если поменяются планы, обязательно предупредите 😊"
         )
     confirm_msg = await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
-    if days_until <= 1:
-        save_confirm_message_id(booking_id, confirm_msg.message_id)
+    save_confirm_message_id(booking_id, confirm_msg.message_id)
 
 
 @router.callback_query(F.data.startswith("get_ticket_"))
 async def get_ticket(call: CallbackQuery):
     booking_id = int(call.data.replace("get_ticket_", ""))
-    booking = get_active_booking_by_id(booking_id)
-    if not booking:
-        await call.message.answer("Бронь не найдена или уже отменена.")
+    if booking_id in _TICKET_IN_PROGRESS:
+        await call.answer("Билет уже формируется", show_alert=True)
+        return
+    _TICKET_IN_PROGRESS.add(booking_id)
+    try:
+        booking = get_active_booking_by_id(booking_id)
+        if not booking:
+            await call.message.answer("Бронь не найдена или уже отменена.")
+            await call.answer()
+            return
+        if booking[10] == "confirmed":
+            await call.answer("Билет уже был выдан ранее.", show_alert=True)
+            return
+
+        name = booking[3]
+        event_date = booking[5]
+        event_time = booking[6]
+        event_address = booking[7]
+        event_location = booking[8]
+        guests = booking[9]
+
+        date_str = format_date(event_date)
+        short_address = f"{event_location}, {event_address.split(',')[1] if ',' in event_address else event_address}"
+        ticket_buf = generate_ticket(name, event_date, event_time, short_address, guests)
+        update_booking_status(booking_id, "confirmed")
+
+        caption = (
+            "Ждем вас на мероприятии ❤️\n\n"
+            "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
+            "чтобы вас посадили вместе — напишите менеджеру, мы поможем с рассадкой.\n"
+            "<u>В противном случае вы будете сидеть на месте, которое предложит администратор рассадки.</u>\n\n"
+            "Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
+            f"При возникновении вопросов — можно писать менеджеру @ccoverr "
+            f"(если срочно — звоните {MANAGER_PHONE})\n\n"
+            f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
+            "(там часто дарят бесплатные билеты на платные шоу 😉)"
+        )
+        ticket_msg = await call.message.answer_photo(
+            photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
+            caption=caption,
+            reply_markup=_manage_kb(booking_id),
+            parse_mode="HTML",
+        )
+        save_ticket_message_id(booking_id, ticket_msg.message_id)
+        await _remove_ticket_button(booking_id, call.from_user.id)
         await call.answer()
-        return
-    if booking[10] == "confirmed":
-        await call.answer("Билет уже был выдан ранее.", show_alert=True)
-        return
-
-    name = booking[3]
-    event_date = booking[5]
-    event_time = booking[6]
-    event_address = booking[7]
-    event_location = booking[8]
-    guests = booking[9]
-
-    date_str = format_date(event_date)
-    short_address = f"{event_location}, {event_address.split(',')[1] if ',' in event_address else event_address}"
-    ticket_buf = generate_ticket(name, event_date, event_time, short_address, guests)
-    update_booking_status(booking_id, "confirmed")
-
-    caption = (
-        "Ждем вас на мероприятии ❤️\n\n"
-        "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
-        "чтобы вас посадили вместе — напишите менеджеру, мы поможем с рассадкой.\n"
-        "<u>В противном случае вы будете сидеть на месте, которое предложит администратор рассадки.</u>\n\n"
-        "Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
-        f"При возникновении вопросов — можно писать менеджеру @ccoverr "
-        f"(если срочно — звоните {MANAGER_PHONE})\n\n"
-        f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
-        "(там часто дарят бесплатные билеты на платные шоу 😉)"
-    )
-    ticket_msg = await call.message.answer_photo(
-        photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
-        caption=caption,
-        reply_markup=_manage_kb(booking_id),
-        parse_mode="HTML",
-    )
-    save_ticket_message_id(booking_id, ticket_msg.message_id)
-    await _remove_ticket_button(booking_id, call.from_user.id)
-    await call.answer()
+    finally:
+        _TICKET_IN_PROGRESS.discard(booking_id)
 
 
 async def _check_booking_actionable(booking_id: int, call: CallbackQuery):
@@ -636,7 +645,7 @@ async def _check_booking_actionable(booking_id: int, call: CallbackQuery):
         return None
 
     event_dt = parse_event_datetime(booking[5], booking[6])
-    if event_dt and event_dt < datetime.now():
+    if event_dt and event_dt < now_msk().replace(tzinfo=None):
         await call.answer()
         kb = InlineKeyboardBuilder()
         kb.button(text="📅 Посмотреть актуальные даты", callback_data="check_dates")

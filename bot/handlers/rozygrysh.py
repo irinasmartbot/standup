@@ -57,7 +57,6 @@ from bot.db.crud import (
     get_raffle_submission,
     get_raffle_submission_by_mod_message,
     get_rozygrysh_used,
-    get_total_guests,
     reset_raffle_for_user,
     save_confirm_message_id,
     save_raffle_moderation_message,
@@ -274,7 +273,7 @@ def _start_kb():
 
 async def _future_best_events():
     """BEST-события строго после сегодня."""
-    today = datetime.now().date()
+    today = now_msk().date()
     events = await load_events("best")
     result = []
     for e in events:
@@ -848,11 +847,11 @@ async def rz_mod_no_reason(call: CallbackQuery, state: FSMContext):
         return
 
     card_msg_id = call.message.message_id
-    await _set_mod_card_status(
-        call.message,
-        row,
-        f"\n\n⏳ Ожидаем причину отказа…\nЗаявка #{submission_id}",
-    )
+    old_pending = _PENDING_REJECT_BY_MSG.pop(card_msg_id, None)
+    if old_pending:
+        await _delete_mod_chat_messages(
+            call.message.chat.id, old_pending.get("prompt_message_id")
+        )
     prompt = await call.message.reply(
         'Напишите причину отказа, нажав «ответить» на сообщение с данным скрином\n\n'
         f"Заявка #{submission_id} → {_client_label(row)}",
@@ -1095,7 +1094,8 @@ async def rz_date(call: CallbackQuery, state: FSMContext):
             kb.button(text=label, callback_data=f"rz_event_{event['id']}")
         kb.button(text="◀️ Назад к датам", callback_data="rz_dates")
         kb.adjust(1)
-        await call.message.answer(f"Шоу на {format_date(date)} 👇", reply_markup=kb.as_markup())
+        sent = await call.message.answer(f"Шоу на {format_date(date)} 👇", reply_markup=kb.as_markup())
+        save_raffle_nav(call.from_user.id, prompt_message_id=sent.message_id)
     await call.answer()
 
 
@@ -1121,6 +1121,10 @@ async def rz_event(call: CallbackQuery):
     if not event:
         await call.answer("Мероприятие недоступно", show_alert=True)
         return
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
     await _send_event_card(call.message, event, call.from_user.id)
     await call.answer()
 
@@ -1285,6 +1289,8 @@ async def _ask_phone(message, state: FSMContext, telegram_id: int):
 
 # защита от двойного нажатия «Да, использовать» / повторной отправки телефона
 _BOOKING_IN_PROGRESS: set[int] = set()
+# защита от двойного нажатия «Получить билет»
+_TICKET_IN_PROGRESS: set[int] = set()
 
 
 @router.callback_query(F.data == "rz_phone_saved")
@@ -1416,17 +1422,6 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             )
             return
 
-        if max_seats:
-            total = get_total_guests(event_date, event_time)
-            if total + guests > max_seats:
-                await message.answer(
-                    "К сожалению, на это мероприятие места закончились 😔 Выбери другую дату!",
-                    reply_markup=ReplyKeyboardRemove(),
-                )
-                markup, _ = await _dates_kb()
-                await message.answer("Выбирай дату 👇", reply_markup=markup)
-                return
-
         try:
             booking_id = create_booking(
                 user.id,
@@ -1534,54 +1529,61 @@ async def _delete_raffle_ui(telegram_id: int, booking_id=None, extra_message_ids
 @router.callback_query(F.data.startswith("rz_ticket_"))
 async def rz_ticket(call: CallbackQuery):
     booking_id = int(call.data.replace("rz_ticket_", ""))
-    row = get_booking_by_id(booking_id)
-    if not row or row[1] != call.from_user.id:
-        await call.answer("Бронь не найдена", show_alert=True)
+    if booking_id in _TICKET_IN_PROGRESS:
+        await call.answer("Билет уже формируется", show_alert=True)
         return
-    if row[10] == "confirmed":
-        await call.answer("Билет уже был выдан ранее.", show_alert=True)
-        return
-    if row[10] not in ("booked", "confirmed"):
-        await call.answer("Бронь уже неактивна", show_alert=True)
-        return
+    _TICKET_IN_PROGRESS.add(booking_id)
+    try:
+        row = get_booking_by_id(booking_id)
+        if not row or row[1] != call.from_user.id:
+            await call.answer("Бронь не найдена", show_alert=True)
+            return
+        if row[10] == "confirmed":
+            await call.answer("Билет уже был выдан ранее.", show_alert=True)
+            return
+        if row[10] not in ("booked", "confirmed"):
+            await call.answer("Бронь уже неактивна", show_alert=True)
+            return
 
-    name = row[3]
-    event_date = row[5]
-    event_time = row[6]
-    event_address = row[7]
-    event_location = row[8]
-    guests = row[9]
+        name = row[3]
+        event_date = row[5]
+        event_time = row[6]
+        event_address = row[7]
+        event_location = row[8]
+        guests = row[9]
 
-    short_address = f"{event_location}, {event_address.split(',')[1] if ',' in event_address else event_address}"
-    ticket_buf = generate_ticket(name, event_date, event_time, short_address, guests)
-    update_booking_status(booking_id, "confirmed")
-    set_rozygrysh_used(call.from_user.id, True)
+        short_address = f"{event_location}, {event_address.split(',')[1] if ',' in event_address else event_address}"
+        ticket_buf = generate_ticket(name, event_date, event_time, short_address, guests)
+        update_booking_status(booking_id, "confirmed")
+        set_rozygrysh_used(call.from_user.id, True)
 
-    caption = TICKET_ISSUED_TEXT.format(
-        name=escape(name),
-        date=escape(str(event_date)),
-        time=escape(str(event_time)),
-        place=escape(str(event_address)),
-        manager=_manager_username(),
-    )
-    ticket_msg = await call.message.answer_photo(
-        photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
-        caption=caption,
-        reply_markup=_ticket_manage_kb(booking_id),
-        parse_mode="HTML",
-    )
-    save_ticket_message_id(booking_id, ticket_msg.message_id)
+        caption = TICKET_ISSUED_TEXT.format(
+            name=escape(name),
+            date=escape(str(event_date)),
+            time=escape(str(event_time)),
+            place=escape(str(event_address)),
+            manager=_manager_username(),
+        )
+        ticket_msg = await call.message.answer_photo(
+            photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
+            caption=caption,
+            reply_markup=_ticket_manage_kb(booking_id),
+            parse_mode="HTML",
+        )
+        save_ticket_message_id(booking_id, ticket_msg.message_id)
 
-    # убрать кнопки с confirm
-    confirm_message_id = row[-1]
-    if confirm_message_id:
-        try:
-            await bot.edit_message_reply_markup(
-                chat_id=call.from_user.id, message_id=confirm_message_id, reply_markup=None
-            )
-        except Exception:
-            pass
-    await call.answer()
+        # убрать кнопки с confirm
+        confirm_message_id = row[-1]
+        if confirm_message_id:
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=call.from_user.id, message_id=confirm_message_id, reply_markup=None
+                )
+            except Exception:
+                pass
+        await call.answer()
+    finally:
+        _TICKET_IN_PROGRESS.discard(booking_id)
 
 
 @router.callback_query(

@@ -6,7 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import bot, CHANNEL_LINK
 from bot.db.crud import get_booked_for_reminders, update_reminder_flag, annul_booking, save_confirm_message_id, get_booking_by_id
-from bot.utils.ticket import format_date, parse_event_datetime, parse_created_at
+from bot.utils.ticket import format_date, now_msk, parse_event_datetime, parse_created_at
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +16,9 @@ async def _clear_prev_buttons(booking_id: int, telegram_id: int):
     booking = get_booking_by_id(booking_id)
     if not booking:
         return
-    # confirm_message_id — предпоследняя колонка (перед ticket_message_id)
+    # confirm_message_id — последняя колонка в BOOKING_SELECT_SQL.
     try:
-        confirm_message_id = booking[-2]
+        confirm_message_id = booking[-1]
     except (IndexError, TypeError):
         return
     if confirm_message_id:
@@ -90,7 +90,7 @@ async def send_annulled_message(row):
 
 
 async def process_due_reminders():
-    now = datetime.now()
+    now = now_msk().replace(tzinfo=None)
     for row in get_booked_for_reminders():
         booking_id = row[0]
         event_date = row[3]

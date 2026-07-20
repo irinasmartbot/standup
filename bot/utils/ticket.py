@@ -45,7 +45,10 @@ def parse_event_datetime(date_str, time_str):
 
 def parse_created_at(value):
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(MSK).replace(tzinfo=None)
+        return parsed
     except (TypeError, ValueError):
         return now_msk().replace(tzinfo=None)
 
