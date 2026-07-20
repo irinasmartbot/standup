@@ -385,16 +385,17 @@ async def start_booking(call: CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(event_date=event_date, event_time=event_time)
-    suggested = (call.from_user.first_name or "").strip()
-    if not suggested:
-        suggested = "гость"
-    await state.update_data(name=suggested)
+    name = call.from_user.first_name or ""
+    if call.from_user.last_name:
+        name += f" {call.from_user.last_name}"
+    await state.update_data(name=name)
+
     kb = InlineKeyboardBuilder()
-    kb.button(text=f"Да, {suggested}", callback_data="name_confirm")
-    kb.button(text="Изменить имя", callback_data="name_change")
-    kb.adjust(1)
+    kb.button(text="Все верно 👌", callback_data="name_confirm")
+    kb.button(text="Изменить", callback_data="name_change")
+    kb.adjust(2)
     await call.message.answer(
-        f"Тебя зовут <b>{suggested}</b>?",
+        f"Для бронирования вам нужно заполнить некоторые данные\n\nВаше имя <b>{name}</b>, верно?",
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
     )
@@ -417,12 +418,13 @@ async def name_confirmed(call: CallbackQuery, state: FSMContext):
     if saved_phone:
         await state.update_data(phone=saved_phone)
         kb = InlineKeyboardBuilder()
-        kb.button(text=f"Использовать {saved_phone}", callback_data="phone_use_saved")
-        kb.button(text="Другой номер", callback_data="phone_change")
+        kb.button(text="✅ Да, использовать", callback_data="phone_use_saved")
+        kb.button(text="✏️ Ввести другой номер", callback_data="phone_change")
         kb.adjust(1)
         await call.message.answer(
-            "Какой номер телефона использовать?",
+            f"Ваш номер телефона: <b>{saved_phone}</b>\nИспользовать его?",
             reply_markup=kb.as_markup(),
+            parse_mode="HTML",
         )
     else:
         await call.message.answer("Поделитесь номером телефона или введите вручную:", reply_markup=_phone_kb())

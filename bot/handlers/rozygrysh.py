@@ -1083,21 +1083,18 @@ async def rz_book(call: CallbackQuery, state: FSMContext):
         event_weekday=event.get("weekday") or "",
         max_seats=event.get("max_seats") or 0,
     )
-    suggested = (call.from_user.first_name or "").strip()
+    name = _full_name(call.from_user)
+    await state.update_data(name=name)
     kb = InlineKeyboardBuilder()
-    if suggested:
-        kb.button(text=f"Да, {suggested}", callback_data="rz_name_ok")
-        kb.button(text="Изменить имя", callback_data="rz_name_change")
-        kb.adjust(1)
-        await call.message.answer(
-            f"Тебя зовут <b>{escape(suggested)}</b>?",
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML",
-        )
-        await state.update_data(name=suggested)
-    else:
-        await call.message.answer("Напиши, пожалуйста, как тебя зовут?")
-        await state.set_state(RaffleState.waiting_name)
+    kb.button(text="Все верно 👌", callback_data="rz_name_ok")
+    kb.button(text="Изменить", callback_data="rz_name_change")
+    kb.adjust(2)
+    await call.message.answer(
+        "Для бронирования вам нужно заполнить некоторые данные\n\n"
+        f"Ваше имя <b>{escape(name)}</b>, верно?",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
     await call.answer()
 
 
@@ -1109,7 +1106,7 @@ async def rz_name_ok(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "rz_name_change")
 async def rz_name_change(call: CallbackQuery, state: FSMContext):
-    await call.message.answer("Напиши, пожалуйста, как тебя зовут?")
+    await call.message.answer("Напишите, пожалуйста, ваше имя.")
     await state.set_state(RaffleState.waiting_name)
     await call.answer()
 
@@ -1118,7 +1115,7 @@ async def rz_name_change(call: CallbackQuery, state: FSMContext):
 async def rz_process_name(message: Message, state: FSMContext):
     name = (message.text or "").strip()
     if not name:
-        await message.answer("Напиши имя текстом 🙂")
+        await message.answer("Напишите имя текстом 🙂")
         return
     await state.update_data(name=name)
     await _ask_phone(message, state, message.from_user.id)
@@ -1128,13 +1125,20 @@ async def _ask_phone(message, state: FSMContext, telegram_id: int):
     saved = get_last_phone(telegram_id)
     if saved:
         kb = InlineKeyboardBuilder()
-        kb.button(text=f"Использовать {saved}", callback_data="rz_phone_saved")
-        kb.button(text="Другой номер", callback_data="rz_phone_change")
+        kb.button(text="✅ Да, использовать", callback_data="rz_phone_saved")
+        kb.button(text="✏️ Ввести другой номер", callback_data="rz_phone_change")
         kb.adjust(1)
-        await message.answer("Какой номер телефона использовать?", reply_markup=kb.as_markup())
+        await message.answer(
+            f"Ваш номер телефона: <b>{escape(saved)}</b>\nИспользовать его?",
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML",
+        )
         await state.update_data(phone=saved)
     else:
-        await message.answer("Поделись номером телефона или введи вручную:", reply_markup=_phone_kb())
+        await message.answer(
+            "Поделитесь номером телефона или введите вручную:",
+            reply_markup=_phone_kb(),
+        )
         await state.set_state(RaffleState.waiting_phone)
 
 
@@ -1146,7 +1150,10 @@ async def rz_phone_saved(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "rz_phone_change")
 async def rz_phone_change(call: CallbackQuery, state: FSMContext):
-    await call.message.answer("Поделись номером телефона или введи вручную:", reply_markup=_phone_kb())
+    await call.message.answer(
+        "Поделитесь номером телефона или введите вручную:",
+        reply_markup=_phone_kb(),
+    )
     await state.set_state(RaffleState.waiting_phone)
     await call.answer()
 
