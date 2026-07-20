@@ -917,29 +917,21 @@ async def _send_subscribed_and_dates(telegram_id: int):
     if not dates:
         await bot.send_message(telegram_id, "Пока нет доступных дат для бесплатного билета 😔 Загляни позже!")
         return
-    sent = await bot.send_message(
-        telegram_id,
-        "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉",
-    )
-    # фото + даты
+    caption = "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉"
     photo = _random_photo()
     if photo:
         try:
             dates_msg = await bot.send_photo(
                 telegram_id,
                 photo=photo,
-                caption="Выбирай дату 👇",
+                caption=caption,
                 reply_markup=markup,
             )
         except Exception:
-            dates_msg = await bot.send_message(telegram_id, "Выбирай дату 👇", reply_markup=markup)
+            dates_msg = await bot.send_message(telegram_id, caption, reply_markup=markup)
     else:
-        dates_msg = await bot.send_message(telegram_id, "Выбирай дату 👇", reply_markup=markup)
-    save_raffle_nav(
-        telegram_id,
-        prompt_message_id=sent.message_id,
-        dates_message_id=dates_msg.message_id,
-    )
+        dates_msg = await bot.send_message(telegram_id, caption, reply_markup=markup)
+    save_raffle_nav(telegram_id, dates_message_id=dates_msg.message_id)
 
 
 @router.callback_query(F.data.startswith("rz_sub_check_"))
