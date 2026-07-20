@@ -40,6 +40,7 @@ from bot.config import (
     dp,
 )
 from bot.db.crud import (
+    clear_raffle_awaiting_screenshot,
     clear_raffle_nav,
     create_booking,
     cancel_raffle_submission,
@@ -49,6 +50,7 @@ from bot.db.crud import (
     get_booking_by_id,
     get_last_phone,
     get_pending_raffle_submission,
+    get_raffle_awaiting_screenshot,
     get_raffle_nav,
     get_raffle_submission,
     get_raffle_submission_by_mod_message,
@@ -59,6 +61,7 @@ from bot.db.crud import (
     save_raffle_moderation_message,
     save_raffle_nav,
     save_ticket_message_id,
+    set_raffle_awaiting_screenshot,
     set_rozygrysh_used,
     update_booking_status,
     update_raffle_submission_status,
@@ -434,6 +437,11 @@ async def _arm_screenshot_wait(state: FSMContext, kind: str):
     """Включает приём скрина только после явной кнопки в ветке розыгрыша."""
     await state.update_data(rz_kind=kind, screen_requested=True, raffle_flow=True)
     await state.set_state(RaffleState.waiting_screenshot)
+    # дублируем в БД: MemoryStorage сбрасывается при рестарте/деплое
+    try:
+        set_raffle_awaiting_screenshot(state.key.user_id, kind)
+    except Exception:
+        logger.exception("Failed to persist raffle screenshot wait")
 
 
 async def _arm_screenshot_wait_for_telegram_id(telegram_id: int, kind: str):
@@ -442,6 +450,21 @@ async def _arm_screenshot_wait_for_telegram_id(telegram_id: int, kind: str):
     ctx = FSMContext(storage=dp.storage, key=key)
     await ctx.update_data(rz_kind=kind, screen_requested=True, raffle_flow=True)
     await ctx.set_state(RaffleState.waiting_screenshot)
+    set_raffle_awaiting_screenshot(telegram_id, kind)
+
+
+async def _resolve_screenshot_kind(state: FSMContext, telegram_id: int):
+    """kind из FSM или из БД (если бот перезапускался)."""
+    current = await state.get_state()
+    data = await state.get_data()
+    if (
+        current == RaffleState.waiting_screenshot.state
+        and data.get("screen_requested")
+        and data.get("raffle_flow")
+        and data.get("rz_kind") in {"post", "review"}
+    ):
+        return data.get("rz_kind")
+    return get_raffle_awaiting_screenshot(telegram_id)
 
 
 def _mod_chat_id():
@@ -485,14 +508,15 @@ async def rz_review_send(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@router.message(RaffleState.waiting_screenshot, F.chat.type == "private")
+@router.message(F.chat.type == "private", F.photo | F.document)
 async def rz_receive_screenshot(message: Message, state: FSMContext):
-    data = await state.get_data()
-    kind = data.get("rz_kind")
-    # Только после кнопки в воронке розыгрыша — никакие «левые» сообщения/фото не уходят в модерацию
-    if not data.get("screen_requested") or not data.get("raffle_flow") or kind not in {"post", "review"}:
-        await state.clear()
-        return
+    kind = await _resolve_screenshot_kind(state, message.from_user.id)
+    if kind not in {"post", "review"}:
+        raise SkipHandler
+
+    # восстановим FSM после рестарта, чтобы дальше всё вело себя привычно
+    await state.update_data(rz_kind=kind, screen_requested=True, raffle_flow=True)
+    await state.set_state(RaffleState.waiting_screenshot)
 
     if message.media_group_id:
         group_id = str(message.media_group_id)
@@ -511,6 +535,9 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
     elif message.document and (message.document.mime_type or "").startswith("image/"):
         photo = message.document
     if not photo:
+        # не наш документ (не картинка) — не перехватываем
+        if message.document and not message.photo:
+            raise SkipHandler
         await message.answer(NOT_IMAGE_TEXT)
         return
 
@@ -522,10 +549,12 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
         else:
             await message.answer("Ваш скрин на модерации, ожидайте ⏳")
             await state.clear()
+            clear_raffle_awaiting_screenshot(message.from_user.id)
             return
 
     # сразу снимаем «ожидание», чтобы повтор/гонка не отправили второй пост
     await state.clear()
+    clear_raffle_awaiting_screenshot(message.from_user.id)
 
     file_id = photo.file_id
     full_name = _full_name(message.from_user)
@@ -537,6 +566,7 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
     except Exception:
         logger.exception("Failed to create raffle submission")
         await message.answer("Не удалось отправить скрин на проверку. Попробуй позже или напиши менеджеру.")
+        await _arm_screenshot_wait_for_telegram_id(message.from_user.id, kind)
         return
 
     sent_ok = await _send_to_moderation(

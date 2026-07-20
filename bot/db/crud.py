@@ -689,12 +689,20 @@ def ensure_raffle_tables():
                     dates_message_id BIGINT,
                     card_message_id BIGINT,
                     prompt_message_id BIGINT,
+                    awaiting_kind TEXT,
+                    awaiting_at TIMESTAMPTZ,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
             )
             cur.execute(
                 "ALTER TABLE raffle_nav ADD COLUMN IF NOT EXISTS prompt_message_id BIGINT"
+            )
+            cur.execute(
+                "ALTER TABLE raffle_nav ADD COLUMN IF NOT EXISTS awaiting_kind TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE raffle_nav ADD COLUMN IF NOT EXISTS awaiting_at TIMESTAMPTZ"
             )
         conn.commit()
 
@@ -863,6 +871,58 @@ def clear_raffle_nav(telegram_id):
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM raffle_nav WHERE telegram_id = %s", (telegram_id,))
+        conn.commit()
+
+
+def set_raffle_awaiting_screenshot(telegram_id: int, kind: str):
+    """Пишем в БД, что ждём скрин — FSM в памяти сбрасывается при рестарте."""
+    if not _use_postgres() or kind not in {"post", "review"}:
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO raffle_nav (telegram_id, awaiting_kind, awaiting_at, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (telegram_id) DO UPDATE SET
+                    awaiting_kind = EXCLUDED.awaiting_kind,
+                    awaiting_at = EXCLUDED.awaiting_at,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (telegram_id, kind, datetime.now(), datetime.now()),
+            )
+        conn.commit()
+
+
+def get_raffle_awaiting_screenshot(telegram_id: int):
+    if not _use_postgres():
+        return None
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT awaiting_kind FROM raffle_nav WHERE telegram_id = %s",
+                (telegram_id,),
+            )
+            row = _fetchone_tuple(cur)
+            if not row or not row[0]:
+                return None
+            kind = row[0]
+            return kind if kind in {"post", "review"} else None
+
+
+def clear_raffle_awaiting_screenshot(telegram_id: int):
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE raffle_nav
+                SET awaiting_kind = NULL, awaiting_at = NULL, updated_at = %s
+                WHERE telegram_id = %s
+                """,
+                (datetime.now(), telegram_id),
+            )
         conn.commit()
 
 

@@ -111,5 +111,7 @@ CREATE TABLE IF NOT EXISTS raffle_nav (
     dates_message_id BIGINT,
     card_message_id BIGINT,
     prompt_message_id BIGINT,
+    awaiting_kind TEXT,
+    awaiting_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
