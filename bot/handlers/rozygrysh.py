@@ -767,13 +767,20 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
 
     # только клиент из этой заявки
     telegram_id = int(row[1])
+    await call.answer()
     await bot.send_message(
         telegram_id,
         "Класс, скрин принят. Теперь проверим подписку на канал 👌",
     )
-    await asyncio.sleep(3)
-    await _continue_after_subscribe_check(telegram_id)
-    await call.answer()
+    asyncio.create_task(_after_screen_accepted(telegram_id))
+
+
+async def _after_screen_accepted(telegram_id: int):
+    try:
+        await asyncio.sleep(3)
+        await _continue_after_subscribe_check(telegram_id)
+    except Exception:
+        logger.exception("After-accept flow failed for %s", telegram_id)
 
 
 async def _reject_submission(row, reason: str | None, card_ref, cleanup_chat_id=None, *cleanup_ids):
@@ -1240,25 +1247,40 @@ async def rz_process_name(message: Message, state: FSMContext):
     await _ask_phone(message, state, message.from_user.id)
 
 
+def _phone_looks_valid(phone: str | None) -> bool:
+    if not phone:
+        return False
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+    return 10 <= len(digits) <= 15
+
+
 async def _ask_phone(message, state: FSMContext, telegram_id: int):
     saved = get_last_phone(telegram_id)
-    if saved:
+    if saved and _phone_looks_valid(saved):
         kb = InlineKeyboardBuilder()
         kb.button(text="✅ Да, использовать", callback_data="rz_phone_saved")
         kb.button(text="✏️ Ввести другой номер", callback_data="rz_phone_change")
         kb.adjust(1)
-        await message.answer(
-            f"Ваш номер телефона: <b>{escape(saved)}</b>\nИспользовать его?",
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML",
-        )
+        try:
+            await message.answer(
+                f"Ваш номер телефона: <b>{escape(saved)}</b>\nИспользовать его?",
+                reply_markup=kb.as_markup(),
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.exception("Failed to ask phone with saved number")
+            await message.answer(
+                f"Ваш номер телефона: {saved}\nИспользовать его?",
+                reply_markup=kb.as_markup(),
+            )
         await state.update_data(phone=saved)
-    else:
-        await message.answer(
-            "Поделитесь номером телефона или введите вручную:",
-            reply_markup=_phone_kb(),
-        )
-        await state.set_state(RaffleState.waiting_phone)
+        return
+
+    await message.answer(
+        "Поделитесь номером телефона или введите вручную:",
+        reply_markup=_phone_kb(),
+    )
+    await state.set_state(RaffleState.waiting_phone)
 
 
 # защита от двойного нажатия «Да, использовать» / повторной отправки телефона
@@ -1267,11 +1289,23 @@ _BOOKING_IN_PROGRESS: set[int] = set()
 
 @router.callback_query(F.data == "rz_phone_saved")
 async def rz_phone_saved(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    data = await state.get_data()
+    if not data.get("event_id") or not data.get("event_date"):
+        await call.message.answer(
+            "Сессия сбросилась 🙏 Выбери дату ещё раз и оформи бронь заново."
+        )
+        markup, dates = await _dates_kb()
+        if dates:
+            await call.message.answer(
+                "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉",
+                reply_markup=markup,
+            )
+        return
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await call.answer()
     await _finish_booking(call.message, state, call.from_user)
 
 
@@ -1341,6 +1375,9 @@ async def _finish_booking(message: Message, state: FSMContext, user):
     # повторный вызов (двойной клик) — без данных или уже в процессе
     if not event_date or not event_id:
         await state.clear()
+        await message.answer(
+            "Не удалось завершить бронь: сессия сбросилась. Выбери дату ещё раз 🙏"
+        )
         return
     if user.id in _BOOKING_IN_PROGRESS:
         return
@@ -1358,6 +1395,24 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             await message.answer(
                 "Бронь недоступна: розыгрыш уже использован.",
                 reply_markup=ReplyKeyboardRemove(),
+            )
+            return
+
+        if not _phone_looks_valid(phone):
+            await message.answer(
+                "Кажется, номер телефона некорректный. Введи номер ещё раз:",
+                reply_markup=_phone_kb(),
+            )
+            await state.set_state(RaffleState.waiting_phone)
+            await state.update_data(
+                event_id=event_id,
+                event_date=event_date,
+                event_time=event_time,
+                event_address=event_address,
+                event_location=event_location,
+                event_weekday=weekday,
+                max_seats=max_seats,
+                name=name,
             )
             return
 
