@@ -688,9 +688,13 @@ def ensure_raffle_tables():
                     telegram_id BIGINT PRIMARY KEY,
                     dates_message_id BIGINT,
                     card_message_id BIGINT,
+                    prompt_message_id BIGINT,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
+            )
+            cur.execute(
+                "ALTER TABLE raffle_nav ADD COLUMN IF NOT EXISTS prompt_message_id BIGINT"
             )
         conn.commit()
 
@@ -809,21 +813,30 @@ def cancel_raffle_submission(submission_id, reason="send_failed"):
     update_raffle_submission_status(submission_id, "rejected", reject_reason=reason)
 
 
-def save_raffle_nav(telegram_id, dates_message_id=None, card_message_id=None):
+def save_raffle_nav(telegram_id, dates_message_id=None, card_message_id=None, prompt_message_id=None):
     if not _use_postgres():
         return
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO raffle_nav (telegram_id, dates_message_id, card_message_id, updated_at)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO raffle_nav (
+                    telegram_id, dates_message_id, card_message_id, prompt_message_id, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (telegram_id) DO UPDATE SET
                     dates_message_id = COALESCE(EXCLUDED.dates_message_id, raffle_nav.dates_message_id),
                     card_message_id = COALESCE(EXCLUDED.card_message_id, raffle_nav.card_message_id),
+                    prompt_message_id = COALESCE(EXCLUDED.prompt_message_id, raffle_nav.prompt_message_id),
                     updated_at = EXCLUDED.updated_at
                 """,
-                (telegram_id, dates_message_id, card_message_id, datetime.now()),
+                (
+                    telegram_id,
+                    dates_message_id,
+                    card_message_id,
+                    prompt_message_id,
+                    datetime.now(),
+                ),
             )
         conn.commit()
 
@@ -834,7 +847,11 @@ def get_raffle_nav(telegram_id):
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT dates_message_id, card_message_id FROM raffle_nav WHERE telegram_id = %s",
+                """
+                SELECT dates_message_id, card_message_id, prompt_message_id
+                FROM raffle_nav
+                WHERE telegram_id = %s
+                """,
                 (telegram_id,),
             )
             return _fetchone_tuple(cur)

@@ -888,9 +888,11 @@ async def _send_subscribed_and_dates(telegram_id: int):
             dates_msg = await bot.send_message(telegram_id, "Выбирай дату 👇", reply_markup=markup)
     else:
         dates_msg = await bot.send_message(telegram_id, "Выбирай дату 👇", reply_markup=markup)
-    save_raffle_nav(telegram_id, dates_message_id=dates_msg.message_id)
-    # sent unused except as fluff; ok
-    _ = sent
+    save_raffle_nav(
+        telegram_id,
+        prompt_message_id=sent.message_id,
+        dates_message_id=dates_msg.message_id,
+    )
 
 
 @router.callback_query(F.data.startswith("rz_sub_check_"))
@@ -1294,34 +1296,36 @@ async def _finish_booking(message: Message, state: FSMContext, user):
         markup = _manage_kb(booking_id, include_ticket=False)
 
     confirm = await message.answer(text, reply_markup=markup, parse_mode="HTML")
-    if days_until <= 1:
-        save_confirm_message_id(booking_id, confirm.message_id)
+    save_confirm_message_id(booking_id, confirm.message_id)
 
 
 # ─── билет / отмена ───────────────────────────────────────────────────────────
 
 
-async def _delete_raffle_ui(telegram_id: int, booking_id=None):
+async def _delete_raffle_ui(telegram_id: int, booking_id=None, extra_message_ids=()):
+    """Полностью удаляет сообщения выбора даты / карточки / брони / билета."""
     nav = get_raffle_nav(telegram_id)
+    ids = []
     if nav:
-        for mid in nav:
-            if mid:
-                try:
-                    await bot.delete_message(telegram_id, mid)
-                except Exception:
-                    pass
-    clear_raffle_nav(telegram_id)
+        ids.extend(nav)
     if booking_id:
         booking = get_booking_by_id(booking_id)
         if booking:
             ticket_message_id = booking[-2]
             confirm_message_id = booking[-1]
-            for mid in (ticket_message_id, confirm_message_id):
-                if mid:
-                    try:
-                        await bot.delete_message(telegram_id, mid)
-                    except Exception:
-                        pass
+            ids.extend([ticket_message_id, confirm_message_id])
+    ids.extend(extra_message_ids)
+
+    seen = set()
+    for mid in ids:
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        try:
+            await bot.delete_message(telegram_id, mid)
+        except Exception:
+            pass
+    clear_raffle_nav(telegram_id)
 
 
 @router.callback_query(F.data.startswith("rz_ticket_"))
@@ -1384,6 +1388,10 @@ async def rz_cancel(call: CallbackQuery):
         await call.answer("Бронь уже неактивна", show_alert=True)
         return
 
+    # если бронь создана до фикса — запомним id сообщения с инфо о брони
+    if not row[-1] and call.message and call.message.chat.type == "private":
+        save_confirm_message_id(booking_id, call.message.message_id)
+
     kb = InlineKeyboardBuilder()
     kb.button(text="Подтверждаю", callback_data=f"rz_cancel_do_{booking_id}")
     kb.adjust(1)
@@ -1407,7 +1415,12 @@ async def rz_cancel_do(call: CallbackQuery):
         await call.answer("Бронь уже неактивна", show_alert=True)
         return
 
-    await _delete_raffle_ui(call.from_user.id, booking_id)
+    # удаляем UI брони + подсказку «Подтверждаю»
+    await _delete_raffle_ui(
+        call.from_user.id,
+        booking_id,
+        extra_message_ids=(call.message.message_id,),
+    )
     update_booking_status(booking_id, "cancelled")
     set_rozygrysh_used(call.from_user.id, False)
 

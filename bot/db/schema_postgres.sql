@@ -110,5 +110,6 @@ CREATE TABLE IF NOT EXISTS raffle_nav (
     telegram_id BIGINT PRIMARY KEY,
     dates_message_id BIGINT,
     card_message_id BIGINT,
+    prompt_message_id BIGINT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
