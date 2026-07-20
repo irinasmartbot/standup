@@ -462,7 +462,7 @@ async def rz_post_cross(call: CallbackQuery, state: FSMContext):
     if not await _guard_action(call):
         return
     await _arm_screenshot_wait(state, "post")
-    await call.message.answer("Спасибо, но ждём скрин поста 😉 Кидай ниже 👇")
+    await call.message.answer("Спасибо, но ждём скрин поста (одним фото) 😉 Кидай ниже 👇")
     await call.answer()
 
 
@@ -471,7 +471,7 @@ async def rz_post_screen(call: CallbackQuery, state: FSMContext):
     if not await _guard_action(call):
         return
     await _arm_screenshot_wait(state, "post")
-    await call.message.answer("Супер, кидай сюда 👇")
+    await call.message.answer("Супер, кидай сюда скрин (одним фото) 👇")
     await call.answer()
 
 
