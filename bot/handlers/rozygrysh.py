@@ -1261,10 +1261,18 @@ async def _ask_phone(message, state: FSMContext, telegram_id: int):
         await state.set_state(RaffleState.waiting_phone)
 
 
+# защита от двойного нажатия «Да, использовать» / повторной отправки телефона
+_BOOKING_IN_PROGRESS: set[int] = set()
+
+
 @router.callback_query(F.data == "rz_phone_saved")
 async def rz_phone_saved(call: CallbackQuery, state: FSMContext):
-    await _finish_booking(call.message, state, call.from_user)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await call.answer()
+    await _finish_booking(call.message, state, call.from_user)
 
 
 @router.callback_query(F.data == "rz_phone_change")
@@ -1330,90 +1338,113 @@ async def _finish_booking(message: Message, state: FSMContext, user):
     max_seats = int(data.get("max_seats") or 0)
     guests = 1
 
-    if get_active_raffle_booking(user.id) or get_rozygrysh_used(user.id):
-        await message.answer("Бронь недоступна: розыгрыш уже использован или активная бронь есть.", reply_markup=ReplyKeyboardRemove())
+    # повторный вызов (двойной клик) — без данных или уже в процессе
+    if not event_date or not event_id:
         await state.clear()
         return
+    if user.id in _BOOKING_IN_PROGRESS:
+        return
+    _BOOKING_IN_PROGRESS.add(user.id)
 
-    if max_seats:
-        total = get_total_guests(event_date, event_time)
-        if total + guests > max_seats:
+    try:
+        # сразу снимаем FSM, чтобы второй клик не прошёл дальше
+        await state.clear()
+
+        active = get_active_raffle_booking(user.id)
+        if active:
+            # уже есть бронь (часто из‑за двойного клика) — не пугаем ошибкой
+            return
+        if get_rozygrysh_used(user.id):
             await message.answer(
-                "К сожалению, на это мероприятие места закончились 😔 Выбери другую дату!",
+                "Бронь недоступна: розыгрыш уже использован.",
                 reply_markup=ReplyKeyboardRemove(),
             )
-            markup, _ = await _dates_kb()
-            await message.answer("Выбирай дату 👇", reply_markup=markup)
-            await state.clear()
             return
 
-    try:
-        booking_id = create_booking(
-            user.id,
-            user.username or "",
-            name,
-            phone,
-            event_date,
-            event_time,
-            event_address,
-            event_location,
-            guests,
-            booking_format="rozygrysh",
-            event_format="best",
-            event_id=event_id,
-        )
-    except Exception:
-        logger.exception("Failed to create raffle booking")
-        await message.answer(
-            "Не удалось создать бронь. Попробуй другую дату или напиши менеджеру.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        await state.clear()
-        return
+        if max_seats:
+            total = get_total_guests(event_date, event_time)
+            if total + guests > max_seats:
+                await message.answer(
+                    "К сожалению, на это мероприятие места закончились 😔 Выбери другую дату!",
+                    reply_markup=ReplyKeyboardRemove(),
+                )
+                markup, _ = await _dates_kb()
+                await message.answer("Выбирай дату 👇", reply_markup=markup)
+                return
 
-    await state.clear()
-    date_str = format_date(event_date)
-    try:
-        days_until = (datetime.strptime(event_date, "%d.%m.%Y").date() - datetime.now().date()).days
-    except Exception:
-        days_until = 99
+        try:
+            booking_id = create_booking(
+                user.id,
+                user.username or "",
+                name,
+                phone,
+                event_date,
+                event_time,
+                event_address,
+                event_location,
+                guests,
+                booking_format="rozygrysh",
+                event_format="best",
+                event_id=event_id,
+            )
+        except Exception:
+            logger.exception("Failed to create raffle booking")
+            await message.answer(
+                "Не удалось создать бронь. Попробуй другую дату или напиши менеджеру.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
 
-    location_line = f"📍 Локация {event_location}, {event_address}".strip(", ")
-    if days_until <= 1:
-        text = (
-            f"Отлично!\n\n"
-            f"❗ <b>Важная информация</b> — для того чтобы мы окончательно закрепили за Вами место "
-            f"на дату и время:\n"
-            f"<b>Дата:</b> {date_str}\n"
-            f"<b>Время:</b> {event_time}\n\n"
-            f"<b>ОБЯЗАТЕЛЬНО подтвердите бронь, нажав на кнопку «Получить билет»</b>\n\n"
-            f"❗ Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.\n\n"
-            f"Напоминаем, что :\n"
-            f"1. Сбор гостей начинается за полчаса до начала шоу, старт в {event_time}\n"
-            f"2. Рассадка осуществляется администратором рассадки на ближайшие к сцене свободные места. "
-            f"Возможна подсадка за один стол других гостей для небольших компаний.\n"
-            f"3. Обратите внимание, что при посещении шоу заказ минимум одной позиции по меню является обязательным.\n"
-            f"4. {escape(location_line)}\n"
-            f"5. Количество гостей - 1 чел.\n"
-            f"6. Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО ПРЕДУПРЕДИТЕ 😊"
-        )
-        markup = _manage_kb(booking_id, include_ticket=True)
-    else:
-        text = (
-            f"Отлично! Мы внесли Вас в списки гостей:\n\n"
-            f"<b>Дата:</b> {date_str} ({escape(weekday)})\n"
-            f"<b>Время:</b> {event_time}\n"
-            f"<b>Локация:</b> {escape(event_address)}\n"
-            f"<b>Количество гостей:</b> 1 чел.\n\n"
-            f"<b>❗ Внимание, за сутки до мероприятия Вам придёт сообщение-напоминание с подробностями "
-            f"и кнопкой «Получить билет». Обязательно нажмите кнопку, чтобы подтвердить бронь. "
-            f"Если Вы не успеете подтвердить бронь, она будет аннулирована.</b>\n\n"
-            f"Если поменяются планы, обязательно предупредите 😊"
-        )
-        markup = _manage_kb(booking_id, include_ticket=False)
+        date_str = format_date(event_date)
+        try:
+            days_until = (
+                datetime.strptime(event_date, "%d.%m.%Y").date() - now_msk().date()
+            ).days
+        except Exception:
+            days_until = 99
 
-    confirm = await message.answer(text, reply_markup=markup, parse_mode="HTML")
-    save_confirm_message_id(booking_id, confirm.message_id)
+        location_line = f"📍 Локация {event_location}, {event_address}".strip(", ")
+        if days_until <= 1:
+            text = (
+                f"Отлично!\n\n"
+                f"❗ <b>Важная информация</b> — для того чтобы мы окончательно закрепили за Вами место "
+                f"на дату и время:\n"
+                f"<b>Дата:</b> {date_str}\n"
+                f"<b>Время:</b> {event_time}\n\n"
+                f"<b>ОБЯЗАТЕЛЬНО подтвердите бронь, нажав на кнопку «Получить билет»</b>\n\n"
+                f"❗ Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.\n\n"
+                f"Напоминаем, что :\n"
+                f"1. Сбор гостей начинается за полчаса до начала шоу, старт в {event_time}\n"
+                f"2. Рассадка осуществляется администратором рассадки на ближайшие к сцене свободные места. "
+                f"Возможна подсадка за один стол других гостей для небольших компаний.\n"
+                f"3. Обратите внимание, что при посещении шоу заказ минимум одной позиции по меню является обязательным.\n"
+                f"4. {escape(location_line)}\n"
+                f"5. Количество гостей - 1 чел.\n"
+                f"6. Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО ПРЕДУПРЕДИТЕ 😊"
+            )
+            markup = _manage_kb(booking_id, include_ticket=True)
+        else:
+            text = (
+                f"Отлично! Мы внесли Вас в списки гостей:\n\n"
+                f"<b>Дата:</b> {date_str} ({escape(weekday)})\n"
+                f"<b>Время:</b> {event_time}\n"
+                f"<b>Локация:</b> {escape(event_address)}\n"
+                f"<b>Количество гостей:</b> 1 чел.\n\n"
+                f"<b>❗ Внимание, за сутки до мероприятия Вам придёт сообщение-напоминание с подробностями "
+                f"и кнопкой «Получить билет». Обязательно нажмите кнопку, чтобы подтвердить бронь. "
+                f"Если Вы не успеете подтвердить бронь, она будет аннулирована.</b>\n\n"
+                f"Если поменяются планы, обязательно предупредите 😊"
+            )
+            markup = _manage_kb(booking_id, include_ticket=False)
+
+        confirm = await message.answer(
+            text,
+            reply_markup=markup,
+            parse_mode="HTML",
+        )
+        save_confirm_message_id(booking_id, confirm.message_id)
+    finally:
+        _BOOKING_IN_PROGRESS.discard(user.id)
 
 
 # ─── билет / отмена ───────────────────────────────────────────────────────────
