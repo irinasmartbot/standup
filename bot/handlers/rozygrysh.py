@@ -243,6 +243,7 @@ def _random_photo():
             and f.lower() not in VENUE_PHOTO_FILES
             and f.lower() != "ticket_template.jpg"
             and not f.lower().startswith("rozygrysh_otzyv")
+            and not f.lower().startswith("hitloto")
         ]
     except FileNotFoundError:
         files = []

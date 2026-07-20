@@ -43,6 +43,7 @@ def _random_check_photo():
             and f.lower() not in VENUE_PHOTO_FILES
             and f.lower() != "ticket_template.jpg"
             and not f.lower().startswith("rozygrysh_otzyv")
+            and not f.lower().startswith("hitloto")
             and os.path.getsize(os.path.join(PHOTOS_DIR, f)) <= MAX_RANDOM_PHOTO_SIZE
         ]
     except FileNotFoundError:
