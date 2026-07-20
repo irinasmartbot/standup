@@ -19,6 +19,7 @@ PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
 VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
 _VENUE_ALBUM_MESSAGE_IDS = {}
+BEST_DATES_PAGE_SIZE = 10
 
 FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
 
@@ -121,23 +122,36 @@ async def _answer_with_hitloto_photo(message, text: str, reply_markup=None, pars
     return sent
 
 
-async def _best_dates_kb():
+async def _best_dates_kb(page: int = 0):
     events = await load_events("best")
     dates = sorted(set(e["date"] for e in events), key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
+    page = max(page, 0)
+    start = page * BEST_DATES_PAGE_SIZE
+    end = start + BEST_DATES_PAGE_SIZE
+    shown_dates = dates[start:end]
     kb = InlineKeyboardBuilder()
-    for date in dates:
+    for date in shown_dates:
         try:
             d = datetime.strptime(date, "%d.%m.%Y")
             label = d.strftime("%d ") + MONTHS[d.strftime("%B")]
         except Exception:
             label = date
         kb.button(text=label, callback_data=f"best_date_{date}")
+    nav_count = 0
+    if page > 0:
+        kb.button(text="⬅️ Назад", callback_data=f"best_dates_page_{page - 1}")
+        nav_count += 1
+    if end < len(dates):
+        kb.button(text="Показать ещё ➡️", callback_data=f"best_dates_page_{page + 1}")
+        nav_count += 1
     kb.button(text="📍 Выбор по площадкам", callback_data="best_venues")
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
-    if dates:
-        widths = [2] * (len(dates) // 2)
-        if len(dates) % 2:
+    if shown_dates:
+        widths = [2] * (len(shown_dates) // 2)
+        if len(shown_dates) % 2:
             widths.append(1)
+        if nav_count:
+            widths.append(nav_count)
         widths.extend([1, 1])
         kb.adjust(*widths)
     else:
@@ -378,6 +392,18 @@ async def best_dates(call: CallbackQuery):
     await _answer_with_format_photo(
         call.message, "Выбирай дату 👇", reply_markup=await _best_dates_kb(), track_nav=True
     )
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("best_dates_page_"))
+async def best_dates_page(call: CallbackQuery):
+    page = int(call.data.replace("best_dates_page_", "", 1))
+    markup = await _best_dates_kb(page)
+    try:
+        await call.message.edit_reply_markup(reply_markup=markup)
+    except Exception:
+        sent = await call.message.answer("Выбирай дату 👇", reply_markup=markup)
+        remember_booking_nav(call.message.chat.id, sent.message_id)
     await call.answer()
 
 

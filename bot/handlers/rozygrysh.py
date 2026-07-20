@@ -76,6 +76,7 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
+RAFFLE_DATES_PAGE_SIZE = 10
 OTZYV_PHOTO_1 = os.path.join(PHOTOS_DIR, "rozygrysh_otzyv_1.jpg")
 OTZYV_PHOTO_2 = os.path.join(PHOTOS_DIR, "rozygrysh_otzyv_2.jpg")
 # запасные пути (локальная разработка, если ещё не скопировали в фото/)
@@ -287,21 +288,34 @@ async def _future_best_events():
     return result
 
 
-async def _dates_kb():
+async def _dates_kb(page: int = 0):
     events = await _future_best_events()
     dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
+    page = max(page, 0)
+    start = page * RAFFLE_DATES_PAGE_SIZE
+    end = start + RAFFLE_DATES_PAGE_SIZE
+    shown_dates = dates[start:end]
     kb = InlineKeyboardBuilder()
-    for date in dates:
+    for date in shown_dates:
         try:
             d = datetime.strptime(date, "%d.%m.%Y")
             label = d.strftime("%d ") + MONTHS[d.strftime("%B")]
         except Exception:
             label = date
         kb.button(text=label, callback_data=f"rz_date_{date}")
-    n = len(dates)
+    nav_count = 0
+    if page > 0:
+        kb.button(text="⬅️ Назад", callback_data=f"rz_dates_page_{page - 1}")
+        nav_count += 1
+    if end < len(dates):
+        kb.button(text="Показать ещё ➡️", callback_data=f"rz_dates_page_{page + 1}")
+        nav_count += 1
+    n = len(shown_dates)
     widths = [2] * (n // 2)
     if n % 2:
         widths.append(1)
+    if nav_count:
+        widths.append(nav_count)
     if widths:
         kb.adjust(*widths)
     return kb.as_markup(), dates
@@ -1110,6 +1124,23 @@ async def rz_dates(call: CallbackQuery):
         return
     sent = await call.message.answer("Выбирай дату 👇", reply_markup=markup)
     save_raffle_nav(call.from_user.id, dates_message_id=sent.message_id)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("rz_dates_page_"))
+async def rz_dates_page(call: CallbackQuery):
+    if not await _guard_action(call):
+        return
+    page = int(call.data.replace("rz_dates_page_", "", 1))
+    markup, dates = await _dates_kb(page)
+    if not dates:
+        await call.answer("Нет доступных дат", show_alert=True)
+        return
+    try:
+        await call.message.edit_reply_markup(reply_markup=markup)
+    except Exception:
+        sent = await call.message.answer("Выбирай дату 👇", reply_markup=markup)
+        save_raffle_nav(call.from_user.id, dates_message_id=sent.message_id)
     await call.answer()
 
 
