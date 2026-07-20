@@ -1,8 +1,10 @@
+import asyncio
 import logging
 import os
 import random
 from datetime import datetime
 from html import escape
+from urllib.parse import quote
 
 from aiogram import F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
@@ -169,7 +171,31 @@ NOT_ALONE_TEXT = (
     f"Мы уберём из продажи соседнее место специально для Вас и посадим туда 😉"
 )
 
+SHARE_BOOKING_TEXT = "Бронируй билет на Best шоу"
+SHARE_BOOKING_URL = (
+    "https://t.me/share/url"
+    f"?url={quote(PAID_BOOKING_LINK, safe='')}"
+    f"&text={quote(SHARE_BOOKING_TEXT, safe='')}"
+)
+
+POST_REJECT_TEXT = (
+    "К сожалению скрин не прошел модерацию. 😔\n\n"
+    "Необходимо выложить в соцсети пост со ссылкой на наш сайт :\n\n"
+    f"<b>{SITE_URL.replace('https://', '').replace('http://', '')}</b> 😊\n\n"
+    "Если в инстаграм* — обязательно сделать ссылку в сторис кликабельной 👌\n\n"
+    "Отправь скрин с отметкой еще раз 👇\n\n"
+    "____________________\n"
+    "<i>*запрещено в РФ</i>"
+)
+
 TICKET_ISSUED_TEXT = (
+    "Отлично!\n\n"
+    "Данные по билету:\n\n"
+    "Ваше имя: {name}\n"
+    "Дата: {date}\n"
+    "Время: {time}\n"
+    "Место: {place}\n"
+    "Количество гостей: 1 гость\n\n"
     "Ждем вас на мероприятии ❤️\n\n"
     "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
     "чтобы вас посадили вместе — нажмите кнопку «Что, если я хочу прийти не один?» "
@@ -741,18 +767,11 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
 
     # только клиент из этой заявки
     telegram_id = int(row[1])
-    await bot.send_message(telegram_id, "Класс, скрин принят. Теперь проверим подписку на канал 👌")
-    if ROZYGRYSH_STICKER_FILE_ID:
-        try:
-            await bot.send_sticker(telegram_id, ROZYGRYSH_STICKER_FILE_ID)
-        except Exception:
-            pass
-    else:
-        try:
-            await bot.send_message(telegram_id, "🎉")
-        except Exception:
-            pass
-
+    await bot.send_message(
+        telegram_id,
+        "Класс, скрин принят. Теперь проверим подписку на канал 👌",
+    )
+    await asyncio.sleep(3)
     await _continue_after_subscribe_check(telegram_id)
     await call.answer()
 
@@ -773,11 +792,14 @@ async def _reject_submission(row, reason: str | None, card_ref, cleanup_chat_id=
     telegram_id = int(row[1])
     if kind == "review":
         text = "К сожалению скрин не прошел модерацию. 😔\nОтправь скрин отзыва еще раз 👇"
+        if reason:
+            text += f"\n\nКомментарий менеджера: {reason}"
+        await bot.send_message(telegram_id, text)
     else:
-        text = "К сожалению скрин не прошел модерацию. 😔\nОтправь скрин поста еще раз 👇"
-    if reason:
-        text += f"\n\nКомментарий менеджера: {reason}"
-    await bot.send_message(telegram_id, text)
+        text = POST_REJECT_TEXT
+        if reason:
+            text += f"\n\nКомментарий менеджера: {escape(reason)}"
+        await bot.send_message(telegram_id, text, parse_mode="HTML")
     await _arm_screenshot_wait_for_telegram_id(telegram_id, kind)
 
 
@@ -910,11 +932,21 @@ async def _is_subscribed(telegram_id: int) -> bool:
         return False
 
 
+async def _send_happy_sticker(telegram_id: int):
+    if ROZYGRYSH_STICKER_FILE_ID:
+        try:
+            await bot.send_sticker(telegram_id, ROZYGRYSH_STICKER_FILE_ID)
+            return
+        except Exception:
+            logger.exception("Failed to send raffle sticker to %s", telegram_id)
+
+
 async def _continue_after_subscribe_check(telegram_id: int, manual_attempts: int = 0):
     if await _is_subscribed(telegram_id):
         await _send_subscribed_and_dates(telegram_id)
         return
 
+    # без подписки — без радостного стикера
     kb = InlineKeyboardBuilder()
     kb.button(text="Подписаться", url=CHANNEL_LINK)
     if manual_attempts < 1:
@@ -936,12 +968,15 @@ async def _send_subscribed_and_dates(telegram_id: int):
         except Exception:
             pass
 
+    await _send_happy_sticker(telegram_id)
     await bot.send_message(
         telegram_id,
         "Отлично! Видим, что вы уже подписаны\n\n"
         f"Отправь ссылку для подписки другу или подруге: {CHANNEL_LINK}",
         disable_web_page_preview=True,
     )
+    await asyncio.sleep(1)
+
     markup, dates = await _dates_kb()
     if not dates:
         await bot.send_message(telegram_id, "Пока нет доступных дат для бесплатного билета 😔 Загляни позже!")
@@ -1038,6 +1073,12 @@ async def rz_date(call: CallbackQuery, state: FSMContext):
         await call.answer()
         return
 
+    # список дат больше не нужен
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+
     if len(events) == 1:
         await _send_event_card(call.message, events[0], call.from_user.id)
     else:
@@ -1115,7 +1156,15 @@ async def rz_rules(call: CallbackQuery):
 
 @router.callback_query(F.data == "rz_not_alone")
 async def rz_not_alone(call: CallbackQuery):
-    await call.message.answer(NOT_ALONE_TEXT, parse_mode="HTML", disable_web_page_preview=True)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Поделиться", url=SHARE_BOOKING_URL)
+    kb.adjust(1)
+    await call.message.answer(
+        NOT_ALONE_TEXT,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        reply_markup=kb.as_markup(),
+    )
     await call.answer()
 
 
@@ -1422,7 +1471,13 @@ async def rz_ticket(call: CallbackQuery):
     update_booking_status(booking_id, "confirmed")
     set_rozygrysh_used(call.from_user.id, True)
 
-    caption = TICKET_ISSUED_TEXT.format(manager=_manager_username())
+    caption = TICKET_ISSUED_TEXT.format(
+        name=escape(name),
+        date=escape(str(event_date)),
+        time=escape(str(event_time)),
+        place=escape(str(event_address)),
+        manager=_manager_username(),
+    )
     ticket_msg = await call.message.answer_photo(
         photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
         caption=caption,
