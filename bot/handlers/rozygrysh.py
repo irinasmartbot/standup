@@ -22,6 +22,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.utils.media_group import MediaGroupBuilder
 
 from bot.config import (
     AFISHA_REVIEW_URL,
@@ -398,11 +399,26 @@ async def rz_review(call: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     kb.button(text="Отправить скрин", callback_data="rz_review_send")
     kb.adjust(1)
-    for path in _otzyv_photo_paths():
+    paths = _otzyv_photo_paths()
+    if len(paths) >= 2:
+        media = MediaGroupBuilder()
+        for path in paths[:2]:
+            media.add_photo(FSInputFile(path))
         try:
-            await call.message.answer_photo(FSInputFile(path))
+            await call.message.answer_media_group(media=media.build())
         except Exception:
-            logger.exception("Failed to send review instruction photo %s", path)
+            logger.exception("Failed to send review instruction album")
+            for path in paths[:2]:
+                try:
+                    await call.message.answer_photo(FSInputFile(path))
+                except Exception:
+                    logger.exception("Failed to send review instruction photo %s", path)
+    else:
+        for path in paths:
+            try:
+                await call.message.answer_photo(FSInputFile(path))
+            except Exception:
+                logger.exception("Failed to send review instruction photo %s", path)
     await call.message.answer(
         REVIEW_TEXT,
         reply_markup=kb.as_markup(),
