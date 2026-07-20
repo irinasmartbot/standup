@@ -26,6 +26,10 @@ FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
 Только лучший, уже проверенный стэндап материал от троих комиков, именитых участников многочисленных телевизионных проектов. Вы не услышите ни одной несмешной шутки, только BEST!!
 Билеты - от 500 рублей.
 
+<b>Формат Хитлото от Moscow StandUp Show:</b>
+Музыкальное лото в компании стендап-комика! Веселись, пой, пей, зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥
+Билеты - от 990 рублей.
+
 <b>Формат StandUp Проверка материала:</b>
 5-7 опытных комиков, участников известных проектов ТНТ и YouTube, рассказывают по 10-15 минут свежих, но не проверенных шуток. Вы услышите настоящий эксклюзив и поможете комикам понять, что смешно, а что стоит убрать из материала 🐒
 Вход бесплатный."""
@@ -72,9 +76,38 @@ def _random_format_photo():
     return None
 
 
+def _hitloto_photo():
+    try:
+        files = [
+            f for f in os.listdir(PHOTOS_DIR)
+            if f.lower().startswith("hitloto")
+            and f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+        ]
+    except FileNotFoundError:
+        files = []
+    if files:
+        return FSInputFile(os.path.join(PHOTOS_DIR, sorted(files)[0]))
+    return _random_format_photo()
+
+
 async def _answer_with_format_photo(message, text: str, reply_markup=None, parse_mode=None, track_nav=False):
     sent = None
     photo = _random_format_photo()
+    if photo:
+        try:
+            sent = await message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception:
+            sent = None
+    if sent is None:
+        sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    if track_nav and sent:
+        remember_booking_nav(message.chat.id, sent.message_id)
+    return sent
+
+
+async def _answer_with_hitloto_photo(message, text: str, reply_markup=None, parse_mode=None, track_nav=False):
+    sent = None
+    photo = _hitloto_photo()
     if photo:
         try:
             sent = await message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
@@ -219,6 +252,7 @@ async def show_formats(call: CallbackQuery):
     await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="🎟 Бронь Формат StandUp BEST", callback_data="best")
+    kb.button(text="🎟 Бронь Формат Хитлото", callback_data="hitloto")
     kb.button(text="🎟 Бронь Формат StandUp Проверка материала", callback_data="check")
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     kb.adjust(1)
@@ -272,6 +306,7 @@ async def book(call: CallbackQuery):
     await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="STANDUP BEST", callback_data="best")
+    kb.button(text="Хитлото", callback_data="hitloto")
     kb.button(text="StandUp Проверка материала", callback_data="check")
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     kb.adjust(1)
@@ -282,6 +317,10 @@ async def book(call: CallbackQuery):
         "именитых участников многочисленных телевизионных проектов. "
         "Вы не услышите ни одной несмешной шутки, только BEST!!\n"
         "Билеты - от 500 рублей.\n\n"
+        "<b>Формат Хитлото от Moscow StandUp Show:</b>\n"
+        "Музыкальное лото в компании стендап-комика! Веселись, пой, пей, "
+        "зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥\n"
+        "Билеты - от 990 рублей.\n\n"
         "<b>Формат StandUp проверка материала:</b>\n"
         "5-7 опытных комиков, участников известных проектов ТНТ и YouTube, "
         "рассказывают по 10-15 минут свежих, но не проверенных шуток, "
@@ -458,6 +497,254 @@ async def best_speakers(call: CallbackQuery):
     host = (event or {}).get("host") or ""
     if not host:
         await call.answer(f"По составу комиков напишите менеджеру {_manager_username()}", show_alert=True)
+        return
+    if len(host) > 190:
+        host = host[:187].rstrip() + "..."
+    await call.answer(host, show_alert=True)
+
+
+async def _hitloto_dates_kb():
+    events = await load_events("hitloto")
+    dates = sorted(set(e["date"] for e in events), key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
+    kb = InlineKeyboardBuilder()
+    for date in dates:
+        try:
+            d = datetime.strptime(date, "%d.%m.%Y")
+            label = d.strftime("%d ") + MONTHS[d.strftime("%B")]
+        except Exception:
+            label = date
+        kb.button(text=label, callback_data=f"hitloto_date_{date}")
+    kb.button(text="📍 Выбор по площадкам", callback_data="hitloto_venues")
+    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    if dates:
+        widths = [2] * (len(dates) // 2)
+        if len(dates) % 2:
+            widths.append(1)
+        widths.extend([1, 1])
+        kb.adjust(*widths)
+    else:
+        kb.adjust(1, 1)
+    return kb.as_markup()
+
+
+async def _hitloto_venues_kb():
+    events = await load_events("hitloto")
+    venues = sorted(set(e["location"] for e in events))
+    kb = InlineKeyboardBuilder()
+    for venue in venues:
+        kb.button(text=venue, callback_data=f"hitloto_venue_{venue}")
+    kb.button(text="📅 Выбор по дате", callback_data="hitloto_dates")
+    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    kb.adjust(*([1] * len(venues)), 1, 1)
+    return kb.as_markup()
+
+
+def _hitloto_event_by_id(events, event_id):
+    return next((e for e in events if str(e["id"]) == event_id), None)
+
+
+def _parse_hitloto_event_callback(data):
+    payload = data.replace("hitloto_event_", "", 1)
+    if "_date_" in payload:
+        event_id, date = payload.split("_date_", 1)
+        return event_id, f"hitloto_date_{date}"
+    if "_venue_" in payload:
+        event_id, venue = payload.split("_venue_", 1)
+        return event_id, f"hitloto_venue_{venue}"
+    return payload, "hitloto_dates"
+
+
+def _hitloto_event_text(event):
+    return _best_event_text(event)
+
+
+async def _send_hitloto_event_card(message, event, back_callback="hitloto_dates"):
+    kb = InlineKeyboardBuilder()
+    payment_url = event.get("payment_url") or ""
+    if payment_url:
+        kb.button(text="Купить", url=payment_url)
+    else:
+        kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+    kb.button(text="Ведущие", callback_data=f"hitloto_speakers_{event['id']}")
+    kb.button(text="Назад", callback_data="hitloto_dates")
+    kb.adjust(1)
+    text = _hitloto_event_text(event)
+    image = event.get("image") or ""
+    if image:
+        try:
+            await message.answer_photo(photo=image, caption=text, reply_markup=kb.as_markup(), parse_mode="HTML")
+            return
+        except Exception:
+            try:
+                await message.answer_photo(photo=image)
+            except Exception:
+                pass
+    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+
+
+async def hitloto_format_entry(message):
+    events = await load_events("hitloto")
+    if not events:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+        kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+        kb.adjust(1)
+        await message.answer(
+            "Пока нет актуальных мероприятий <b>Хитлото</b>. "
+            "Можно уточнить расписание у менеджера 👇",
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML",
+        )
+        return
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📅 Выбрать по дате", callback_data="hitloto_dates")
+    kb.button(text="📍 Выбор по локации", callback_data="hitloto_venues")
+    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    kb.adjust(1)
+    await _answer_with_hitloto_photo(
+        message,
+        "Привет 😊 Я помогу тебе выбрать билеты на <b>Хитлото</b> "
+        "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+        track_nav=True,
+    )
+
+
+@router.callback_query(lambda c: c.data == "hitloto")
+async def hitloto_format(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    await hitloto_format_entry(call.message)
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data == "hitloto_dates")
+async def hitloto_dates(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    await _answer_with_hitloto_photo(
+        call.message, "Выбирай дату 👇", reply_markup=await _hitloto_dates_kb(), track_nav=True
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data == "hitloto_venues")
+async def hitloto_venues(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    await _answer_with_hitloto_photo(
+        call.message, "Выбирай локацию 👇", reply_markup=await _hitloto_venues_kb(), track_nav=True
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("hitloto_venue_"))
+async def hitloto_venue_events(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    venue = call.data.replace("hitloto_venue_", "", 1)
+    events = sorted(
+        [e for e in await load_events("hitloto") if e["location"] == venue],
+        key=_event_sort_key,
+    )
+    if len(events) == 1:
+        await _send_hitloto_event_card(call.message, events[0], back_callback="hitloto_venues")
+        await call.answer()
+        return
+
+    dates = sorted(set(e["date"] for e in events), key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
+    kb = InlineKeyboardBuilder()
+    for date in dates:
+        try:
+            d = datetime.strptime(date, "%d.%m.%Y")
+            label = d.strftime("%d ") + MONTHS[d.strftime("%B")]
+        except Exception:
+            label = date
+        kb.button(text=label, callback_data=f"hitloto_vdate_{date}_{venue}")
+    kb.button(text="📍 Назад к выбору локации", callback_data="hitloto_venues")
+    widths = [2] * (len(dates) // 2)
+    if len(dates) % 2:
+        widths.append(1)
+    widths.append(1)
+    kb.adjust(*widths)
+    sent = await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
+    remember_booking_nav(call.message.chat.id, sent.message_id)
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("hitloto_vdate_"))
+async def hitloto_venue_date(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    payload = call.data.replace("hitloto_vdate_", "", 1)
+    date, venue = payload.split("_", 1)
+    events = sorted(
+        [e for e in await load_events("hitloto") if e["location"] == venue and e["date"] == date],
+        key=_event_sort_key,
+    )
+    if not events:
+        await call.message.answer("Это мероприятие уже прошло 😊", reply_markup=await _hitloto_venues_kb())
+        await call.answer()
+        return
+    if len(events) == 1:
+        await _send_hitloto_event_card(call.message, events[0], back_callback=f"hitloto_venue_{venue}")
+        await call.answer()
+        return
+
+    kb = InlineKeyboardBuilder()
+    for event in events:
+        kb.button(
+            text=f"{event['time']} — {event['location']}",
+            callback_data=f"hitloto_event_{event['id']}_venue_{venue}",
+        )
+    kb.button(text="◀️ Назад", callback_data=f"hitloto_venue_{venue}")
+    kb.adjust(1)
+    await call.message.answer("На эту дату несколько мероприятий, выбери нужное 👇", reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("hitloto_date_"))
+async def hitloto_date(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    date = call.data.replace("hitloto_date_", "", 1)
+    events = [e for e in await load_events("hitloto") if e["date"] == date]
+    if not events:
+        await call.message.answer("Это мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await _hitloto_dates_kb())
+        await call.answer()
+        return
+    if len(events) == 1:
+        await _send_hitloto_event_card(call.message, events[0], back_callback="hitloto_dates")
+        await call.answer()
+        return
+
+    kb = InlineKeyboardBuilder()
+    for event in events:
+        kb.button(
+            text=f"🕐 {event['time']} — {event['location']}",
+            callback_data=f"hitloto_event_{event['id']}_date_{date}",
+        )
+    kb.button(text="◀️ Назад к датам", callback_data="hitloto_dates")
+    kb.adjust(1)
+    await call.message.answer("На эту дату несколько мероприятий, выбери нужное 👇", reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("hitloto_event_"))
+async def hitloto_event(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    event_id, back_callback = _parse_hitloto_event_callback(call.data)
+    event = _hitloto_event_by_id(await load_events("hitloto"), event_id)
+    if event:
+        await _send_hitloto_event_card(call.message, event, back_callback=back_callback)
+    else:
+        await call.message.answer("Мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await _hitloto_dates_kb())
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("hitloto_speakers_"))
+async def hitloto_speakers(call: CallbackQuery):
+    event_id = call.data.replace("hitloto_speakers_", "", 1)
+    event = next((e for e in await load_events("hitloto") if str(e["id"]) == event_id), None)
+    host = (event or {}).get("host") or ""
+    if not host:
+        await call.answer(f"По ведущему напишите менеджеру {_manager_username()}", show_alert=True)
         return
     if len(host) > 190:
         host = host[:187].rstrip() + "..."

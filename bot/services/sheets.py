@@ -7,7 +7,7 @@ from io import StringIO
 import psycopg
 from psycopg.rows import dict_row
 
-from bot.config import BEST_CSV_URL, CSV_URL, DATABASE_URL, EVENTS_SOURCE
+from bot.config import BEST_CSV_URL, CSV_URL, DATABASE_URL, EVENTS_SOURCE, HITLOTO_CSV_URL
 from bot.utils.ticket import now_msk
 
 
@@ -112,7 +112,7 @@ def _event_from_best_row(row, source_row):
 
 
 def _event_from_csv_row(row, source_row, event_format):
-    if event_format == "best":
+    if event_format in {"best", "hitloto"}:
         return _event_from_best_row(row, source_row)
     return _event_from_proverka_row(row, source_row)
 
@@ -121,7 +121,11 @@ async def load_events(event_format="proverka"):
     if EVENTS_SOURCE == "postgres" and DATABASE_URL:
         return await load_events_from_postgres(event_format)
 
-    csv_url = BEST_CSV_URL if event_format == "best" else CSV_URL
+    csv_urls = {
+        "best": BEST_CSV_URL,
+        "hitloto": HITLOTO_CSV_URL,
+    }
+    csv_url = csv_urls.get(event_format, CSV_URL)
 
     async with aiohttp.ClientSession() as session:
         async with session.get(csv_url) as resp:

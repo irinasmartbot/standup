@@ -6,6 +6,7 @@ from datetime import datetime
 from import_events_from_sheets import (
     DEFAULT_BEST_CSV_URL,
     DEFAULT_CSV_URL,
+    DEFAULT_HITLOTO_CSV_URL,
     fetch_csv,
     import_events,
     load_env_file,
@@ -33,6 +34,7 @@ def main():
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--csv-url", default=os.getenv("CSV_URL", DEFAULT_CSV_URL))
     parser.add_argument("--best-csv-url", default=os.getenv("BEST_CSV_URL", DEFAULT_BEST_CSV_URL))
+    parser.add_argument("--hitloto-csv-url", default=os.getenv("HITLOTO_CSV_URL", DEFAULT_HITLOTO_CSV_URL))
     parser.add_argument("--format", default="proverka", choices=["proverka", "1plus1", "best", "masterclass", "hitloto"])
     parser.add_argument("--source-sheet", default="Проверка материала")
     parser.add_argument("--interval-seconds", type=int, default=3600)
@@ -44,9 +46,14 @@ def main():
     sources = [
         ("proverka", args.csv_url, "Проверка материала"),
         ("best", args.best_csv_url, "StandUp BEST"),
+        ("hitloto", args.hitloto_csv_url, "Hit Lotto"),
     ]
     if args.format not in ("", "proverka"):
-        sources = [(args.format, args.csv_url, args.source_sheet)]
+        source_urls = {
+            "best": args.best_csv_url,
+            "hitloto": args.hitloto_csv_url,
+        }
+        sources = [(args.format, source_urls.get(args.format, args.csv_url), args.source_sheet)]
 
     while True:
         try:

@@ -33,6 +33,7 @@ jobs:
           /home/standup/app/venv/bin/python -c "from bot.db.crud import ensure_raffle_tables; ensure_raffle_tables()"
           /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format proverka --source-sheet "Проверка материала"
           /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format best --source-sheet "StandUp BEST"
+          /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format hitloto --source-sheet "Hit Lotto"
           sudo /usr/bin/systemctl restart standup-bot
           sudo /usr/bin/systemctl is-active --quiet standup-bot
           if sudo /usr/bin/systemctl list-unit-files standup-events-sync.service --no-legend | grep -q standup-events-sync.service; then

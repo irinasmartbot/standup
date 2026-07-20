@@ -18,6 +18,11 @@ DEFAULT_BEST_CSV_URL = (
     "2PACX-1vQTZS9GmN4Gkffl6xrUt7W_dDIksHB7z4xAjFDVeR-x4rgWeGJLJPGVfMfY5eQESZcXfBH-ZbrUeMXh/"
     "pub?gid=0&single=true&output=csv"
 )
+DEFAULT_HITLOTO_CSV_URL = (
+    "https://docs.google.com/spreadsheets/d/e/"
+    "2PACX-1vQTZS9GmN4Gkffl6xrUt7W_dDIksHB7z4xAjFDVeR-x4rgWeGJLJPGVfMfY5eQESZcXfBH-ZbrUeMXh/"
+    "pub?gid=1362946936&single=true&output=csv"
+)
 
 
 def load_env_file(path=".env"):
@@ -100,7 +105,7 @@ def _parse_best_row(row, row_number, event_format, source_sheet):
 
 
 def parse_event_row(row, row_number, event_format, source_sheet):
-    if event_format == "best":
+    if event_format in {"best", "hitloto"}:
         return _parse_best_row(row, row_number, event_format, source_sheet)
     return _parse_proverka_row(row, row_number, event_format, source_sheet)
 
@@ -180,10 +185,10 @@ def main():
 
     csv_url = args.csv_url
     if not csv_url:
-        if args.format == "best":
-            csv_url = os.getenv("BEST_CSV_URL", DEFAULT_BEST_CSV_URL)
-        else:
-            csv_url = os.getenv("CSV_URL", DEFAULT_CSV_URL)
+        csv_url = {
+            "best": os.getenv("BEST_CSV_URL", DEFAULT_BEST_CSV_URL),
+            "hitloto": os.getenv("HITLOTO_CSV_URL", DEFAULT_HITLOTO_CSV_URL),
+        }.get(args.format, os.getenv("CSV_URL", DEFAULT_CSV_URL))
 
     csv_text = fetch_csv(csv_url)
     events = parse_events(csv_text, args.format, args.source_sheet)
