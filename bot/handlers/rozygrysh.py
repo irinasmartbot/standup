@@ -1437,11 +1437,4 @@ async def rz_cancel_do(call: CallbackQuery):
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
-    # после отмены можно снова стартовать розыгрыш
-    await call.message.answer(
-        START_TEXT,
-        reply_markup=_start_kb(),
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
     await call.answer()
