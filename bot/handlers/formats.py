@@ -4,7 +4,7 @@ from datetime import datetime
 from html import escape
 
 from aiogram import Router
-from aiogram.types import CallbackQuery, FSInputFile
+from aiogram.types import CallbackQuery, FSInputFile, InputMediaPhoto
 from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK, TICKET_TEMPLATE
@@ -229,6 +229,74 @@ async def _send_best_event_card(message, event, back_callback="best_dates"):
     await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
 
 
+def _best_location_carousel_kb(events, index: int):
+    event = events[index]
+    kb = InlineKeyboardBuilder()
+    payment_url = event.get("payment_url") or ""
+    if payment_url:
+        kb.button(text="🎟 Купить билет", url=payment_url)
+    else:
+        kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+
+    nav_buttons = 0
+    if index > 0:
+        kb.button(text="‹", callback_data=f"best_loc_carousel_{event['id']}_prev")
+        nav_buttons += 1
+    kb.button(text=f"{index + 1}/{len(events)}", callback_data="best_carousel_position")
+    nav_buttons += 1
+    if index < len(events) - 1:
+        kb.button(text="›", callback_data=f"best_loc_carousel_{event['id']}_next")
+        nav_buttons += 1
+
+    kb.button(text="🎤 Кто выступает", callback_data=f"best_speakers_{event['id']}")
+    kb.button(text="◀️ Назад", callback_data="best_venues")
+    kb.adjust(1, nav_buttons, 1, 1)
+    return kb.as_markup()
+
+
+async def _send_best_location_carousel(message, events, index: int = 0):
+    event = events[index]
+    text = _best_event_text(event)
+    image = event.get("image") or ""
+    markup = _best_location_carousel_kb(events, index)
+    if image:
+        try:
+            await message.answer_photo(photo=image, caption=text, reply_markup=markup, parse_mode="HTML")
+            return
+        except Exception:
+            try:
+                await message.answer_photo(photo=image)
+            except Exception:
+                pass
+    await message.answer(text, reply_markup=markup, parse_mode="HTML")
+
+
+async def _edit_best_location_carousel(call: CallbackQuery, events, index: int):
+    event = events[index]
+    text = _best_event_text(event)
+    image = event.get("image") or ""
+    markup = _best_location_carousel_kb(events, index)
+
+    if image:
+        try:
+            await call.message.edit_media(
+                media=InputMediaPhoto(media=image, caption=text, parse_mode="HTML"),
+                reply_markup=markup,
+            )
+            return
+        except Exception:
+            pass
+
+    try:
+        if call.message.photo:
+            await call.message.delete()
+            await _send_best_location_carousel(call.message, events, index)
+        else:
+            await call.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        await _send_best_location_carousel(call.message, events, index)
+
+
 def _nav_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="🎟 Забронировать места", callback_data="book")
@@ -424,28 +492,38 @@ async def best_venue_events(call: CallbackQuery):
         [e for e in await load_events("best") if e["location"] == venue],
         key=_event_sort_key,
     )
-    if len(events) == 1:
-        await _send_best_event_card(call.message, events[0], back_callback="best_venues")
+    if not events:
+        await call.message.answer("На этой площадке пока нет актуальных мероприятий.", reply_markup=await _best_venues_kb())
         await call.answer()
         return
 
-    dates = sorted(set(e["date"] for e in events), key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
-    kb = InlineKeyboardBuilder()
-    for date in dates:
-        try:
-            d = datetime.strptime(date, "%d.%m.%Y")
-            label = d.strftime("%d ") + MONTHS[d.strftime("%B")]
-        except Exception:
-            label = date
-        kb.button(text=label, callback_data=f"best_vdate_{date}_{venue}")
-    kb.button(text="📍 Назад к выбору локации", callback_data="best_venues")
-    widths = [2] * (len(dates) // 2)
-    if len(dates) % 2:
-        widths.append(1)
-    widths.append(1)
-    kb.adjust(*widths)
-    sent = await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
-    remember_booking_nav(call.message.chat.id, sent.message_id)
+    await _send_best_location_carousel(call.message, events, 0)
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("best_loc_carousel_"))
+async def best_location_carousel(call: CallbackQuery):
+    payload = call.data.replace("best_loc_carousel_", "", 1)
+    event_id, direction = payload.rsplit("_", 1)
+    all_events = await load_events("best")
+    current = _best_event_by_id(all_events, event_id)
+    if not current:
+        await call.answer("Мероприятие уже недоступно", show_alert=True)
+        return
+
+    events = sorted(
+        [e for e in all_events if e["location"] == current.get("location")],
+        key=_event_sort_key,
+    )
+    current_index = next((i for i, e in enumerate(events) if str(e["id"]) == event_id), 0)
+    new_index = current_index + (1 if direction == "next" else -1)
+    new_index = max(0, min(new_index, len(events) - 1))
+    await _edit_best_location_carousel(call, events, new_index)
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data == "best_carousel_position")
+async def best_carousel_position(call: CallbackQuery):
     await call.answer()
 
 
