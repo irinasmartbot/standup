@@ -199,6 +199,7 @@ async def check_format(call: CallbackQuery):
     kb = InlineKeyboardBuilder()
     kb.button(text="📅 Выбрать по дате", callback_data="check_dates")
     kb.button(text="📍 Выбор по площадке", callback_data="by_venue")
+    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     kb.adjust(1)
     await _answer_with_check_photo(
         call.message,
