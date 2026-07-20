@@ -1157,7 +1157,7 @@ async def rz_rules(call: CallbackQuery):
 @router.callback_query(F.data == "rz_not_alone")
 async def rz_not_alone(call: CallbackQuery):
     kb = InlineKeyboardBuilder()
-    kb.button(text="Поделиться", url=SHARE_BOOKING_URL)
+    kb.button(text="Поделиться ссылкой на бронь", url=SHARE_BOOKING_URL)
     kb.adjust(1)
     await call.message.answer(
         NOT_ALONE_TEXT,
