@@ -11,6 +11,7 @@ from bot.config import MANAGER_LINK, CHANNEL_LINK, PAID_BEST_START, HELP_CHAT_ID
 from bot.db.crud import (
     create_help_request,
     get_help_request_by_message,
+    get_last_phone,
     get_user_bookings_for_commands,
     mark_help_request_answered,
 )
@@ -147,6 +148,46 @@ def _booking_command_kb(row, page: int = 0, total: int = 1):
     else:
         kb.adjust(1)
     return kb.as_markup()
+
+
+def _help_card_text(
+    telegram_id: int,
+    full_name: str | None,
+    username: str | None,
+    question: str,
+    phone: str | None = None,
+    answer: str | None = None,
+    manager_name: str | None = None,
+) -> str:
+    username_label = f"@{username}" if username else "без username"
+    lines = [
+        "<b>Новый вопрос из бота</b>",
+        "",
+        f"Пользователь: {escape(full_name or '')} ({escape(username_label)})",
+        f"Telegram ID: <code>{telegram_id}</code>",
+    ]
+    if phone:
+        lines.append(f"Телефон: {escape(phone)}")
+    lines.extend([
+        "",
+        f"<b>Вопрос:</b>\n{escape(question)}",
+    ])
+    if answer is not None:
+        from bot.utils.ticket import now_msk
+
+        answered_at = now_msk().strftime("%d.%m.%Y в %H:%M")
+        manager = escape(manager_name or "менеджера")
+        lines.extend([
+            "",
+            f"<b>Ответ от {manager} ({answered_at}):</b>",
+            escape(answer),
+        ])
+    else:
+        lines.extend([
+            "",
+            "Чтобы ответить пользователю, ответьте reply на это сообщение.",
+        ])
+    return "\n".join(lines)
 
 
 async def _send_command_bookings(message: Message, status: str):
@@ -308,16 +349,19 @@ async def help_question(message: Message, state: FSMContext):
         return
 
     user = message.from_user
-    username = f"@{user.username}" if user.username else "без username"
     question = message.text or message.caption or "Вопрос без текста"
-    header = (
-        "<b>Новый вопрос из бота</b>\n\n"
-        f"Пользователь: {escape(user.full_name or '')} ({escape(username)})\n"
-        f"Telegram ID: <code>{user.id}</code>\n\n"
-        f"<b>Вопрос:</b>\n{escape(question)}\n\n"
-        "Чтобы ответить пользователю, ответьте reply на это сообщение."
+    phone = get_last_phone(user.id)
+    sent = await message.bot.send_message(
+        help_chat_id,
+        _help_card_text(
+            telegram_id=user.id,
+            full_name=user.full_name,
+            username=user.username,
+            question=question,
+            phone=phone,
+        ),
+        parse_mode="HTML",
     )
-    sent = await message.bot.send_message(help_chat_id, header, parse_mode="HTML")
     create_help_request(
         user.id,
         user.username,
@@ -354,6 +398,10 @@ async def help_chat_reply(message: Message):
         return
 
     telegram_id = request[0]
+    username = request[1]
+    full_name = request[2]
+    question = request[3] or "Вопрос без текста"
+    answer_text = message.text or message.caption or "Ответ отправлен файлом/медиа"
     if message.text:
         await message.bot.send_message(
             telegram_id,
@@ -366,7 +414,21 @@ async def help_chat_reply(message: Message):
             message_id=message.message_id,
         )
     mark_help_request_answered(message.chat.id, replied.message_id)
-    await message.reply("Ответ отправлен пользователю.")
+    try:
+        await replied.edit_text(
+            _help_card_text(
+                telegram_id=telegram_id,
+                full_name=full_name,
+                username=username,
+                question=question,
+                phone=get_last_phone(telegram_id),
+                answer=answer_text,
+                manager_name=message.from_user.full_name if message.from_user else None,
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data == "main_menu")
