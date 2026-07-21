@@ -602,7 +602,8 @@ def get_user_bookings_for_commands(telegram_id, status):
                     e.location,
                     b.guests,
                     b.ticket_message_id,
-                    b.confirm_message_id
+                    b.confirm_message_id,
+                    u.name
                 FROM bookings b
                 JOIN users u ON u.id = b.user_id
                 JOIN events e ON e.id = b.event_id

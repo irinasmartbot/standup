@@ -4,7 +4,7 @@ from datetime import datetime
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import BufferedInputFile, InputMediaPhoto, Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK, PAID_BEST_START, HELP_CHAT_ID
@@ -17,6 +17,7 @@ from bot.db.crud import (
 )
 from bot.handlers.formats import delete_linked_venue_album
 from bot.utils.bot_commands import refresh_user_commands, setup_bot_commands
+from bot.utils.ticket import generate_ticket
 
 router = Router()
 
@@ -59,10 +60,6 @@ def _link_kb(text: str, url: str):
     return kb.as_markup()
 
 
-def _status_label(status: str) -> str:
-    return "билет подтверждён" if status == "confirmed" else "бронь активна"
-
-
 def _format_label(format_name: str) -> str:
     if format_name == "rozygrysh":
         return "Розыгрыш"
@@ -85,6 +82,10 @@ def _booking_command_title(status: str) -> str:
     return "Ваши активные брони" if status == "booked" else "Ваши активные билеты"
 
 
+def _status_label(status: str) -> str:
+    return "билет подтверждён" if status == "confirmed" else "бронь активна"
+
+
 def _booking_command_text(row, page: int = 0, total: int = 1) -> str:
     booking_id, format_name, status, event_date, event_time, address, location, guests, *_ = row
     title = escape(_booking_command_title(status))
@@ -99,6 +100,25 @@ def _booking_command_text(row, page: int = 0, total: int = 1) -> str:
         f"Статус: {escape(_status_label(status))}\n"
         f"Номер брони: {booking_id}"
     )
+
+
+def _ticket_command_caption(row, page: int = 0, total: int = 1) -> str:
+    _, format_name, _, event_date, event_time, _, location, *_ = row
+    position = f" {page + 1}/{total}" if total > 1 else ""
+    return (
+        f"<b>Ваши активные билеты{position}</b>\n\n"
+        f"{escape(_format_label(format_name))}\n"
+        f"📅 {escape(event_date)} в {escape(event_time)}\n"
+        f"📍 {escape(location or '')}"
+    )
+
+
+def _ticket_command_photo(row):
+    booking_id, _, _, event_date, event_time, address, location, guests, _, _, name = row
+    address_part = address.split(",", 1)[1].strip() if address and "," in address else (address or "")
+    short_address = f"{location or ''}, {address_part}".strip(", ")
+    ticket_buf = generate_ticket(name or "", event_date, event_time, short_address, guests)
+    return BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg")
 
 
 def _booking_command_kb(row, page: int = 0, total: int = 1):
@@ -203,11 +223,19 @@ async def _send_command_bookings(message: Message, status: str):
         await message.answer(text, reply_markup=main_menu_kb())
         return
 
-    await message.answer(
-        _booking_command_text(rows[0], page=0, total=len(rows)),
-        parse_mode="HTML",
-        reply_markup=_booking_command_kb(rows[0], page=0, total=len(rows)),
-    )
+    if status == "confirmed":
+        await message.answer_photo(
+            photo=_ticket_command_photo(rows[0]),
+            caption=_ticket_command_caption(rows[0], page=0, total=len(rows)),
+            parse_mode="HTML",
+            reply_markup=_booking_command_kb(rows[0], page=0, total=len(rows)),
+        )
+    else:
+        await message.answer(
+            _booking_command_text(rows[0], page=0, total=len(rows)),
+            parse_mode="HTML",
+            reply_markup=_booking_command_kb(rows[0], page=0, total=len(rows)),
+        )
 
 
 async def _delete_previous_menu_message(call: CallbackQuery):
@@ -318,17 +346,42 @@ async def command_bookings_page(call: CallbackQuery):
             else "Активных билетов пока нет."
         )
         await refresh_user_commands(call.message.bot, call.from_user.id)
-        await call.message.edit_text(empty_text, reply_markup=main_menu_kb())
+        if call.message.photo:
+            await call.message.edit_caption(caption=empty_text, reply_markup=main_menu_kb())
+        else:
+            await call.message.edit_text(empty_text, reply_markup=main_menu_kb())
         await call.answer()
         return
 
     page = page % len(rows)
     await refresh_user_commands(call.message.bot, call.from_user.id)
-    await call.message.edit_text(
-        _booking_command_text(rows[page], page=page, total=len(rows)),
-        parse_mode="HTML",
-        reply_markup=_booking_command_kb(rows[page], page=page, total=len(rows)),
-    )
+    if status == "confirmed":
+        if call.message.photo:
+            await call.message.edit_media(
+                media=InputMediaPhoto(
+                    media=_ticket_command_photo(rows[page]),
+                    caption=_ticket_command_caption(rows[page], page=page, total=len(rows)),
+                    parse_mode="HTML",
+                ),
+                reply_markup=_booking_command_kb(rows[page], page=page, total=len(rows)),
+            )
+        else:
+            try:
+                await call.message.delete()
+            except Exception:
+                pass
+            await call.message.answer_photo(
+                photo=_ticket_command_photo(rows[page]),
+                caption=_ticket_command_caption(rows[page], page=page, total=len(rows)),
+                parse_mode="HTML",
+                reply_markup=_booking_command_kb(rows[page], page=page, total=len(rows)),
+            )
+    else:
+        await call.message.edit_text(
+            _booking_command_text(rows[page], page=page, total=len(rows)),
+            parse_mode="HTML",
+            reply_markup=_booking_command_kb(rows[page], page=page, total=len(rows)),
+        )
     await call.answer()
 
 
