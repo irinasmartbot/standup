@@ -94,9 +94,16 @@ def _days_until(event_date: str) -> int | None:
     return (date_value - now_msk().date()).days
 
 
-def _booking_command_text(row) -> str:
+def _booking_command_title(status: str) -> str:
+    return "Ваши активные брони" if status == "booked" else "Ваши активные билеты"
+
+
+def _booking_command_text(row, page: int = 0, total: int = 1) -> str:
     booking_id, format_name, status, event_date, event_time, address, location, guests, *_ = row
+    title = escape(_booking_command_title(status))
+    position = f" {page + 1}/{total}" if total > 1 else ""
     return (
+        f"<b>{title}{position}</b>\n\n"
         f"<b>{escape(_format_label(format_name))}</b>\n"
         f"📅 {escape(event_date)} в {escape(event_time)}\n"
         f"📍 {escape(location or '')}\n"
@@ -107,35 +114,52 @@ def _booking_command_text(row) -> str:
     )
 
 
-def _booking_command_kb(row):
+def _booking_command_kb(row, page: int = 0, total: int = 1):
     booking_id, format_name, status, event_date, *_ = row
     kb = InlineKeyboardBuilder()
     days_until = _days_until(event_date)
     can_get_ticket = days_until is not None and days_until <= 1
+    action_count = 0
 
     if status == "booked":
         if format_name == "rozygrysh":
             if can_get_ticket:
                 kb.button(text="🎟 Получить билет 🎟", callback_data=f"rz_ticket_{booking_id}")
+                action_count += 1
             kb.button(text="Что, если я хочу прийти не один?", callback_data="rz_not_alone")
             kb.button(text="Отменить бронь", callback_data=f"rz_cancel_{booking_id}")
+            action_count += 2
         else:
             if can_get_ticket:
                 kb.button(text="🎟 Получить билет 🎟", callback_data=f"get_ticket_{booking_id}")
+                action_count += 1
             kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
             kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
             kb.button(text="Изменить количество гостей", callback_data=f"change_guests_confirm_{booking_id}")
+            action_count += 3
     else:
         if format_name == "rozygrysh":
             kb.button(text="Что, если я хочу прийти не один?", callback_data="rz_not_alone")
             kb.button(text="Отменить бронь", callback_data=f"rz_cancel_{booking_id}")
+            action_count += 2
         else:
             kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
             kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
+            action_count += 2
+
+    if total > 1:
+        prev_page = (page - 1) % total
+        next_page = (page + 1) % total
+        kb.button(text="⬅️ Назад", callback_data=f"cmd_bookings:{status}:{prev_page}")
+        kb.button(text=f"{page + 1}/{total}", callback_data="cmd_bookings_noop")
+        kb.button(text="Далее ➡️", callback_data=f"cmd_bookings:{status}:{next_page}")
 
     kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
     kb.button(text="⬅️ В главное меню", callback_data="main_menu")
-    kb.adjust(1)
+    if total > 1:
+        kb.adjust(*([1] * action_count), 3, 1, 1)
+    else:
+        kb.adjust(1)
     return kb.as_markup()
 
 
@@ -150,14 +174,11 @@ async def _send_command_bookings(message: Message, status: str):
         await message.answer(text, reply_markup=main_menu_kb())
         return
 
-    intro = "Ваши активные брони:" if status == "booked" else "Ваши активные билеты:"
-    await message.answer(intro)
-    for row in rows:
-        await message.answer(
-            _booking_command_text(row),
-            parse_mode="HTML",
-            reply_markup=_booking_command_kb(row),
-        )
+    await message.answer(
+        _booking_command_text(rows[0], page=0, total=len(rows)),
+        parse_mode="HTML",
+        reply_markup=_booking_command_kb(rows[0], page=0, total=len(rows)),
+    )
 
 
 async def _delete_previous_menu_message(call: CallbackQuery):
@@ -234,6 +255,48 @@ async def active_bookings_command(message: Message, state: FSMContext):
 async def myticket_command(message: Message, state: FSMContext):
     await state.clear()
     await _send_command_bookings(message, "confirmed")
+
+
+@router.callback_query(F.data == "cmd_bookings_noop")
+async def command_bookings_noop(call: CallbackQuery):
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("cmd_bookings:"))
+async def command_bookings_page(call: CallbackQuery):
+    parts = call.data.split(":")
+    if len(parts) != 3:
+        await call.answer()
+        return
+
+    _, status, raw_page = parts
+    if status not in {"booked", "confirmed"}:
+        await call.answer()
+        return
+    try:
+        page = int(raw_page)
+    except ValueError:
+        await call.answer()
+        return
+
+    rows = get_user_bookings_for_commands(call.from_user.id, status)
+    if not rows:
+        empty_text = (
+            "Активных броней пока нет."
+            if status == "booked"
+            else "Активных билетов пока нет."
+        )
+        await call.message.edit_text(empty_text, reply_markup=main_menu_kb())
+        await call.answer()
+        return
+
+    page = page % len(rows)
+    await call.message.edit_text(
+        _booking_command_text(rows[page], page=page, total=len(rows)),
+        parse_mode="HTML",
+        reply_markup=_booking_command_kb(rows[page], page=page, total=len(rows)),
+    )
+    await call.answer()
 
 
 @router.message(Command("help"), F.chat.type == "private")
