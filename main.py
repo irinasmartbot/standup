@@ -3,7 +3,7 @@ import logging
 
 from bot.config import MODERATION_CHAT_ID, bot, dp
 from bot.db.models import init_db
-from bot.db.crud import ensure_raffle_tables
+from bot.db.crud import ensure_help_tables, ensure_raffle_tables
 from bot.handlers import start, formats, booking, rozygrysh
 from bot.handlers.reminders import reminder_loop
 from bot.handlers.rozygrysh_reminders import raffle_reminder_loop
@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 async def main():
     init_db()
     ensure_raffle_tables()
+    ensure_help_tables()
+    await start.setup_bot_commands(bot)
     if MODERATION_CHAT_ID:
         logger.info("MODERATION_CHAT_ID is set (%s…)", str(MODERATION_CHAT_ID)[:6])
     else:

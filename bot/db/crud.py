@@ -581,6 +581,42 @@ def get_active_raffle_booking(telegram_id):
             return _fetchone_tuple(cur)
 
 
+def get_user_bookings_for_commands(telegram_id, status):
+    """Активные брони/билеты для команд /active_bookings и /myticket."""
+    if not _use_postgres():
+        return []
+    if status not in {"booked", "confirmed"}:
+        return []
+
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    b.id,
+                    b.format,
+                    b.status,
+                    to_char(e.event_date, 'DD.MM.YYYY') AS event_date,
+                    to_char(e.event_time, 'HH24:MI') AS event_time,
+                    e.address,
+                    e.location,
+                    b.guests,
+                    b.ticket_message_id,
+                    b.confirm_message_id
+                FROM bookings b
+                JOIN users u ON u.id = b.user_id
+                JOIN events e ON e.id = b.event_id
+                WHERE u.telegram_id = %s
+                  AND b.format IN ('proverka', 'rozygrysh')
+                  AND b.status = %s
+                  AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
+                ORDER BY e.event_date, e.event_time
+                """,
+                (telegram_id, status),
+            )
+            return _fetchall_tuples(cur)
+
+
 def reset_raffle_for_user(telegram_id) -> dict:
     """Сброс ветки розыгрыша для теста: флаг, pending, активные брони, nav."""
     result = {
@@ -638,6 +674,103 @@ def reset_raffle_for_user(telegram_id) -> dict:
             result["nav_cleared"] = cur.rowcount > 0
         conn.commit()
     return result
+
+
+def ensure_help_tables():
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS help_requests (
+                    id BIGSERIAL PRIMARY KEY,
+                    telegram_id BIGINT NOT NULL,
+                    username TEXT,
+                    full_name TEXT,
+                    question_text TEXT,
+                    help_chat_id BIGINT NOT NULL,
+                    help_message_id BIGINT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open'
+                        CHECK (status IN ('open', 'answered')),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    answered_at TIMESTAMPTZ,
+                    UNIQUE (help_chat_id, help_message_id)
+                )
+                """
+            )
+        conn.commit()
+
+
+def create_help_request(
+    telegram_id,
+    username,
+    full_name,
+    question_text,
+    help_chat_id,
+    help_message_id,
+):
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO help_requests (
+                    telegram_id, username, full_name, question_text,
+                    help_chat_id, help_message_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (help_chat_id, help_message_id) DO UPDATE SET
+                    telegram_id = EXCLUDED.telegram_id,
+                    username = EXCLUDED.username,
+                    full_name = EXCLUDED.full_name,
+                    question_text = EXCLUDED.question_text,
+                    status = 'open',
+                    answered_at = NULL
+                """,
+                (
+                    telegram_id,
+                    username or None,
+                    full_name or None,
+                    question_text or None,
+                    help_chat_id,
+                    help_message_id,
+                ),
+            )
+        conn.commit()
+
+
+def get_help_request_by_message(help_chat_id, help_message_id):
+    if not _use_postgres():
+        return None
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT telegram_id, username, full_name, question_text, status
+                FROM help_requests
+                WHERE help_chat_id = %s AND help_message_id = %s
+                """,
+                (help_chat_id, help_message_id),
+            )
+            return _fetchone_tuple(cur)
+
+
+def mark_help_request_answered(help_chat_id, help_message_id):
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE help_requests
+                SET status = 'answered', answered_at = %s
+                WHERE help_chat_id = %s AND help_message_id = %s
+                """,
+                (datetime.now(), help_chat_id, help_message_id),
+            )
+        conn.commit()
 
 
 def get_booking_format(booking_id) -> Optional[str]:

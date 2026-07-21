@@ -1,9 +1,19 @@
+from html import escape
+from datetime import datetime
+
 from aiogram import F, Router
-from aiogram.filters import CommandObject, CommandStart
-from aiogram.types import Message, CallbackQuery
+from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import BotCommand, Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from bot.config import MANAGER_LINK, CHANNEL_LINK, PAID_BEST_START
+from bot.config import MANAGER_LINK, CHANNEL_LINK, PAID_BEST_START, HELP_CHAT_ID
+from bot.db.crud import (
+    create_help_request,
+    get_help_request_by_message,
+    get_user_bookings_for_commands,
+    mark_help_request_answered,
+)
 from bot.handlers.formats import delete_linked_venue_album
 
 router = Router()
@@ -16,6 +26,32 @@ WELCOME_TEXT = (
 )
 
 
+class HelpState(StatesGroup):
+    waiting_question = State()
+
+
+BOT_COMMANDS = [
+    BotCommand(command="start", description="Главное меню"),
+    BotCommand(command="active_bookings", description="Мои активные брони"),
+    BotCommand(command="myticket", description="Мои билеты"),
+    BotCommand(command="main_menu", description="Главное меню"),
+    BotCommand(command="manager", description="Связаться с менеджером"),
+    BotCommand(command="help", description="Задать вопрос"),
+    BotCommand(command="channel", description="Канал анонсов"),
+]
+
+
+async def setup_bot_commands(bot):
+    await bot.set_my_commands(BOT_COMMANDS)
+
+
+def _help_chat_id():
+    try:
+        return int(HELP_CHAT_ID)
+    except (TypeError, ValueError):
+        return None
+
+
 def main_menu_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="🎟 Забронировать места", callback_data="book")
@@ -26,6 +62,102 @@ def main_menu_kb():
     kb.button(text="📢 Заглянуть на наш канал анонсов", url=CHANNEL_LINK)
     kb.adjust(1)
     return kb.as_markup()
+
+
+def _link_kb(text: str, url: str):
+    kb = InlineKeyboardBuilder()
+    kb.button(text=text, url=url)
+    kb.button(text="⬅️ В главное меню", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def _status_label(status: str) -> str:
+    return "билет подтверждён" if status == "confirmed" else "бронь активна"
+
+
+def _format_label(format_name: str) -> str:
+    if format_name == "rozygrysh":
+        return "Розыгрыш"
+    if format_name == "proverka":
+        return "Проверка материала"
+    return format_name
+
+
+def _days_until(event_date: str) -> int | None:
+    try:
+        date_value = datetime.strptime(event_date, "%d.%m.%Y").date()
+    except (TypeError, ValueError):
+        return None
+    from bot.utils.ticket import now_msk
+
+    return (date_value - now_msk().date()).days
+
+
+def _booking_command_text(row) -> str:
+    booking_id, format_name, status, event_date, event_time, address, location, guests, *_ = row
+    return (
+        f"<b>{escape(_format_label(format_name))}</b>\n"
+        f"📅 {escape(event_date)} в {escape(event_time)}\n"
+        f"📍 {escape(location or '')}\n"
+        f"Адрес: {escape(address or '')}\n"
+        f"Гостей: {guests}\n"
+        f"Статус: {escape(_status_label(status))}\n"
+        f"Номер брони: {booking_id}"
+    )
+
+
+def _booking_command_kb(row):
+    booking_id, format_name, status, event_date, *_ = row
+    kb = InlineKeyboardBuilder()
+    days_until = _days_until(event_date)
+    can_get_ticket = days_until is not None and days_until <= 1
+
+    if status == "booked":
+        if format_name == "rozygrysh":
+            if can_get_ticket:
+                kb.button(text="🎟 Получить билет 🎟", callback_data=f"rz_ticket_{booking_id}")
+            kb.button(text="Что, если я хочу прийти не один?", callback_data="rz_not_alone")
+            kb.button(text="Отменить бронь", callback_data=f"rz_cancel_{booking_id}")
+        else:
+            if can_get_ticket:
+                kb.button(text="🎟 Получить билет 🎟", callback_data=f"get_ticket_{booking_id}")
+            kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
+            kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
+            kb.button(text="Изменить количество гостей", callback_data=f"change_guests_confirm_{booking_id}")
+    else:
+        if format_name == "rozygrysh":
+            kb.button(text="Что, если я хочу прийти не один?", callback_data="rz_not_alone")
+            kb.button(text="Отменить бронь", callback_data=f"rz_cancel_{booking_id}")
+        else:
+            kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
+            kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
+
+    kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+    kb.button(text="⬅️ В главное меню", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+async def _send_command_bookings(message: Message, status: str):
+    rows = get_user_bookings_for_commands(message.from_user.id, status)
+    if not rows:
+        text = (
+            "Активных броней пока нет."
+            if status == "booked"
+            else "Активных билетов пока нет."
+        )
+        await message.answer(text, reply_markup=main_menu_kb())
+        return
+
+    intro = "Ваши активные брони:" if status == "booked" else "Ваши активные билеты:"
+    await message.answer(intro)
+    for row in rows:
+        await message.answer(
+            _booking_command_text(row),
+            parse_mode="HTML",
+            reply_markup=_booking_command_kb(row),
+        )
 
 
 async def _delete_previous_menu_message(call: CallbackQuery):
@@ -68,6 +200,119 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
         return
 
     await message.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
+
+
+@router.message(Command("main_menu"), F.chat.type == "private")
+async def main_menu_command(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
+
+
+@router.message(Command("manager"), F.chat.type == "private")
+async def manager_command(message: Message):
+    await message.answer(
+        "Написать менеджеру можно здесь:",
+        reply_markup=_link_kb("💬 Написать менеджеру", MANAGER_LINK),
+    )
+
+
+@router.message(Command("channel"), F.chat.type == "private")
+async def channel_command(message: Message):
+    await message.answer(
+        "Канал с анонсами шоу:",
+        reply_markup=_link_kb("📢 Открыть канал", CHANNEL_LINK),
+    )
+
+
+@router.message(Command("active_bookings"), F.chat.type == "private")
+async def active_bookings_command(message: Message, state: FSMContext):
+    await state.clear()
+    await _send_command_bookings(message, "booked")
+
+
+@router.message(Command("myticket"), F.chat.type == "private")
+async def myticket_command(message: Message, state: FSMContext):
+    await state.clear()
+    await _send_command_bookings(message, "confirmed")
+
+
+@router.message(Command("help"), F.chat.type == "private")
+async def help_command(message: Message, state: FSMContext):
+    if not _help_chat_id():
+        await message.answer("Сейчас вопрос лучше отправить менеджеру напрямую:", reply_markup=_link_kb("💬 Написать менеджеру", MANAGER_LINK))
+        return
+    await state.set_state(HelpState.waiting_question)
+    await message.answer("Напишите ваш вопрос одним сообщением, и мы передадим его менеджеру.")
+
+
+@router.message(HelpState.waiting_question, F.chat.type == "private")
+async def help_question(message: Message, state: FSMContext):
+    help_chat_id = _help_chat_id()
+    if not help_chat_id:
+        await state.clear()
+        await message.answer("Сейчас вопрос лучше отправить менеджеру напрямую:", reply_markup=_link_kb("💬 Написать менеджеру", MANAGER_LINK))
+        return
+
+    user = message.from_user
+    username = f"@{user.username}" if user.username else "без username"
+    question = message.text or message.caption or "Вопрос без текста"
+    header = (
+        "<b>Новый вопрос из бота</b>\n\n"
+        f"Пользователь: {escape(user.full_name or '')} ({escape(username)})\n"
+        f"Telegram ID: <code>{user.id}</code>\n\n"
+        f"<b>Вопрос:</b>\n{escape(question)}\n\n"
+        "Чтобы ответить пользователю, ответьте reply на это сообщение."
+    )
+    sent = await message.bot.send_message(help_chat_id, header, parse_mode="HTML")
+    create_help_request(
+        user.id,
+        user.username,
+        user.full_name,
+        question,
+        help_chat_id,
+        sent.message_id,
+    )
+
+    if not message.text:
+        copied = await message.bot.copy_message(
+            chat_id=help_chat_id,
+            from_chat_id=message.chat.id,
+            message_id=message.message_id,
+        )
+        create_help_request(
+            user.id,
+            user.username,
+            user.full_name,
+            question,
+            help_chat_id,
+            copied.message_id,
+        )
+
+    await state.clear()
+    await message.answer("Спасибо! Передали вопрос менеджеру, скоро ответим.")
+
+
+@router.message(F.reply_to_message, lambda message: message.chat.id == _help_chat_id())
+async def help_chat_reply(message: Message):
+    replied = message.reply_to_message
+    request = get_help_request_by_message(message.chat.id, replied.message_id)
+    if not request:
+        return
+
+    telegram_id = request[0]
+    if message.text:
+        await message.bot.send_message(
+            telegram_id,
+            f"Ответ менеджера:\n\n{message.text}",
+        )
+    else:
+        await message.bot.copy_message(
+            chat_id=telegram_id,
+            from_chat_id=message.chat.id,
+            message_id=message.message_id,
+        )
+    mark_help_request_answered(message.chat.id, replied.message_id)
+    await message.reply("Ответ отправлен пользователю.")
 
 
 @router.callback_query(F.data == "main_menu")

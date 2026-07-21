@@ -57,6 +57,7 @@ def _resolve_ticket_template() -> str:
 
 TICKET_TEMPLATE = _resolve_ticket_template()
 MODERATION_CHAT_ID = os.getenv("MODERATION_CHAT_ID")
+HELP_CHAT_ID = os.getenv("HELP_CHAT_ID", "-1002342467016")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "MoscowStandupShow")
 AFISHA_REVIEW_URL = os.getenv(
     "AFISHA_REVIEW_URL",
