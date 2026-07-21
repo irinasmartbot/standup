@@ -160,8 +160,9 @@ def _help_card_text(
     manager_name: str | None = None,
 ) -> str:
     username_label = f"@{username}" if username else "без username"
+    title = "✅ Вопрос отвечен" if answer is not None else "🆕 Новый вопрос из бота"
     lines = [
-        "<b>Новый вопрос из бота</b>",
+        f"<b>{title}</b>",
         "",
         f"Пользователь: {escape(full_name or '')} ({escape(username_label)})",
         f"Telegram ID: <code>{telegram_id}</code>",
