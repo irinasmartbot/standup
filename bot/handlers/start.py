@@ -4,7 +4,7 @@ from datetime import datetime
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BotCommand, Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK, PAID_BEST_START, HELP_CHAT_ID
@@ -15,6 +15,7 @@ from bot.db.crud import (
     mark_help_request_answered,
 )
 from bot.handlers.formats import delete_linked_venue_album
+from bot.utils.bot_commands import refresh_user_commands, setup_bot_commands
 
 router = Router()
 
@@ -28,21 +29,6 @@ WELCOME_TEXT = (
 
 class HelpState(StatesGroup):
     waiting_question = State()
-
-
-BOT_COMMANDS = [
-    BotCommand(command="start", description="Главное меню"),
-    BotCommand(command="active_bookings", description="Мои активные брони"),
-    BotCommand(command="myticket", description="Мои билеты"),
-    BotCommand(command="main_menu", description="Главное меню"),
-    BotCommand(command="manager", description="Связаться с менеджером"),
-    BotCommand(command="help", description="Задать вопрос"),
-    BotCommand(command="channel", description="Канал анонсов"),
-]
-
-
-async def setup_bot_commands(bot):
-    await bot.set_my_commands(BOT_COMMANDS)
 
 
 def _help_chat_id():
@@ -164,6 +150,7 @@ def _booking_command_kb(row, page: int = 0, total: int = 1):
 
 
 async def _send_command_bookings(message: Message, status: str):
+    await refresh_user_commands(message.bot, message.from_user.id)
     rows = get_user_bookings_for_commands(message.from_user.id, status)
     if not rows:
         text = (
@@ -207,6 +194,7 @@ async def private_sticker_file_id(message: Message, state: FSMContext):
 @router.message(CommandStart(), F.chat.type == "private")
 async def start(message: Message, state: FSMContext, command: CommandObject):
     await state.clear()
+    await refresh_user_commands(message.bot, message.from_user.id)
     payload = (command.args or "").strip()
 
     if payload == "standup_rozygr":
@@ -226,6 +214,7 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
 @router.message(Command("main_menu"), F.chat.type == "private")
 async def main_menu_command(message: Message, state: FSMContext):
     await state.clear()
+    await refresh_user_commands(message.bot, message.from_user.id)
     await message.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
 
 
@@ -286,11 +275,13 @@ async def command_bookings_page(call: CallbackQuery):
             if status == "booked"
             else "Активных билетов пока нет."
         )
+        await refresh_user_commands(call.message.bot, call.from_user.id)
         await call.message.edit_text(empty_text, reply_markup=main_menu_kb())
         await call.answer()
         return
 
     page = page % len(rows)
+    await refresh_user_commands(call.message.bot, call.from_user.id)
     await call.message.edit_text(
         _booking_command_text(rows[page], page=page, total=len(rows)),
         parse_mode="HTML",

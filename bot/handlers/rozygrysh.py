@@ -68,6 +68,7 @@ from bot.db.crud import (
     update_raffle_submission_status,
 )
 from bot.services.sheets import load_events
+from bot.utils.bot_commands import refresh_user_commands
 from bot.utils.ticket import MONTHS, format_date, generate_ticket, guests_word, now_msk, parse_event_datetime
 
 router = Router()
@@ -1525,6 +1526,7 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             parse_mode="HTML",
         )
         save_confirm_message_id(booking_id, confirm.message_id)
+        await refresh_user_commands(message.bot, user.id)
     finally:
         _BOOKING_IN_PROGRESS.discard(user.id)
 
@@ -1603,6 +1605,7 @@ async def rz_ticket(call: CallbackQuery):
             parse_mode="HTML",
         )
         save_ticket_message_id(booking_id, ticket_msg.message_id)
+        await refresh_user_commands(call.message.bot, call.from_user.id)
 
         # убрать кнопки с confirm
         confirm_message_id = row[-1]
@@ -1666,6 +1669,7 @@ async def rz_cancel_do(call: CallbackQuery):
     )
     update_booking_status(booking_id, "cancelled")
     set_rozygrysh_used(call.from_user.id, False)
+    await refresh_user_commands(call.message.bot, call.from_user.id)
 
     kb = InlineKeyboardBuilder()
     kb.button(text="Перейти в главное меню", callback_data="main_menu")

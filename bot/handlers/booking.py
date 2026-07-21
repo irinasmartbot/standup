@@ -16,6 +16,7 @@ from bot.db.crud import (
     get_active_bookings_by_user,
 )
 from bot.services.sheets import load_events, get_event
+from bot.utils.bot_commands import refresh_user_commands
 from bot.utils.ticket import format_date, guests_word, generate_ticket, MONTHS, now_msk, parse_event_datetime
 from bot.utils.nav_messages import remember_booking_nav, forget_booking_nav, delete_booking_nav
 
@@ -581,6 +582,7 @@ async def process_guests(message: Message, state: FSMContext):
         )
     confirm_msg = await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     save_confirm_message_id(booking_id, confirm_msg.message_id)
+    await refresh_user_commands(message.bot, message.from_user.id)
 
 
 @router.callback_query(F.data.startswith("get_ticket_"))
@@ -631,6 +633,7 @@ async def get_ticket(call: CallbackQuery):
         )
         save_ticket_message_id(booking_id, ticket_msg.message_id)
         await _remove_ticket_button(booking_id, call.from_user.id)
+        await refresh_user_commands(call.message.bot, call.from_user.id)
         await call.answer()
     finally:
         _TICKET_IN_PROGRESS.discard(booking_id)
@@ -755,6 +758,7 @@ async def cancel_do(call: CallbackQuery):
     await _remove_ticket_button(booking_id, call.from_user.id)
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
+    await refresh_user_commands(call.message.bot, call.from_user.id)
     await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="Перейти в главное меню", callback_data="main_menu")
@@ -778,6 +782,7 @@ async def change_date_do(call: CallbackQuery):
     booking_id = int(call.data.replace("change_date_do_", ""))
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
+    await refresh_user_commands(call.message.bot, call.from_user.id)
     await _delete_previous_menu_message(call)
     await call.message.answer("Бронь отменена. Выбери новую дату 👇", reply_markup=await check_dates_kb())
     await call.answer()

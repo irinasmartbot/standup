@@ -17,6 +17,7 @@ from bot.db.crud import (
     set_rozygrysh_used,
     update_reminder_flag,
 )
+from bot.utils.bot_commands import refresh_user_commands
 from bot.utils.ticket import format_date, now_msk, parse_created_at, parse_event_datetime
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ async def send_raffle_reminder(row, reminder_type: str):
         parse_mode="HTML",
     )
     save_confirm_message_id(booking_id, sent.message_id)
+    await refresh_user_commands(bot, telegram_id)
 
 
 async def send_raffle_annulled(row):
@@ -125,6 +127,7 @@ async def send_raffle_annulled(row):
     )
     annul_booking(booking_id)
     set_rozygrysh_used(telegram_id, False)
+    await refresh_user_commands(bot, telegram_id)
 
 
 async def process_raffle_reminders():

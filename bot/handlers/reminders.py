@@ -6,6 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import bot, CHANNEL_LINK
 from bot.db.crud import get_booked_for_reminders, update_reminder_flag, annul_booking, save_confirm_message_id, get_booking_by_id
+from bot.utils.bot_commands import refresh_user_commands
 from bot.utils.ticket import format_date, now_msk, parse_event_datetime, parse_created_at
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ async def send_booking_reminder(row, reminder_type):
     await _clear_prev_buttons(booking_id, telegram_id)
     sent = await bot.send_message(telegram_id, text, reply_markup=booking_manage_kb(booking_id), parse_mode="HTML")
     save_confirm_message_id(booking_id, sent.message_id)
+    await refresh_user_commands(bot, telegram_id)
 
 
 async def send_annulled_message(row):
@@ -87,6 +89,7 @@ async def send_annulled_message(row):
         parse_mode="HTML",
     )
     annul_booking(booking_id)
+    await refresh_user_commands(bot, telegram_id)
 
 
 async def process_due_reminders():
