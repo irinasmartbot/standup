@@ -5,8 +5,8 @@ from bot.db.crud import get_user_bookings_for_commands
 
 BASE_COMMANDS = [
     BotCommand(command="main_menu", description="Главное меню"),
-    BotCommand(command="manager", description="Связаться с менеджером"),
-    BotCommand(command="help", description="Задать вопрос"),
+    BotCommand(command="manager", description="Задать вопрос менеджеру"),
+    BotCommand(command="help", description="Задать вопрос по боту"),
     BotCommand(command="channel", description="Канал анонсов"),
 ]
 
