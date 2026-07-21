@@ -296,7 +296,7 @@ async def help_command(message: Message, state: FSMContext):
         await message.answer("Сейчас вопрос лучше отправить менеджеру напрямую:", reply_markup=_link_kb("💬 Написать менеджеру", MANAGER_LINK))
         return
     await state.set_state(HelpState.waiting_question)
-    await message.answer("Напишите ваш вопрос одним сообщением, и мы передадим его менеджеру.")
+    await message.answer("Напиши вопрос ниже (одним сообщением), и мы передадим его команде 👇")
 
 
 @router.message(HelpState.waiting_question, F.chat.type == "private")
