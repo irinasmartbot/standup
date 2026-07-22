@@ -212,7 +212,6 @@ async def _send_best_event_card(message, event, back_callback="best_dates"):
         kb.button(text="🎟 Купить билет", url=payment_url)
     else:
         kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
-    kb.button(text="🎤 Кто выступает", callback_data=f"best_speakers_{event['id']}")
     kb.button(text="◀️ Назад", callback_data=back_callback)
     kb.adjust(1)
     text = _best_event_text(event)
@@ -248,9 +247,8 @@ def _best_location_carousel_kb(events, index: int):
         kb.button(text="›", callback_data=f"best_loc_carousel_{event['id']}_next")
         nav_buttons += 1
 
-    kb.button(text="🎤 Кто выступает", callback_data=f"best_speakers_{event['id']}")
     kb.button(text="◀️ Назад", callback_data="best_venues")
-    kb.adjust(1, nav_buttons, 1, 1)
+    kb.adjust(1, nav_buttons, 1)
     return kb.as_markup()
 
 
@@ -593,19 +591,6 @@ async def best_event(call: CallbackQuery):
     else:
         await call.message.answer("Мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await _best_dates_kb())
     await call.answer()
-
-
-@router.callback_query(lambda c: c.data.startswith("best_speakers_"))
-async def best_speakers(call: CallbackQuery):
-    event_id = call.data.replace("best_speakers_", "", 1)
-    event = next((e for e in await load_events("best") if str(e["id"]) == event_id), None)
-    host = (event or {}).get("host") or ""
-    if not host:
-        await call.answer(f"По составу комиков напишите менеджеру {_manager_username()}", show_alert=True)
-        return
-    if len(host) > 190:
-        host = host[:187].rstrip() + "..."
-    await call.answer(host, show_alert=True)
 
 
 async def _hitloto_dates_kb():

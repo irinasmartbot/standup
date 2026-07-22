@@ -1,5 +1,6 @@
 import csv
 import asyncio
+import logging
 import aiohttp
 from datetime import datetime
 from io import StringIO
@@ -9,6 +10,9 @@ from psycopg.rows import dict_row
 
 from bot.config import BEST_CSV_URL, CSV_URL, DATABASE_URL, EVENTS_SOURCE, HITLOTO_CSV_URL
 from bot.utils.ticket import now_msk
+
+logger = logging.getLogger(__name__)
+POSTGRES_CONNECT_TIMEOUT = 5
 
 
 EVENTS_FROM_POSTGRES_SQL = """
@@ -57,7 +61,11 @@ def _row_to_event(row):
 
 
 def _load_events_from_postgres(event_format):
-    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+    with psycopg.connect(
+        DATABASE_URL,
+        row_factory=dict_row,
+        connect_timeout=POSTGRES_CONNECT_TIMEOUT,
+    ) as conn:
         with conn.cursor() as cur:
             cur.execute(EVENTS_FROM_POSTGRES_SQL, {"event_format": event_format})
             return [_row_to_event(row) for row in cur.fetchall()]
@@ -117,10 +125,7 @@ def _event_from_csv_row(row, source_row, event_format):
     return _event_from_proverka_row(row, source_row)
 
 
-async def load_events(event_format="proverka"):
-    if EVENTS_SOURCE == "postgres" and DATABASE_URL:
-        return await load_events_from_postgres(event_format)
-
+async def _load_events_from_sheets(event_format="proverka"):
     csv_urls = {
         "best": BEST_CSV_URL,
         "hitloto": HITLOTO_CSV_URL,
@@ -149,6 +154,13 @@ async def load_events(event_format="proverka"):
         except IndexError:
             continue
     return events
+
+
+async def load_events(event_format="proverka"):
+    if EVENTS_SOURCE == "postgres" and DATABASE_URL:
+        return await load_events_from_postgres(event_format)
+
+    return await _load_events_from_sheets(event_format)
 
 
 async def get_event(event_date, event_time, event_format="proverka"):
