@@ -3,18 +3,19 @@ import hmac
 import html
 import os
 import sqlite3
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urlencode
 
 import psycopg
-from psycopg.rows import dict_row
 from aiohttp import web
+from psycopg.rows import dict_row
 
 
 STATUSES = ("booked", "confirmed", "cancelled", "annulled")
-RESERVED_STATUSES = {"booked", "confirmed"}
+ACTIVE_STATUSES = {"booked", "confirmed"}
+FORMAT_OPTIONS = ("proverka", "rozygrysh")
 STATUS_LABELS = {
     "booked": "Забронировано",
     "confirmed": "Подтверждено",
@@ -73,6 +74,10 @@ def _use_postgres(config: AdminConfig) -> bool:
     return config.bookings_source == "postgres" and bool(config.database_url)
 
 
+def _h(value) -> str:
+    return html.escape(str(value or ""))
+
+
 def _parse_int(value, default=0):
     try:
         return int(value or 0)
@@ -80,11 +85,50 @@ def _parse_int(value, default=0):
         return default
 
 
+def _date_to_display(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(value, fmt).strftime("%d.%m.%Y")
+        except ValueError:
+            pass
+    return value
+
+
+def _date_to_input(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return ""
+
+
+def _parse_date_for_db(value: str):
+    clean = _date_to_display(value)
+    if not clean:
+        return None
+    try:
+        return datetime.strptime(clean, "%d.%m.%Y").date()
+    except ValueError:
+        return None
+
+
 def _short_dt(value):
     if not value:
         return ""
     text = str(value)
-    for fmt in ("%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S.%f%z",
+        "%Y-%m-%d %H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+    ):
         try:
             return datetime.strptime(text, fmt).strftime("%d.%m %H:%M")
         except ValueError:
@@ -99,15 +143,34 @@ def _normalize_status(value):
     return value if value in STATUSES else "booked"
 
 
-def _fetch_postgres_rows(config: AdminConfig, filters: dict) -> list[dict]:
-    where = ["e.event_date >= CURRENT_DATE - INTERVAL '1 day'"]
+def _format_filter_sql(filters: dict, params: dict, include_empty_events: bool) -> str:
+    fmt = filters.get("format")
+    if fmt == "rozygrysh":
+        return "b.format = %(format)s"
+    if fmt == "proverka":
+        params["format"] = fmt
+        if include_empty_events:
+            return "(b.format = %(format)s OR (b.id IS NULL AND e.format = %(format)s))"
+        return "b.format = %(format)s"
+    return ""
+
+
+def _fetch_postgres_rows(config: AdminConfig, filters: dict, include_empty_events=False) -> list[dict]:
+    where = []
     params = {}
-    if filters.get("format"):
-        where.append("e.format = %(format)s")
-        params["format"] = filters["format"]
-    if filters.get("date"):
-        where.append("e.event_date = to_date(%(date)s, 'DD.MM.YYYY')")
-        params["date"] = filters["date"]
+    date_value = _parse_date_for_db(filters.get("date", ""))
+    if date_value:
+        where.append("e.event_date = %(event_date)s")
+        params["event_date"] = date_value
+    elif include_empty_events:
+        where.append("e.event_date >= CURRENT_DATE")
+
+    format_sql = _format_filter_sql(filters, params, include_empty_events)
+    if format_sql:
+        where.append(format_sql)
+    if not include_empty_events:
+        where.append("b.id IS NOT NULL")
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
 
     sql = f"""
         SELECT
@@ -128,6 +191,8 @@ def _fetch_postgres_rows(config: AdminConfig, filters: dict) -> list[dict]:
             b.cancelled_at::text,
             b.annulled_at::text,
             b.updated_at::text,
+            b.reminder_24h_sent,
+            b.reminder_day_sent,
             u.telegram_id,
             u.vk_id,
             u.username,
@@ -136,7 +201,7 @@ def _fetch_postgres_rows(config: AdminConfig, filters: dict) -> list[dict]:
         FROM events e
         LEFT JOIN bookings b ON b.event_id = e.id
         LEFT JOIN users u ON u.id = b.user_id
-        WHERE {" AND ".join(where)}
+        {where_sql}
         ORDER BY e.event_date, e.event_time, e.location, b.created_at DESC NULLS LAST
     """
     with psycopg.connect(config.database_url, row_factory=dict_row) as conn:
@@ -149,7 +214,7 @@ def _sqlite_columns(conn, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
-def _fetch_sqlite_rows(config: AdminConfig, filters: dict) -> list[dict]:
+def _fetch_sqlite_rows(config: AdminConfig, filters: dict, include_empty_events=False) -> list[dict]:
     if not os.path.exists(config.db_path):
         return []
     if filters.get("format") and filters["format"] != "proverka":
@@ -161,15 +226,17 @@ def _fetch_sqlite_rows(config: AdminConfig, filters: dict) -> list[dict]:
         columns = _sqlite_columns(conn, "bookings")
         where = []
         params = []
-        if filters.get("date"):
+        date_display = _date_to_display(filters.get("date", ""))
+        if date_display:
             where.append("event_date = ?")
-            params.append(filters["date"])
+            params.append(date_display)
         if filters.get("status"):
             where.append("status = ?")
             params.append(filters["status"])
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-        has_annulled_at = "annulled_at" in columns
-        annulled_expr = "annulled_at" if has_annulled_at else "NULL"
+        annulled_expr = "annulled_at" if "annulled_at" in columns else "NULL"
+        reminder_24h_expr = "reminder_24h_sent" if "reminder_24h_sent" in columns else "0"
+        reminder_day_expr = "reminder_day_sent" if "reminder_day_sent" in columns else "0"
         rows = conn.execute(
             f"""
             SELECT
@@ -185,7 +252,9 @@ def _fetch_sqlite_rows(config: AdminConfig, filters: dict) -> list[dict]:
                 guests,
                 status,
                 created_at,
-                {annulled_expr} AS annulled_at
+                {annulled_expr} AS annulled_at,
+                {reminder_24h_expr} AS reminder_24h_sent,
+                {reminder_day_expr} AS reminder_day_sent
             FROM bookings
             {where_sql}
             ORDER BY event_date, event_time, created_at DESC
@@ -215,19 +284,54 @@ def _fetch_sqlite_rows(config: AdminConfig, filters: dict) -> list[dict]:
     return result
 
 
-def fetch_admin_rows(config: AdminConfig, filters: dict) -> list[dict]:
+def fetch_admin_rows(config: AdminConfig, filters: dict, include_empty_events=False) -> list[dict]:
     if _use_postgres(config):
-        rows = _fetch_postgres_rows(config, filters)
-        status = filters.get("status")
-        if status:
-            rows = [row for row in rows if row.get("booking_id") is not None and row.get("status") == status]
-        return rows
-    return _fetch_sqlite_rows(config, filters)
+        rows = _fetch_postgres_rows(config, filters, include_empty_events)
+    else:
+        rows = _fetch_sqlite_rows(config, filters, include_empty_events)
+    status = filters.get("status")
+    if status:
+        rows = [row for row in rows if row.get("booking_id") is not None and row.get("status") == status]
+    return rows
+
+
+def _booking_from_row(row: dict, event: dict | None = None) -> dict:
+    status = _normalize_status(row.get("status"))
+    changed_at = (
+        row.get("cancelled_at")
+        or row.get("annulled_at")
+        or row.get("confirmed_at")
+        or row.get("updated_at")
+        or row.get("created_at")
+    )
+    return {
+        "id": row.get("booking_id"),
+        "status": status,
+        "status_label": STATUS_LABELS[status],
+        "guests": _parse_int(row.get("guests")),
+        "source": row.get("source") or "",
+        "format": row.get("booking_format") or row.get("event_format") or "",
+        "created_at": _short_dt(row.get("created_at")),
+        "changed_at": _short_dt(changed_at),
+        "event_date": row.get("event_date") or "",
+        "event_time": row.get("event_time") or "",
+        "location": row.get("location") or "",
+        "address": row.get("address") or "",
+        "name": row.get("name") or "",
+        "username": row.get("username") or "",
+        "phone": row.get("phone") or "",
+        "telegram_id": row.get("telegram_id") or "",
+        "vk_id": row.get("vk_id") or "",
+        "reminder_24h_sent": bool(row.get("reminder_24h_sent")),
+        "reminder_day_sent": bool(row.get("reminder_day_sent")),
+        "event": event,
+    }
 
 
 def build_dashboard(rows: list[dict]) -> dict:
     events = {}
-    activity = []
+    bookings = []
+    users = {}
     totals = {"events": 0, "bookings": 0, "reserved_guests": 0, "confirmed_guests": 0}
 
     for row in rows:
@@ -249,56 +353,55 @@ def build_dashboard(rows: list[dict]) -> dict:
                 "confirmed_guests": 0,
             },
         )
-
         if not row.get("booking_id"):
             continue
 
-        status = _normalize_status(row.get("status"))
-        guests = _parse_int(row.get("guests"))
-        changed_at = (
-            row.get("cancelled_at")
-            or row.get("annulled_at")
-            or row.get("confirmed_at")
-            or row.get("updated_at")
-            or row.get("created_at")
-        )
-        booking = {
-            "id": row.get("booking_id"),
-            "status": status,
-            "status_label": STATUS_LABELS[status],
-            "guests": guests,
-            "source": row.get("source") or "",
-            "format": row.get("booking_format") or row.get("event_format") or "",
-            "created_at": _short_dt(row.get("created_at")),
-            "changed_at": _short_dt(changed_at),
-            "name": row.get("name") or "",
-            "username": row.get("username") or "",
-            "phone": row.get("phone") or "",
-            "telegram_id": row.get("telegram_id") or "",
-            "vk_id": row.get("vk_id") or "",
-            "event": event,
-        }
+        booking = _booking_from_row(row, event)
+        status = booking["status"]
+        guests = booking["guests"]
         event["bookings"].append(booking)
         event["status_counts"][status] += 1
         event["status_guests"][status] += guests
-        if status in RESERVED_STATUSES:
+        if status in ACTIVE_STATUSES:
             event["reserved_guests"] += guests
             totals["reserved_guests"] += guests
         if status == "confirmed":
             event["confirmed_guests"] += guests
             totals["confirmed_guests"] += guests
         totals["bookings"] += 1
-        activity.append(booking)
+        bookings.append(booking)
+
+        user_key = str(booking["telegram_id"] or booking["vk_id"] or booking["phone"] or booking["name"] or booking["id"])
+        user = users.setdefault(
+            user_key,
+            {
+                "key": user_key,
+                "name": booking["name"],
+                "username": booking["username"],
+                "phone": booking["phone"],
+                "telegram_id": booking["telegram_id"],
+                "vk_id": booking["vk_id"],
+                "source": booking["source"],
+                "bookings": [],
+                "status_counts": Counter(),
+                "guests_confirmed": 0,
+                "guests_reserved": 0,
+            },
+        )
+        user["bookings"].append(booking)
+        user["status_counts"][status] += 1
+        if status in ACTIVE_STATUSES:
+            user["guests_reserved"] += guests
+        if status == "confirmed":
+            user["guests_confirmed"] += guests
 
     for event in events.values():
         event["bookings"].sort(key=lambda b: (b["changed_at"], str(b["id"])), reverse=True)
-    activity.sort(key=lambda b: (b["changed_at"], str(b["id"])), reverse=True)
+    bookings.sort(key=lambda b: (b["event_date"], b["event_time"], str(b["id"])), reverse=True)
+    for user in users.values():
+        user["bookings"].sort(key=lambda b: (b["event_date"], b["event_time"], str(b["id"])), reverse=True)
     totals["events"] = len(events)
-    return {"events": list(events.values()), "activity": activity[:20], "totals": totals}
-
-
-def _h(value) -> str:
-    return html.escape(str(value or ""))
+    return {"events": list(events.values()), "bookings": bookings, "users": users, "totals": totals}
 
 
 def _query_link(filters: dict, **updates) -> str:
@@ -333,35 +436,23 @@ def _status_bar(event: dict) -> str:
     return f'<div class="status-bar">{"".join(parts)}</div>'
 
 
-def _guest_bar(title: str, current: int, max_seats: int, color: str, free_text: str = "") -> str:
-    if max_seats <= 0:
-        return f'<div class="capacity muted">{_h(title)}: лимит мест не указан</div>'
-    percent = min(100, current / max_seats * 100)
-    right = free_text or f"{current}/{max_seats}"
-    return (
-        f'<div class="capacity-line"><span>{_h(title)}: {current}/{max_seats}</span>'
-        f'<span>{_h(right)}</span></div>'
-        f'<div class="capacity-bar"><span style="width:{percent:.1f}%;background:{color}"></span></div>'
-    )
-
-
-def _capacity_bars(event: dict) -> str:
+def _seat_bar(event: dict) -> str:
     max_seats = event["max_seats"]
-    if max_seats <= 0:
-        return '<div class="capacity muted">Лимит мест не указан</div>'
     reserved = event["reserved_guests"]
     confirmed = event["confirmed_guests"]
+    if max_seats <= 0:
+        return f'<div class="capacity muted">Активные брони: {reserved} чел. Лимит мест не указан.</div>'
     free = max(0, max_seats - confirmed)
-    free_text = f"{free} свободно"
+    percent = min(100, confirmed / max_seats * 100)
     return (
-        '<div class="capacity-grid">'
-        f'{_guest_bar("Забронировали всего", reserved, max_seats, "#2563eb")}'
-        f'{_guest_bar("Места заняты билетами", confirmed, max_seats, "#22c55e", free_text)}'
-        '</div>'
+        f'<div class="capacity-line"><span>Места заняты билетами: {confirmed}/{max_seats}</span>'
+        f'<span>{free} свободно</span></div>'
+        f'<div class="capacity-bar"><span style="width:{percent:.1f}%"></span></div>'
+        f'<div class="active-bookings">Активные брони: <b>{reserved} чел</b></div>'
     )
 
 
-def _booking_table(bookings: list[dict]) -> str:
+def _booking_table(bookings: list[dict], compact=False) -> str:
     if not bookings:
         return '<p class="muted">Броней пока нет.</p>'
     rows = []
@@ -369,6 +460,13 @@ def _booking_table(bookings: list[dict]) -> str:
         contact = _h(booking["phone"])
         if booking["username"]:
             contact += f'<br><span class="muted">@{_h(booking["username"])}</span>'
+        event_cols = ""
+        if not compact:
+            event_cols = (
+                f"<td>{_h(booking['event_date'])}</td>"
+                f"<td>{_h(booking['event_time'])}</td>"
+                f"<td>{_h(booking['location'])}<br><span class='muted'>{_h(booking['address'])}</span></td>"
+            )
         rows.append(
             "<tr>"
             f"<td>#{_h(booking['id'])}</td>"
@@ -376,84 +474,170 @@ def _booking_table(bookings: list[dict]) -> str:
             f"<td><b>{_h(booking['name'])}</b><br><span class='muted'>{_h(booking['source'])}</span></td>"
             f"<td>{contact}</td>"
             f"<td>{_h(booking['guests'])}</td>"
+            f"{event_cols}"
             f"<td>{_h(booking['created_at'])}</td>"
             f"<td>{_h(booking['changed_at'])}</td>"
             "</tr>"
         )
+    event_headers = "" if compact else "<th>Дата</th><th>Время</th><th>Локация</th>"
     return (
-        "<table><thead><tr><th>ID</th><th>Статус</th><th>Клиент</th>"
-        "<th>Контакт</th><th>Гости</th><th>Создана</th><th>Изменена</th></tr></thead>"
+        "<table><thead><tr><th>ID</th><th>Статус</th><th>Клиент</th><th>Контакт</th><th>Гости</th>"
+        f"{event_headers}<th>Создана</th><th>Изменена</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
 
 
-def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
-    event_cards = []
-    for event in dashboard["events"]:
-        counts = " ".join(
-            f'<span class="counter">{_h(STATUS_LABELS[s])}: <b>{event["status_counts"].get(s, 0)}</b></span>'
-            for s in STATUSES
-        )
-        event_cards.append(
-            '<section class="card">'
-            '<div class="event-head">'
-            f'<div><h2>{_h(event["date"])} в {_h(event["time"])} · {_h(event["location"])}</h2>'
-            f'<p>{_h(event["address"])}</p></div>'
-            f'<span class="format">{_h(event["format"])}</span>'
-            '</div>'
-            f'{_capacity_bars(event)}'
-            f'{_status_bar(event)}'
-            f'<div class="counters">{counts}</div>'
-            f'{_booking_table(event["bookings"])}'
-            '</section>'
-        )
+def _event_card(event: dict) -> str:
+    counts = " ".join(
+        f'<span class="counter">{_h(STATUS_LABELS[s])}: <b>{event["status_counts"].get(s, 0)}</b></span>'
+        for s in STATUSES
+    )
+    return (
+        '<section class="card">'
+        '<div class="event-head">'
+        f'<div><h2>{_h(event["date"])} в {_h(event["time"])} · {_h(event["location"])}</h2>'
+        f'<p>{_h(event["address"])}</p></div>'
+        f'<span class="format">{_h(event["format"])}</span>'
+        '</div>'
+        f'{_seat_bar(event)}'
+        f'{_status_bar(event)}'
+        f'<div class="counters">{counts}</div>'
+        f'{_booking_table(event["bookings"], compact=True)}'
+        '</section>'
+    )
 
-    activity_rows = []
-    for booking in dashboard["activity"]:
-        event = booking["event"]
-        activity_rows.append(
+
+def _tabs(filters: dict) -> str:
+    tabs = [("date", "По дате"), ("bookings", "Все брони"), ("users", "Users")]
+    current = filters.get("tab") or "date"
+    return "".join(
+        f'<a class="tab {"active" if current == key else ""}" href="{_query_link(filters, tab=key, u="")}">{label}</a>'
+        for key, label in tabs
+    )
+
+
+def _format_select(filters: dict) -> str:
+    options = ['<option value="">Все форматы</option>']
+    for fmt in FORMAT_OPTIONS:
+        selected = "selected" if filters.get("format") == fmt else ""
+        options.append(f'<option value="{fmt}" {selected}>{fmt}</option>')
+    return "".join(options)
+
+
+def _status_filter(filters: dict) -> str:
+    links = [f'<a class="pill {"active" if not filters.get("status") else ""}" href="{_query_link(filters, status="")}">Все статусы</a>']
+    for status in STATUSES:
+        links.append(
+            f'<a class="pill {"active" if filters.get("status") == status else ""}" '
+            f'href="{_query_link(filters, status=status)}">{_h(STATUS_LABELS[status])}</a>'
+        )
+    return "".join(links)
+
+
+def _date_tab(dashboard: dict, filters: dict) -> str:
+    date_value = filters.get("date", "")
+    if not date_value:
+        return '<section class="card empty-state"><h2>Выберите дату</h2><p>Выберите дату в календаре выше, чтобы посмотреть брони по мероприятиям.</p></section>'
+    events_with_bookings = [event for event in dashboard["events"] if event["bookings"]]
+    if not events_with_bookings:
+        return '<section class="card empty-state"><h2>Пока нет бронирования на указанную дату</h2><p>На эту дату пока не создано ни одной брони.</p></section>'
+    return "".join(_event_card(event) for event in events_with_bookings)
+
+
+def _bookings_tab(dashboard: dict, filters: dict) -> str:
+    bookings = dashboard["bookings"]
+    by_format = defaultdict(list)
+    for booking in bookings:
+        by_format[booking["format"]].append(booking)
+    sections = []
+    for fmt, title in (("proverka", "Проверка материала"), ("rozygrysh", "Розыгрыш")):
+        if filters.get("format") and filters["format"] != fmt:
+            continue
+        sections.append(f'<section class="card"><h2>{title}</h2>{_booking_table(by_format.get(fmt, []))}</section>')
+    if not sections:
+        return '<section class="card empty-state"><h2>Броней пока нет</h2></section>'
+    return "".join(sections)
+
+
+def _user_stage(user: dict) -> str:
+    counts = user["status_counts"]
+    if counts.get("confirmed"):
+        return "Есть полученный билет"
+    if counts.get("booked"):
+        return "Есть активная бронь, билет не получен"
+    if counts.get("cancelled"):
+        return "Отменял бронь"
+    if counts.get("annulled"):
+        return "Бронь аннулировалась"
+    return "Нет активного этапа"
+
+
+def _users_tab(dashboard: dict, filters: dict) -> str:
+    users = sorted(dashboard["users"].values(), key=lambda u: (u["name"] or "", u["phone"] or ""))
+    selected_key = filters.get("u", "")
+    rows = []
+    for user in users:
+        rows.append(
             "<tr>"
-            f"<td>{_h(booking['changed_at'])}</td>"
-            f"<td>{_status_badge(booking['status'])}</td>"
-            f"<td>{_h(event['date'])} {_h(event['time'])}<br><span class='muted'>{_h(event['location'])}</span></td>"
-            f"<td>{_h(booking['name'])}</td>"
-            f"<td>{_h(booking['guests'])}</td>"
+            f"<td><a href='{_query_link(filters, u=user['key'])}'>{_h(user['name'] or 'Без имени')}</a><br><span class='muted'>{_h(user['source'])}</span></td>"
+            f"<td>{_h(user['phone'])}<br><span class='muted'>@{_h(user['username'])}</span></td>"
+            f"<td>{len(user['bookings'])}</td>"
+            f"<td>{user['status_counts'].get('booked', 0)}</td>"
+            f"<td>{user['status_counts'].get('confirmed', 0)}</td>"
+            f"<td>{user['status_counts'].get('cancelled', 0)}</td>"
+            f"<td>{_h(_user_stage(user))}</td>"
             "</tr>"
         )
-    empty_activity = '<tr><td colspan="5" class="muted">Изменений пока нет</td></tr>'
-    activity = (
-        "<table><thead><tr><th>Когда</th><th>Статус</th><th>Мероприятие</th><th>Клиент</th><th>Гости</th></tr></thead>"
-        f"<tbody>{''.join(activity_rows) or empty_activity}</tbody></table>"
+    table = (
+        "<table><thead><tr><th>Клиент</th><th>Контакт</th><th>Всего</th><th>Активные</th>"
+        "<th>Билеты</th><th>Отмены</th><th>Этап</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"7\" class=\"muted\">Пользователей пока нет</td></tr>'}</tbody></table>"
     )
+    detail = ""
+    if selected_key and selected_key in dashboard["users"]:
+        user = dashboard["users"][selected_key]
+        reminders_24h = sum(1 for b in user["bookings"] if b["reminder_24h_sent"])
+        reminders_day = sum(1 for b in user["bookings"] if b["reminder_day_sent"])
+        detail = (
+            '<section class="card user-detail">'
+            f'<h2>{_h(user["name"] or "Без имени")}</h2>'
+            f'<p class="muted">{_h(user["phone"])} · @{_h(user["username"])} · источник: {_h(user["source"])}</p>'
+            '<div class="mini-metrics">'
+            f'<span>Всего броней: <b>{len(user["bookings"])}</b></span>'
+            f'<span>Активных: <b>{user["status_counts"].get("booked", 0)}</b></span>'
+            f'<span>Билетов: <b>{user["status_counts"].get("confirmed", 0)}</b></span>'
+            f'<span>Отмен: <b>{user["status_counts"].get("cancelled", 0)}</b></span>'
+            f'<span>Напоминание за сутки: <b>{reminders_24h}</b></span>'
+            f'<span>Напоминание в день: <b>{reminders_day}</b></span>'
+            '</div>'
+            f'<p><b>Текущий этап:</b> {_h(_user_stage(user))}</p>'
+            f'{_booking_table(user["bookings"])}'
+            '</section>'
+        )
+    return detail + f'<section class="card"><h2>Users</h2>{table}</section>'
 
-    filter_links = " ".join(
-        [
-            f'<a class="pill {"active" if not filters.get("status") else ""}" href="{_query_link(filters, status="")}">Все</a>',
-            *[
-                f'<a class="pill {"active" if filters.get("status") == status else ""}" '
-                f'href="{_query_link(filters, status=status)}">{_h(STATUS_LABELS[status])}</a>'
-                for status in STATUSES
-            ],
-        ]
-    )
+
+def _content(dashboard: dict, filters: dict) -> str:
+    tab = filters.get("tab") or "date"
+    if tab == "bookings":
+        return _bookings_tab(dashboard, filters)
+    if tab == "users":
+        return _users_tab(dashboard, filters)
+    return _date_tab(dashboard, filters)
+
+
+def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
     totals = dashboard["totals"]
-    format_options = "".join(
-        f'<option value="{fmt}" {"selected" if filters.get("format") == fmt else ""}>{fmt}</option>'
-        for fmt in ("proverka", "best", "rozygrysh", "1plus1")
-    )
-    hidden_status = (
-        f'<input type="hidden" name="status" value="{_h(filters.get("status"))}">'
-        if filters.get("status")
-        else ""
-    )
-    reset_link = _query_link({})
+    date_value = _date_to_input(filters.get("date", ""))
+    date_input = '<input name="date" type="date" value="{}">'.format(_h(date_value))
+    hidden_status = f'<input type="hidden" name="status" value="{_h(filters.get("status"))}">' if filters.get("status") else ""
     return f"""<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="refresh" content="30">
-  <title>Админка броней</title>
+  <title>Стендап бронирование</title>
   <style>
     :root {{ color-scheme: light; --bg:#f4f6fb; --card:#fff; --text:#111827; --muted:#667085; --line:#e5e7eb; }}
     * {{ box-sizing: border-box; }}
@@ -463,78 +647,71 @@ def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
     header p {{ margin:0; color:#cbd5e1; }}
     header a {{ color:white; }}
     main {{ max-width:1280px; margin:0 auto; padding:24px; }}
+    .tabs {{ display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }}
+    .tab, .pill {{ padding:10px 14px; border-radius:999px; border:1px solid var(--line); color:#111827; background:white; text-decoration:none; }}
+    .tab.active, .pill.active {{ background:#111827; color:white; border-color:#111827; }}
     .summary {{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:16px; margin-bottom:20px; }}
     .metric, .card, .filters {{ background:var(--card); border:1px solid var(--line); border-radius:18px; box-shadow:0 8px 30px rgba(15,23,42,.05); }}
     .metric {{ padding:18px; }}
     .metric span {{ display:block; color:var(--muted); font-size:14px; }}
     .metric b {{ display:block; margin-top:8px; font-size:30px; }}
-    .filters {{ padding:16px; margin-bottom:20px; display:flex; gap:12px; flex-wrap:wrap; align-items:center; }}
-    .filters form {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-left:auto; }}
-    input, select, button {{ border:1px solid var(--line); border-radius:10px; padding:9px 11px; background:white; font:inherit; }}
+    .filters {{ padding:16px; margin-bottom:20px; display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:space-between; }}
+    .filters form {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }}
+    input, select, button {{ border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:white; font:inherit; }}
     button {{ background:#111827; color:white; cursor:pointer; }}
-    .pill {{ padding:9px 12px; border-radius:999px; border:1px solid var(--line); color:#111827; text-decoration:none; }}
-    .pill.active {{ background:#111827; color:white; border-color:#111827; }}
     .card {{ padding:20px; margin-bottom:18px; }}
     .event-head {{ display:flex; justify-content:space-between; gap:16px; align-items:start; }}
-    h2 {{ margin:0 0 6px; font-size:22px; }}
+    h2 {{ margin:0 0 10px; font-size:22px; }}
     .event-head p {{ margin:0; color:var(--muted); }}
     .format {{ background:#eef2ff; color:#3730a3; padding:7px 10px; border-radius:999px; font-weight:700; }}
-    .capacity-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:16px; }}
     .capacity-line {{ display:flex; justify-content:space-between; margin-top:16px; font-weight:700; }}
     .capacity-bar, .status-bar {{ overflow:hidden; height:14px; background:#e5e7eb; border-radius:999px; margin-top:8px; display:flex; }}
-    .capacity-grid .capacity-line {{ margin-top:0; }}
-    .capacity-bar span {{ display:block; }}
+    .capacity-bar span {{ display:block; background:#22c55e; }}
     .status-bar span {{ display:block; }}
     .status-bar.empty {{ background:#eef2f7; }}
-    .counters {{ display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; }}
-    .counter {{ background:#f8fafc; border:1px solid var(--line); border-radius:999px; padding:7px 10px; color:#334155; }}
+    .active-bookings {{ margin-top:10px; color:#334155; }}
+    .counters, .mini-metrics {{ display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; }}
+    .counter, .mini-metrics span {{ background:#f8fafc; border:1px solid var(--line); border-radius:999px; padding:7px 10px; color:#334155; }}
     table {{ width:100%; border-collapse:collapse; margin-top:12px; }}
     th, td {{ padding:11px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }}
     th {{ color:#475467; font-size:13px; background:#f8fafc; }}
     .badge {{ display:inline-block; color:white; border-radius:999px; padding:5px 9px; font-size:12px; font-weight:700; }}
     .muted {{ color:var(--muted); }}
-    .activity {{ margin-bottom:22px; }}
+    .empty-state {{ text-align:center; padding:36px; color:#475467; }}
     @media (max-width: 780px) {{
       header {{ padding:22px 18px; }}
       main {{ padding:16px; }}
       .summary {{ grid-template-columns:1fr; }}
-      .capacity-grid {{ grid-template-columns:1fr; }}
       .event-head {{ display:block; }}
-      .filters form {{ margin-left:0; width:100%; }}
       table {{ display:block; overflow-x:auto; }}
     }}
   </style>
 </head>
 <body>
   <header>
-    <h1>Админка броней</h1>
+    <h1>Стендап бронирование</h1>
     <p>Автообновление каждые 30 секунд · источник данных: {_h(source_label)} · <a href="/admin/logout">выйти</a></p>
   </header>
   <main>
+    <nav class="tabs">{_tabs(filters)}</nav>
     <div class="summary">
-      <div class="metric"><span>Мероприятий в выдаче</span><b>{totals["events"]}</b></div>
+      <div class="metric"><span>Мероприятий</span><b>{totals["events"]}</b></div>
       <div class="metric"><span>Всего броней</span><b>{totals["bookings"]}</b></div>
-      <div class="metric"><span>Забронировали гостей</span><b>{totals["reserved_guests"]}</b></div>
+      <div class="metric"><span>Активные брони, гостей</span><b>{totals["reserved_guests"]}</b></div>
       <div class="metric"><span>Подтвердили билеты</span><b>{totals["confirmed_guests"]}</b></div>
     </div>
     <div class="filters">
-      {filter_links}
+      <div>{_status_filter(filters)}</div>
       <form method="get" action="/admin">
-        <input name="date" placeholder="Дата: 25.07.2026" value="{_h(filters.get("date", ""))}">
-        <select name="format">
-          <option value="">Все форматы</option>
-          {format_options}
-        </select>
+        <input type="hidden" name="tab" value="{_h(filters.get('tab') or 'date')}">
+        {date_input}
+        <select name="format">{_format_select(filters)}</select>
         {hidden_status}
         <button type="submit">Показать</button>
-        <a class="pill" href="{reset_link}">Сбросить</a>
+        <a class="pill" href="/admin?tab={_h(filters.get('tab') or 'date')}">Сбросить</a>
       </form>
     </div>
-    <section class="card activity">
-      <h2>Последние изменения</h2>
-      {activity}
-    </section>
-    {''.join(event_cards) or '<section class="card"><p class="muted">Нет данных по выбранным фильтрам.</p></section>'}
+    {_content(dashboard, filters)}
   </main>
 </body>
 </html>"""
@@ -542,9 +719,11 @@ def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
 
 def _filters_from_request(request: web.Request) -> dict:
     return {
+        "tab": request.query.get("tab", "date").strip() or "date",
         "status": request.query.get("status", "").strip(),
         "date": request.query.get("date", "").strip(),
         "format": request.query.get("format", "").strip(),
+        "u": request.query.get("u", "").strip(),
     }
 
 
@@ -573,7 +752,7 @@ def render_login_html(error: str = "") -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Вход в админку</title>
+  <title>Вход · Стендап бронирование</title>
   <style>
     body {{ margin:0; min-height:100vh; display:grid; place-items:center; background:#f4f6fb; font-family:Arial,sans-serif; color:#111827; }}
     form {{ width:min(420px, calc(100vw - 32px)); background:white; padding:28px; border-radius:18px; box-shadow:0 16px 50px rgba(15,23,42,.12); }}
@@ -586,7 +765,7 @@ def render_login_html(error: str = "") -> str:
 </head>
 <body>
   <form method="post" action="/admin/login">
-    <h1>Вход в админку</h1>
+    <h1>Стендап бронирование</h1>
     <p>Введите админ-токен из переменной <b>ADMIN_TOKEN</b>.</p>
     {error_html}
     <input name="token" type="password" autofocus placeholder="ADMIN_TOKEN">
@@ -618,8 +797,11 @@ async def admin_page(request: web.Request) -> web.Response:
     filters = _filters_from_request(request)
     if filters.get("status") and filters["status"] not in STATUSES:
         filters["status"] = ""
+    if filters.get("format") and filters["format"] not in FORMAT_OPTIONS:
+        filters["format"] = ""
+    include_empty_events = filters.get("tab") == "date" and bool(filters.get("date"))
     loop = asyncio.get_running_loop()
-    rows = await loop.run_in_executor(None, fetch_admin_rows, config, filters)
+    rows = await loop.run_in_executor(None, fetch_admin_rows, config, filters, include_empty_events)
     dashboard = build_dashboard(rows)
     source_label = "PostgreSQL" if _use_postgres(config) else f"SQLite ({config.db_path})"
     return web.Response(text=render_admin_html(dashboard, filters, source_label), content_type="text/html")
@@ -630,11 +812,7 @@ async def login_page(request: web.Request) -> web.Response:
     data = await request.post()
     token = (data.get("token") or "").strip()
     if not _token_matches(token, config):
-        return web.Response(
-            text=render_login_html("Неверный токен"),
-            status=401,
-            content_type="text/html",
-        )
+        return web.Response(text=render_login_html("Неверный токен"), status=401, content_type="text/html")
     response = web.HTTPFound("/admin")
     response.set_cookie(
         ADMIN_COOKIE_NAME,
