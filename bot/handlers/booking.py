@@ -609,6 +609,24 @@ async def get_ticket(call: CallbackQuery):
         event_location = booking[8]
         guests = booking[9]
 
+        event = await get_event(event_date, event_time)
+        if event:
+            confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
+            if confirmed_guests + guests > event["max_seats"]:
+                available = max(0, event["max_seats"] - confirmed_guests)
+                kb = InlineKeyboardBuilder()
+                kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
+                kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+                kb.adjust(1)
+                await call.message.answer(
+                    "К сожалению, на это мероприятие уже не осталось мест для подтверждения билета.\n\n"
+                    f"Сейчас свободно: {available}."
+                    " Вы можете выбрать другую дату или написать менеджеру.",
+                    reply_markup=kb.as_markup(),
+                )
+                await call.answer()
+                return
+
         date_str = format_date(event_date)
         short_address = f"{event_location}, {event_address.split(',')[1] if ',' in event_address else event_address}"
         ticket_buf = generate_ticket(name, event_date, event_time, short_address, guests)

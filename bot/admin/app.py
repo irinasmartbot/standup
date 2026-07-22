@@ -14,7 +14,7 @@ from aiohttp import web
 
 
 STATUSES = ("booked", "confirmed", "cancelled", "annulled")
-ACTIVE_STATUSES = {"booked", "confirmed"}
+RESERVED_STATUSES = {"booked", "confirmed"}
 STATUS_LABELS = {
     "booked": "Забронировано",
     "confirmed": "Подтверждено",
@@ -228,7 +228,7 @@ def fetch_admin_rows(config: AdminConfig, filters: dict) -> list[dict]:
 def build_dashboard(rows: list[dict]) -> dict:
     events = {}
     activity = []
-    totals = {"events": 0, "bookings": 0, "active_guests": 0}
+    totals = {"events": 0, "bookings": 0, "reserved_guests": 0, "confirmed_guests": 0}
 
     for row in rows:
         event_id = str(row.get("event_id") or "unknown")
@@ -245,7 +245,8 @@ def build_dashboard(rows: list[dict]) -> dict:
                 "bookings": [],
                 "status_counts": defaultdict(int),
                 "status_guests": defaultdict(int),
-                "active_guests": 0,
+                "reserved_guests": 0,
+                "confirmed_guests": 0,
             },
         )
 
@@ -280,9 +281,12 @@ def build_dashboard(rows: list[dict]) -> dict:
         event["bookings"].append(booking)
         event["status_counts"][status] += 1
         event["status_guests"][status] += guests
-        if status in ACTIVE_STATUSES:
-            event["active_guests"] += guests
-            totals["active_guests"] += guests
+        if status in RESERVED_STATUSES:
+            event["reserved_guests"] += guests
+            totals["reserved_guests"] += guests
+        if status == "confirmed":
+            event["confirmed_guests"] += guests
+            totals["confirmed_guests"] += guests
         totals["bookings"] += 1
         activity.append(booking)
 
@@ -329,17 +333,31 @@ def _status_bar(event: dict) -> str:
     return f'<div class="status-bar">{"".join(parts)}</div>'
 
 
-def _capacity_bar(event: dict) -> str:
+def _guest_bar(title: str, current: int, max_seats: int, color: str, free_text: str = "") -> str:
+    if max_seats <= 0:
+        return f'<div class="capacity muted">{_h(title)}: лимит мест не указан</div>'
+    percent = min(100, current / max_seats * 100)
+    right = free_text or f"{current}/{max_seats}"
+    return (
+        f'<div class="capacity-line"><span>{_h(title)}: {current}/{max_seats}</span>'
+        f'<span>{_h(right)}</span></div>'
+        f'<div class="capacity-bar"><span style="width:{percent:.1f}%;background:{color}"></span></div>'
+    )
+
+
+def _capacity_bars(event: dict) -> str:
     max_seats = event["max_seats"]
     if max_seats <= 0:
         return '<div class="capacity muted">Лимит мест не указан</div>'
-    active = event["active_guests"]
-    percent = min(100, active / max_seats * 100)
-    free = max(0, max_seats - active)
+    reserved = event["reserved_guests"]
+    confirmed = event["confirmed_guests"]
+    free = max(0, max_seats - confirmed)
+    free_text = f"{free} свободно"
     return (
-        f'<div class="capacity-line"><span>{active}/{max_seats} гостей</span>'
-        f'<span>{free} свободно</span></div>'
-        f'<div class="capacity-bar"><span style="width:{percent:.1f}%"></span></div>'
+        '<div class="capacity-grid">'
+        f'{_guest_bar("Забронировали всего", reserved, max_seats, "#2563eb")}'
+        f'{_guest_bar("Места заняты билетами", confirmed, max_seats, "#22c55e", free_text)}'
+        '</div>'
     )
 
 
@@ -383,7 +401,7 @@ def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
             f'<p>{_h(event["address"])}</p></div>'
             f'<span class="format">{_h(event["format"])}</span>'
             '</div>'
-            f'{_capacity_bar(event)}'
+            f'{_capacity_bars(event)}'
             f'{_status_bar(event)}'
             f'<div class="counters">{counts}</div>'
             f'{_booking_table(event["bookings"])}'
@@ -445,7 +463,7 @@ def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
     header p {{ margin:0; color:#cbd5e1; }}
     header a {{ color:white; }}
     main {{ max-width:1280px; margin:0 auto; padding:24px; }}
-    .summary {{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:16px; margin-bottom:20px; }}
+    .summary {{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:16px; margin-bottom:20px; }}
     .metric, .card, .filters {{ background:var(--card); border:1px solid var(--line); border-radius:18px; box-shadow:0 8px 30px rgba(15,23,42,.05); }}
     .metric {{ padding:18px; }}
     .metric span {{ display:block; color:var(--muted); font-size:14px; }}
@@ -461,9 +479,11 @@ def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
     h2 {{ margin:0 0 6px; font-size:22px; }}
     .event-head p {{ margin:0; color:var(--muted); }}
     .format {{ background:#eef2ff; color:#3730a3; padding:7px 10px; border-radius:999px; font-weight:700; }}
+    .capacity-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:16px; }}
     .capacity-line {{ display:flex; justify-content:space-between; margin-top:16px; font-weight:700; }}
     .capacity-bar, .status-bar {{ overflow:hidden; height:14px; background:#e5e7eb; border-radius:999px; margin-top:8px; display:flex; }}
-    .capacity-bar span {{ display:block; background:#2563eb; }}
+    .capacity-grid .capacity-line {{ margin-top:0; }}
+    .capacity-bar span {{ display:block; }}
     .status-bar span {{ display:block; }}
     .status-bar.empty {{ background:#eef2f7; }}
     .counters {{ display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; }}
@@ -478,6 +498,7 @@ def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
       header {{ padding:22px 18px; }}
       main {{ padding:16px; }}
       .summary {{ grid-template-columns:1fr; }}
+      .capacity-grid {{ grid-template-columns:1fr; }}
       .event-head {{ display:block; }}
       .filters form {{ margin-left:0; width:100%; }}
       table {{ display:block; overflow-x:auto; }}
@@ -493,7 +514,8 @@ def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
     <div class="summary">
       <div class="metric"><span>Мероприятий в выдаче</span><b>{totals["events"]}</b></div>
       <div class="metric"><span>Всего броней</span><b>{totals["bookings"]}</b></div>
-      <div class="metric"><span>Активных гостей</span><b>{totals["active_guests"]}</b></div>
+      <div class="metric"><span>Забронировали гостей</span><b>{totals["reserved_guests"]}</b></div>
+      <div class="metric"><span>Подтвердили билеты</span><b>{totals["confirmed_guests"]}</b></div>
     </div>
     <div class="filters">
       {filter_links}

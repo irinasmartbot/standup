@@ -411,6 +411,7 @@ def update_booking_guests(booking_id, guests):
 
 
 def get_total_guests(event_date, event_time, exclude_id=None):
+    """Guests that already took seats: only confirmed tickets count."""
     if _use_postgres():
         params = [_parse_event_date(event_date), _parse_event_time(event_time)]
         exclude_sql = ""
@@ -427,7 +428,7 @@ def get_total_guests(event_date, event_time, exclude_id=None):
                     JOIN events e ON e.id = b.event_id
                     WHERE e.event_date = %s
                       AND e.event_time = %s
-                      AND b.status IN ('booked', 'confirmed')
+                      AND b.status = 'confirmed'
                       {exclude_sql}
                     """,
                     params,
@@ -438,12 +439,12 @@ def get_total_guests(event_date, event_time, exclude_id=None):
     c = conn.cursor()
     if exclude_id:
         c.execute(
-            "SELECT SUM(guests) FROM bookings WHERE event_date=? AND event_time=? AND status IN ('booked', 'confirmed') AND id!=?",
+            "SELECT SUM(guests) FROM bookings WHERE event_date=? AND event_time=? AND status='confirmed' AND id!=?",
             (event_date, event_time, exclude_id),
         )
     else:
         c.execute(
-            "SELECT SUM(guests) FROM bookings WHERE event_date=? AND event_time=? AND status IN ('booked', 'confirmed')",
+            "SELECT SUM(guests) FROM bookings WHERE event_date=? AND event_time=? AND status='confirmed'",
             (event_date, event_time),
         )
     result = c.fetchone()[0]
