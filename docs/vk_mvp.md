@@ -41,3 +41,15 @@ python scripts/upload_vk_system_images.py --peer-id 92721078
 ```
 
 Скрипт загрузит системные картинки в VK и сохранит готовые attachment id в `VK_SYSTEM_IMAGES_CACHE`.
+
+## Афиша Хитлото
+
+Файл `фото/photo_2026-07-21_01-59-43.jpg` — актуальная афиша музыкального лото для VK.
+
+Чтобы заменить стандартную картинку `hitloto_start` этой афишей, загрузите ее отдельной командой:
+
+```bash
+python scripts/upload_vk_system_images.py --peer-id 92721078 --image hitloto_start=фото/photo_2026-07-21_01-59-43.jpg
+```
+
+После загрузки скрипт обновит `data/storage/vk_system_images.json`, и VK-бот сможет отправлять эту афишу по ключу `hitloto_start`.
