@@ -1,6 +1,8 @@
 import asyncio
 import logging
 
+from aiogram.exceptions import TelegramNetworkError, TelegramServerError
+
 from bot.config import MODERATION_CHAT_ID, bot, dp
 from bot.db.models import init_db
 from bot.db.crud import ensure_help_tables, ensure_raffle_tables
@@ -17,7 +19,11 @@ async def main():
     init_db()
     ensure_raffle_tables()
     ensure_help_tables()
-    await start.setup_bot_commands(bot)
+    try:
+        await start.setup_bot_commands(bot)
+    except (TelegramNetworkError, TelegramServerError) as exc:
+        # Telegram Bad Gateway / timeouts must not keep the bot from starting
+        logger.warning("Skip set_my_commands on startup: %s", exc)
     if MODERATION_CHAT_ID:
         logger.info("MODERATION_CHAT_ID is set (%s…)", str(MODERATION_CHAT_ID)[:6])
     else:
