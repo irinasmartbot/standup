@@ -67,6 +67,7 @@ class AdminConfig:
     db_path: str
     bookings_source: str
     admin_token: str
+    owner_token: str
 
 
 def load_config() -> AdminConfig:
@@ -76,6 +77,8 @@ def load_config() -> AdminConfig:
         db_path=os.getenv("DB_PATH", "bookings.db"),
         bookings_source=os.getenv("BOOKINGS_SOURCE", "postgres" if database_url else "sqlite"),
         admin_token=os.getenv("ADMIN_TOKEN", ""),
+        # Separate token for DB viewer; managers use ADMIN_TOKEN only
+        owner_token=os.getenv("ADMIN_OWNER_TOKEN", ""),
     )
 
 
@@ -636,13 +639,14 @@ def _event_card(event: dict) -> str:
     )
 
 
-def _tabs(filters: dict) -> str:
+def _tabs(filters: dict, can_view_db: bool = False) -> str:
     tabs = [
         ("date", "По дате"),
         ("bookings", "Все брони"),
         ("users", "Users"),
-        ("db", "База"),
     ]
+    if can_view_db:
+        tabs.append(("db", "База"))
     current = filters.get("tab") or "date"
     return "".join(
         f'<a class="tab {"active" if current == key else ""}" href="{_query_link(filters, tab=key, u="", table="", page="")}">{label}</a>'
@@ -847,6 +851,7 @@ def render_admin_html(
     filters: dict,
     source_label: str,
     db_data: dict | None = None,
+    can_view_db: bool = False,
 ) -> str:
     totals = dashboard["totals"]
     date_value = _date_to_input(filters.get("date", ""))
@@ -937,7 +942,7 @@ def render_admin_html(
     <p>Автообновление каждые 30 секунд · источник данных: {_h(source_label)} · <a href="/admin/logout">выйти</a></p>
   </header>
   <main>
-    <nav class="tabs">{_tabs(filters)}</nav>
+    <nav class="tabs">{_tabs(filters, can_view_db)}</nav>
     {summary_html}
     {_content(dashboard, filters, db_data)}
   </main>
@@ -957,22 +962,52 @@ def _filters_from_request(request: web.Request) -> dict:
     }
 
 
-def _token_matches(candidate: str, config: AdminConfig) -> bool:
-    if not candidate or not config.admin_token:
-        return False
-    return hmac.compare_digest(candidate, config.admin_token)
-
-
-def _check_auth(request: web.Request, config: AdminConfig) -> bool:
-    if not config.admin_token:
-        return True
-    token = (
+def _request_token(request: web.Request) -> str:
+    return (
         request.query.get("token")
         or request.headers.get("X-Admin-Token")
         or request.cookies.get(ADMIN_COOKIE_NAME)
         or ""
     )
-    return _token_matches(token, config)
+
+
+def _is_manager_token(candidate: str, config: AdminConfig) -> bool:
+    return bool(candidate and config.admin_token and hmac.compare_digest(candidate, config.admin_token))
+
+
+def _is_owner_token(candidate: str, config: AdminConfig) -> bool:
+    return bool(candidate and config.owner_token and hmac.compare_digest(candidate, config.owner_token))
+
+
+def _token_matches(candidate: str, config: AdminConfig) -> bool:
+    """Any valid login token: manager or owner."""
+    if not candidate:
+        return False
+    if not config.admin_token and not config.owner_token:
+        return False
+    return _is_manager_token(candidate, config) or _is_owner_token(candidate, config)
+
+
+def _can_view_db(request: web.Request, config: AdminConfig) -> bool:
+    """DB viewer is only for the owner token, not for managers."""
+    return _is_owner_token(_request_token(request), config)
+
+
+def _check_auth(request: web.Request, config: AdminConfig) -> bool:
+    # Open only if no tokens configured at all (local/dev)
+    if not config.admin_token and not config.owner_token:
+        return True
+    return _token_matches(_request_token(request), config)
+
+
+def _set_auth_cookie(response: web.Response, token: str) -> None:
+    response.set_cookie(
+        ADMIN_COOKIE_NAME,
+        token,
+        max_age=ADMIN_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="Lax",
+    )
 
 
 def render_login_html(error: str = "") -> str:
@@ -996,9 +1031,9 @@ def render_login_html(error: str = "") -> str:
 <body>
   <form method="post" action="/admin/login">
     <h1>Стендап бронирование</h1>
-    <p>Введите админ-токен из переменной <b>ADMIN_TOKEN</b>.</p>
+    <p>Введите токен доступа. У менеджера и владельца токены разные.</p>
     {error_html}
-    <input name="token" type="password" autofocus placeholder="ADMIN_TOKEN">
+    <input name="token" type="password" autofocus placeholder="Токен доступа">
     <button type="submit">Войти</button>
   </form>
 </body>
@@ -1014,16 +1049,13 @@ async def admin_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config):
         return web.Response(text=render_login_html(), status=401, content_type="text/html")
-    if config.admin_token and _token_matches(request.query.get("token", ""), config):
+    query_token = (request.query.get("token") or "").strip()
+    if query_token and _token_matches(query_token, config):
         response = web.HTTPFound(_redirect_without_token(request))
-        response.set_cookie(
-            ADMIN_COOKIE_NAME,
-            config.admin_token,
-            max_age=ADMIN_COOKIE_MAX_AGE,
-            httponly=True,
-            samesite="Lax",
-        )
+        _set_auth_cookie(response, query_token)
         raise response
+
+    can_view_db = _can_view_db(request, config)
     filters = _filters_from_request(request)
     if filters.get("status") and filters["status"] not in STATUSES:
         filters["status"] = ""
@@ -1031,6 +1063,10 @@ async def admin_page(request: web.Request) -> web.Response:
         filters["format"] = ""
     if filters.get("tab") not in {"date", "bookings", "users", "db"}:
         filters["tab"] = "date"
+    # Managers must not open DB via direct URL
+    if filters.get("tab") == "db" and not can_view_db:
+        raise web.HTTPFound("/admin?tab=date")
+
     loop = asyncio.get_running_loop()
     source_label = "PostgreSQL" if _use_postgres(config) else f"SQLite ({config.db_path})"
     db_data = None
@@ -1057,7 +1093,7 @@ async def admin_page(request: web.Request) -> web.Response:
         rows = await loop.run_in_executor(None, fetch_admin_rows, config, filters, include_empty_events)
         dashboard = build_dashboard(rows)
     return web.Response(
-        text=render_admin_html(dashboard, filters, source_label, db_data),
+        text=render_admin_html(dashboard, filters, source_label, db_data, can_view_db),
         content_type="text/html",
     )
 
@@ -1069,13 +1105,7 @@ async def login_page(request: web.Request) -> web.Response:
     if not _token_matches(token, config):
         return web.Response(text=render_login_html("Неверный токен"), status=401, content_type="text/html")
     response = web.HTTPFound("/admin")
-    response.set_cookie(
-        ADMIN_COOKIE_NAME,
-        config.admin_token,
-        max_age=ADMIN_COOKIE_MAX_AGE,
-        httponly=True,
-        samesite="Lax",
-    )
+    _set_auth_cookie(response, token)
     raise response
 
 
