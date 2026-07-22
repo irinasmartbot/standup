@@ -30,6 +30,15 @@ STATUS_COLORS = {
 }
 ADMIN_COOKIE_NAME = "standup_admin_token"
 ADMIN_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
+DB_VIEW_TABLES = (
+    "events",
+    "users",
+    "bookings",
+    "raffle_submissions",
+    "raffle_nav",
+    "help_requests",
+)
+DB_PAGE_SIZE = 50
 
 
 def _load_env_file(path=".env"):
@@ -295,6 +304,126 @@ def fetch_admin_rows(config: AdminConfig, filters: dict, include_empty_events=Fa
     return rows
 
 
+def _safe_table_name(table: str) -> str | None:
+    if table in DB_VIEW_TABLES:
+        return table
+    return None
+
+
+def list_db_tables(config: AdminConfig) -> list[dict]:
+    """Read-only table list with row counts for the DB viewer tab."""
+    if _use_postgres(config):
+        with psycopg.connect(config.database_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                      AND table_type = 'BASE TABLE'
+                      AND table_name = ANY(%s)
+                    ORDER BY table_name
+                    """,
+                    (list(DB_VIEW_TABLES),),
+                )
+                names = [row["table_name"] for row in cur.fetchall()]
+                result = []
+                for name in names:
+                    cur.execute(f'SELECT COUNT(*) AS cnt FROM "{name}"')
+                    result.append({"name": name, "rows": cur.fetchone()["cnt"]})
+                return result
+
+    if not os.path.exists(config.db_path):
+        return []
+    conn = sqlite3.connect(config.db_path)
+    try:
+        names = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ).fetchall()
+            if row[0] in DB_VIEW_TABLES or row[0] == "bookings"
+        ]
+        # Local SQLite historically has only bookings
+        if not names and "bookings" in {
+            r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }:
+            names = ["bookings"]
+        result = []
+        for name in names:
+            cnt = conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
+            result.append({"name": name, "rows": cnt})
+        return result
+    finally:
+        conn.close()
+
+
+def browse_db_table(config: AdminConfig, table: str, page: int = 1) -> dict:
+    """Read-only browse of one table: columns + page of rows."""
+    safe = _safe_table_name(table)
+    if not safe:
+        # Allow bookings-only sqlite fallback
+        if not _use_postgres(config) and table == "bookings":
+            safe = "bookings"
+        else:
+            return {"table": table, "columns": [], "rows": [], "total": 0, "page": 1, "pages": 1, "error": "Таблица недоступна"}
+
+    page = max(1, _parse_int(page, 1))
+    offset = (page - 1) * DB_PAGE_SIZE
+
+    if _use_postgres(config):
+        with psycopg.connect(config.database_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT column_name, data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = %s
+                    ORDER BY ordinal_position
+                    """,
+                    (safe,),
+                )
+                columns = [{"name": r["column_name"], "type": r["data_type"]} for r in cur.fetchall()]
+                cur.execute(f'SELECT COUNT(*) AS cnt FROM "{safe}"')
+                total = cur.fetchone()["cnt"]
+                cur.execute(
+                    f'SELECT * FROM "{safe}" ORDER BY 1 DESC NULLS LAST LIMIT %s OFFSET %s',
+                    (DB_PAGE_SIZE, offset),
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+    else:
+        if not os.path.exists(config.db_path):
+            return {"table": safe, "columns": [], "rows": [], "total": 0, "page": 1, "pages": 1, "error": "Файл БД не найден"}
+        conn = sqlite3.connect(config.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            columns = [
+                {"name": row[1], "type": row[2] or ""}
+                for row in conn.execute(f'PRAGMA table_info("{safe}")').fetchall()
+            ]
+            total = conn.execute(f'SELECT COUNT(*) FROM "{safe}"').fetchone()[0]
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    f'SELECT * FROM "{safe}" ORDER BY rowid DESC LIMIT ? OFFSET ?',
+                    (DB_PAGE_SIZE, offset),
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+
+    pages = max(1, (total + DB_PAGE_SIZE - 1) // DB_PAGE_SIZE)
+    return {
+        "table": safe,
+        "columns": columns,
+        "rows": rows,
+        "total": total,
+        "page": min(page, pages),
+        "pages": pages,
+        "error": "",
+    }
+
+
 def _booking_from_row(row: dict, event: dict | None = None) -> dict:
     status = _normalize_status(row.get("status"))
     changed_at = (
@@ -508,11 +637,95 @@ def _event_card(event: dict) -> str:
 
 
 def _tabs(filters: dict) -> str:
-    tabs = [("date", "По дате"), ("bookings", "Все брони"), ("users", "Users")]
+    tabs = [
+        ("date", "По дате"),
+        ("bookings", "Все брони"),
+        ("users", "Users"),
+        ("db", "База"),
+    ]
     current = filters.get("tab") or "date"
     return "".join(
-        f'<a class="tab {"active" if current == key else ""}" href="{_query_link(filters, tab=key, u="")}">{label}</a>'
+        f'<a class="tab {"active" if current == key else ""}" href="{_query_link(filters, tab=key, u="", table="", page="")}">{label}</a>'
         for key, label in tabs
+    )
+
+
+def _cell_value(value) -> str:
+    if value is None:
+        return '<span class="muted">NULL</span>'
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value)
+    if len(text) > 120:
+        text = text[:117] + "..."
+    return _h(text)
+
+
+def _db_tab(tables: list[dict], browse: dict | None, filters: dict) -> str:
+    table_links = []
+    for item in tables:
+        active = "active" if filters.get("table") == item["name"] else ""
+        href = _query_link(filters, tab="db", table=item["name"], page="1")
+        table_links.append(
+            f'<a class="pill {active}" href="{href}">{_h(item["name"])} '
+            f'<span class="muted">({item["rows"]})</span></a>'
+        )
+    links_html = "".join(table_links) or '<span class="muted">Таблиц не найдено</span>'
+    nav = (
+        '<section class="card">'
+        "<h2>Таблицы базы</h2>"
+        '<p class="muted">Только просмотр. Изменять данные здесь нельзя.</p>'
+        f'<div class="counters">{links_html}</div>'
+        "</section>"
+    )
+    if not browse:
+        return nav + (
+            '<section class="card empty-state">'
+            "<h2>Выберите таблицу</h2>"
+            "<p>Нажмите на таблицу выше, чтобы увидеть строки как в Excel.</p>"
+            "</section>"
+        )
+    if browse.get("error"):
+        return nav + f'<section class="card empty-state"><h2>{_h(browse["error"])}</h2></section>'
+
+    cols = browse["columns"]
+    col_meta = " · ".join(f'{c["name"]} ({c["type"]})' for c in cols)
+    headers = "".join(f"<th>{_h(c['name'])}</th>" for c in cols)
+    body_rows = []
+    for row in browse["rows"]:
+        cells = "".join(f"<td>{_cell_value(row.get(c['name']))}</td>" for c in cols)
+        body_rows.append(f"<tr>{cells}</tr>")
+    if not body_rows:
+        body_rows.append(f'<tr><td colspan="{max(1, len(cols))}" class="muted">Пусто</td></tr>')
+
+    page = browse["page"]
+    pages = browse["pages"]
+    prev_link = (
+        f'<a class="pill" href="{_query_link(filters, tab="db", table=browse["table"], page=str(page - 1))}">← Назад</a>'
+        if page > 1
+        else ""
+    )
+    next_link = (
+        f'<a class="pill" href="{_query_link(filters, tab="db", table=browse["table"], page=str(page + 1))}">Вперёд →</a>'
+        if page < pages
+        else ""
+    )
+    pager = (
+        f'<div class="mini-metrics">'
+        f'<span>Строк: <b>{browse["total"]}</b></span>'
+        f'<span>Страница: <b>{page}/{pages}</b></span>'
+        f"{prev_link}{next_link}"
+        f"</div>"
+    )
+    return (
+        nav
+        + '<section class="card">'
+        f'<h2>{_h(browse["table"])}</h2>'
+        f'<p class="muted">{_h(col_meta)}</p>'
+        f"{pager}"
+        f'<div class="table-wrap"><table><thead><tr>{headers}</tr></thead>'
+        f'<tbody>{"".join(body_rows)}</tbody></table></div>'
+        "</section>"
     )
 
 
@@ -617,26 +830,57 @@ def _users_tab(dashboard: dict, filters: dict) -> str:
     return detail + f'<section class="card"><h2>Users</h2>{table}</section>'
 
 
-def _content(dashboard: dict, filters: dict) -> str:
+def _content(dashboard: dict, filters: dict, db_data: dict | None = None) -> str:
     tab = filters.get("tab") or "date"
     if tab == "bookings":
         return _bookings_tab(dashboard, filters)
     if tab == "users":
         return _users_tab(dashboard, filters)
+    if tab == "db":
+        db_data = db_data or {"tables": [], "browse": None}
+        return _db_tab(db_data.get("tables") or [], db_data.get("browse"), filters)
     return _date_tab(dashboard, filters)
 
 
-def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
+def render_admin_html(
+    dashboard: dict,
+    filters: dict,
+    source_label: str,
+    db_data: dict | None = None,
+) -> str:
     totals = dashboard["totals"]
     date_value = _date_to_input(filters.get("date", ""))
     date_input = '<input name="date" type="date" value="{}">'.format(_h(date_value))
     hidden_status = f'<input type="hidden" name="status" value="{_h(filters.get("status"))}">' if filters.get("status") else ""
+    is_db = (filters.get("tab") or "date") == "db"
+    summary_html = ""
+    filters_html = ""
+    if not is_db:
+        summary_html = f"""
+    <div class="summary">
+      <div class="metric"><span>Мероприятий</span><b>{totals["events"]}</b></div>
+      <div class="metric"><span>Всего броней</span><b>{totals["bookings"]}</b></div>
+      <div class="metric"><span>Активные брони, гостей</span><b>{totals["reserved_guests"]}</b></div>
+      <div class="metric"><span>Подтвердили билеты</span><b>{totals["confirmed_guests"]}</b></div>
+    </div>
+    <div class="filters">
+      <div>{_status_filter(filters)}</div>
+      <form method="get" action="/admin">
+        <input type="hidden" name="tab" value="{_h(filters.get('tab') or 'date')}">
+        {date_input}
+        <select name="format">{_format_select(filters)}</select>
+        {hidden_status}
+        <button type="submit">Показать</button>
+        <a class="pill" href="/admin?tab={_h(filters.get('tab') or 'date')}">Сбросить</a>
+      </form>
+    </div>"""
+    refresh_meta = "" if is_db else '<meta http-equiv="refresh" content="30">'
     return f"""<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="30">
+  {refresh_meta}
   <title>Стендап бронирование</title>
   <style>
     :root {{ color-scheme: light; --bg:#f4f6fb; --card:#fff; --text:#111827; --muted:#667085; --line:#e5e7eb; }}
@@ -670,10 +914,11 @@ def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
     .status-bar span {{ display:block; }}
     .status-bar.empty {{ background:#eef2f7; }}
     .active-bookings {{ margin-top:10px; color:#334155; }}
-    .counters, .mini-metrics {{ display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; }}
+    .counters, .mini-metrics {{ display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; align-items:center; }}
     .counter, .mini-metrics span {{ background:#f8fafc; border:1px solid var(--line); border-radius:999px; padding:7px 10px; color:#334155; }}
+    .table-wrap {{ overflow-x:auto; }}
     table {{ width:100%; border-collapse:collapse; margin-top:12px; }}
-    th, td {{ padding:11px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }}
+    th, td {{ padding:11px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; white-space:nowrap; }}
     th {{ color:#475467; font-size:13px; background:#f8fafc; }}
     .badge {{ display:inline-block; color:white; border-radius:999px; padding:5px 9px; font-size:12px; font-weight:700; }}
     .muted {{ color:var(--muted); }}
@@ -683,7 +928,6 @@ def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
       main {{ padding:16px; }}
       .summary {{ grid-template-columns:1fr; }}
       .event-head {{ display:block; }}
-      table {{ display:block; overflow-x:auto; }}
     }}
   </style>
 </head>
@@ -694,24 +938,8 @@ def render_admin_html(dashboard: dict, filters: dict, source_label: str) -> str:
   </header>
   <main>
     <nav class="tabs">{_tabs(filters)}</nav>
-    <div class="summary">
-      <div class="metric"><span>Мероприятий</span><b>{totals["events"]}</b></div>
-      <div class="metric"><span>Всего броней</span><b>{totals["bookings"]}</b></div>
-      <div class="metric"><span>Активные брони, гостей</span><b>{totals["reserved_guests"]}</b></div>
-      <div class="metric"><span>Подтвердили билеты</span><b>{totals["confirmed_guests"]}</b></div>
-    </div>
-    <div class="filters">
-      <div>{_status_filter(filters)}</div>
-      <form method="get" action="/admin">
-        <input type="hidden" name="tab" value="{_h(filters.get('tab') or 'date')}">
-        {date_input}
-        <select name="format">{_format_select(filters)}</select>
-        {hidden_status}
-        <button type="submit">Показать</button>
-        <a class="pill" href="/admin?tab={_h(filters.get('tab') or 'date')}">Сбросить</a>
-      </form>
-    </div>
-    {_content(dashboard, filters)}
+    {summary_html}
+    {_content(dashboard, filters, db_data)}
   </main>
 </body>
 </html>"""
@@ -724,6 +952,8 @@ def _filters_from_request(request: web.Request) -> dict:
         "date": request.query.get("date", "").strip(),
         "format": request.query.get("format", "").strip(),
         "u": request.query.get("u", "").strip(),
+        "table": request.query.get("table", "").strip(),
+        "page": request.query.get("page", "1").strip() or "1",
     }
 
 
@@ -799,12 +1029,37 @@ async def admin_page(request: web.Request) -> web.Response:
         filters["status"] = ""
     if filters.get("format") and filters["format"] not in FORMAT_OPTIONS:
         filters["format"] = ""
-    include_empty_events = filters.get("tab") == "date" and bool(filters.get("date"))
+    if filters.get("tab") not in {"date", "bookings", "users", "db"}:
+        filters["tab"] = "date"
     loop = asyncio.get_running_loop()
-    rows = await loop.run_in_executor(None, fetch_admin_rows, config, filters, include_empty_events)
-    dashboard = build_dashboard(rows)
     source_label = "PostgreSQL" if _use_postgres(config) else f"SQLite ({config.db_path})"
-    return web.Response(text=render_admin_html(dashboard, filters, source_label), content_type="text/html")
+    db_data = None
+    if filters.get("tab") == "db":
+        tables = await loop.run_in_executor(None, list_db_tables, config)
+        browse = None
+        if filters.get("table"):
+            browse = await loop.run_in_executor(
+                None,
+                browse_db_table,
+                config,
+                filters["table"],
+                filters.get("page", "1"),
+            )
+        db_data = {"tables": tables, "browse": browse}
+        dashboard = {
+            "events": [],
+            "bookings": [],
+            "users": {},
+            "totals": {"events": 0, "bookings": 0, "reserved_guests": 0, "confirmed_guests": 0},
+        }
+    else:
+        include_empty_events = filters.get("tab") == "date" and bool(filters.get("date"))
+        rows = await loop.run_in_executor(None, fetch_admin_rows, config, filters, include_empty_events)
+        dashboard = build_dashboard(rows)
+    return web.Response(
+        text=render_admin_html(dashboard, filters, source_label, db_data),
+        content_type="text/html",
+    )
 
 
 async def login_page(request: web.Request) -> web.Response:
