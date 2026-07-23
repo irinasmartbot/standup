@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from html import escape
 
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -17,7 +16,9 @@ from bot.db.crud import (
     set_rozygrysh_used,
     update_reminder_flag,
 )
+from bot.utils.booking_texts import reminder_details_cut
 from bot.utils.bot_commands import refresh_user_commands
+from bot.utils.nav_messages import delete_my_bookings_messages
 from bot.utils.ticket import format_date, now_msk, parse_created_at, parse_event_datetime
 
 logger = logging.getLogger(__name__)
@@ -85,14 +86,7 @@ async def send_raffle_reminder(row, reminder_type: str):
             f"Привет! 😊 Пишу подтвердить бронь на завтрашнее ШОУ! 🎤\n\n"
             f"<b>Чтобы подтвердить бронь, нажми на кнопку «Получить билет»</b>\n"
             f"❗️ <b>Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.</b>\n\n"
-            f"Напоминаем, что :\n"
-            f"1. Сбор гостей начинается за полчаса до начала шоу, старт в {event_time}\n"
-            f"2. Рассадка осуществляется администратором рассадки на ближайшие к сцене свободные места. "
-            f"Возможна подсадка за один стол других гостей для небольших компаний.\n"
-            f"3. Обратите внимание, что при посещении шоу заказ минимум одной позиции по меню является обязательным.\n"
-            f"4. {escape(location_line)}\n"
-            f"5. Количество гостей - 1 чел.\n"
-            f"6. Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО ПРЕДУПРЕДИТЕ 😊"
+            f"{reminder_details_cut(event_time=event_time, location_line=location_line, guests=guests or 1)}"
         )
 
     await _clear_prev_buttons(booking_id, telegram_id)
@@ -110,6 +104,7 @@ async def send_raffle_annulled(row):
     booking_id, telegram_id, *_ = row
     await _clear_prev_buttons(booking_id, telegram_id)
     await _delete_raffle_nav_messages(telegram_id)
+    await delete_my_bookings_messages(bot, telegram_id)
 
     kb = InlineKeyboardBuilder()
     kb.button(text="Перейти в главное меню", callback_data="main_menu")

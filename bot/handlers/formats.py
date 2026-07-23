@@ -1,11 +1,11 @@
+import logging
 import os
 import random
 from datetime import datetime
 from html import escape
 
 from aiogram import Router
-from aiogram.types import CallbackQuery, FSInputFile, InputMediaPhoto
-from aiogram.utils.media_group import MediaGroupBuilder
+from aiogram.types import CallbackQuery, FSInputFile, InputMediaPhoto, InputRichMessage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK, TICKET_TEMPLATE
 from bot.services.sheets import load_events
@@ -13,27 +13,161 @@ from bot.utils.ticket import MONTHS, format_date
 from bot.utils.nav_messages import remember_booking_nav, forget_booking_nav, delete_booking_nav
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
-WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
+WELCOME_MARKER = "Здесь можно забронировать места на бесплатные шоу или купить билеты на StandUp BEST и Хитлото."
 VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
 _VENUE_ALBUM_MESSAGE_IDS = {}
 BEST_DATES_PAGE_SIZE = 10
 
+# Обычный HTML (fallback, если Rich Messages недоступны)
 FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
 
-<b>Формат StandUp BEST:</b>
+⭐ <b>StandUp BEST</b>
 Только лучший, уже проверенный стэндап материал от троих комиков, именитых участников многочисленных телевизионных проектов. Вы не услышите ни одной несмешной шутки, только BEST!!
-Билеты - от 500 рублей.
+🎟 Билеты — от <b>500 ₽</b>
 
-<b>Формат Хитлото от Moscow StandUp Show:</b>
+🎵 <b>Хитлото</b>
 Музыкальное лото в компании стендап-комика! Веселись, пой, пей, зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥
-Билеты - от 990 рублей.
+🎟 Билеты — от <b>990 ₽</b>
 
-<b>Формат StandUp Проверка материала:</b>
-5-7 опытных комиков, участников известных проектов ТНТ и YouTube, рассказывают по 10-15 минут свежих, но не проверенных шуток. Вы услышите настоящий эксклюзив и поможете комикам понять, что смешно, а что стоит убрать из материала 🐒
-Вход бесплатный."""
+🎤 <b>StandUp Проверка материала</b>
+5–7 опытных комиков, участников известных проектов ТНТ и YouTube, рассказывают по 10–15 минут свежих, но не проверенных шуток. Вы услышите настоящий эксклюзив и поможете комикам понять, что смешно, а что стоит убрать из материала 🙈
+🆓 Вход <b>бесплатный</b>."""
+
+BUY_TICKET_TEXT = (
+    "Привет! 😊 Я — бот <b>Moscow StandUp Show</b>. Здесь можно купить билет на платные форматы.\n\n"
+    "Выбирай формат шоу 👇\n\n"
+    "⭐ <b>StandUp BEST</b>\n"
+    "<i>Только лучший, уже проверенный стэндап материал от троих комиков, "
+    "именитых участников многочисленных телевизионных проектов. "
+    "Вы не услышите ни одной несмешной шутки, только BEST!!</i>\n"
+    "🎟 Билеты — от <b>500 ₽</b>\n\n"
+    "🎵 <b>Хитлото</b>\n"
+    "<i>Музыкальное лото в компании стендап-комика! Веселись, пой, пей, "
+    "зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥</i>\n"
+    "🎟 Билеты — от <b>990 ₽</b>."
+)
+
+# Rich Messages HTML: крупные заголовки как в редакторе Telegram
+FORMATS_RICH_HTML = """
+<h2>🎭 Наши форматы шоу</h2>
+<h3>⭐ StandUp BEST</h3>
+<p>Только лучший, уже проверенный стэндап материал от троих комиков, именитых участников многочисленных телевизионных проектов. Вы не услышите ни одной несмешной шутки, только BEST!!</p>
+<p>🎟 Билеты — от <b>500 ₽</b></p>
+<h3>🎵 Хитлото</h3>
+<p>Музыкальное лото в компании стендап-комика! Веселись, пой, пей, зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥</p>
+<p>🎟 Билеты — от <b>990 ₽</b></p>
+<h3>🎤 StandUp Проверка материала</h3>
+<p>5–7 опытных комиков, участников известных проектов ТНТ и YouTube, рассказывают по 10–15 минут свежих, но не проверенных шуток. Вы услышите настоящий эксклюзив и поможете комикам понять, что смешно, а что стоит убрать из материала 🙈</p>
+<p>🆓 Вход <b>бесплатный</b></p>
+"""
+
+BUY_TICKET_RICH_HTML = """
+<p>Привет! 😊 Я — бот <b>Moscow StandUp Show</b>. Здесь можно купить билет на платные форматы.</p>
+<h2>Выбирай формат шоу 👇</h2>
+<h3>⭐ StandUp BEST</h3>
+<p><i>Только лучший, уже проверенный стэндап материал от троих комиков, именитых участников многочисленных телевизионных проектов. Вы не услышите ни одной несмешной шутки, только BEST!!</i></p>
+<p>🎟 Билеты — от <b>500 ₽</b></p>
+<h3>🎵 Хитлото</h3>
+<p><i>Музыкальное лото в компании стендап-комика! Веселись, пой, пей, зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥</i></p>
+<p>🎟 Билеты — от <b>990 ₽</b></p>
+"""
+
+ALL_FORMATS_RICH_HTML = """
+<p>Привет! 😊 Я — бот <b>Moscow StandUp Show</b> для бронирования мест на мероприятия.</p>
+""" + FORMATS_RICH_HTML
+
+ALL_FORMATS_TEXT = (
+    "Привет! 😊 Я — бот <b>Moscow StandUp Show</b> для бронирования мест на мероприятия.\n\n"
+    + FORMATS_TEXT
+)
+
+
+async def _send_rich_or_html(message, *, rich_html: str, fallback_html: str, reply_markup=None):
+    """Сначала Rich Messages (крупные заголовки), при ошибке — обычный HTML."""
+    try:
+        return await message.bot.send_rich_message(
+            chat_id=message.chat.id,
+            rich_message=InputRichMessage(html=rich_html),
+            reply_markup=reply_markup,
+        )
+    except Exception:
+        logger.exception("send_rich_message failed; falling back to HTML")
+        return await message.answer(
+            fallback_html,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+
+VENUES_INTRO_RICH_HTML = """
+<h2>📍 Наши площадки</h2>
+<p>Мероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус: для любителей вкусно покушать — рестораны с изысканной кухней разных народов мира, для поклонников шумных вечеринок — бары, для любителей попеть — заведения с караоке. Везде можно остаться после шоу ✨</p>
+"""
+
+VENUES_INTRO_TEXT = (
+    "📍 <b>Наши площадки</b>\n\n"
+    "Мероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус: "
+    "для любителей вкусно покушать — рестораны с изысканной кухней разных народов мира, "
+    "для поклонников шумных вечеринок — бары, для любителей попеть — заведения с караоке. "
+    "Везде можно остаться после шоу ✨"
+)
+
+VENUE_CARDS = (
+    {
+        "file": "temple_bar.jpg",
+        "rich_html": """
+<h2>🍽 Temple Bar</h2>
+<p><i>Английская респектабельность · ирландское жизнелюбие · русское гостеприимство</i></p>
+<blockquote>Ресторан, где каждый гость чувствует демократичную атмосферу: великолепные стейки, большой ассортимент коктейлей и отменные блюда из мяса и овощей на мангале.</blockquote>
+<p>🥩 Стейки · 🍹 Коктейли · 🔥 Мангал</p>
+""",
+        "fallback_html": (
+            "🍽 <b>Temple Bar</b>\n"
+            "<i>Английская респектабельность · ирландское жизнелюбие · русское гостеприимство</i>\n\n"
+            "<blockquote>Ресторан, где каждый гость чувствует демократичную атмосферу: "
+            "великолепные стейки, большой ассортимент коктейлей и отменные блюда "
+            "из мяса и овощей на мангале.</blockquote>\n\n"
+            "🥩 Стейки · 🍹 Коктейли · 🔥 Мангал"
+        ),
+    },
+    {
+        "file": "escobar.jpg",
+        "rich_html": """
+<h2>🍸 Escobar</h2>
+<p><i>Брутальный бар в эстетике Тарантино</i></p>
+<blockquote>Бар с неординарной кухней в комплексе исторических зданий 18–19 веков. Брутальный дизайн с лёгким оттенком латиноамериканской расслабленности.</blockquote>
+<p>🎬 Киноаскетика · 🏛 Исторический центр · 🌶 Необычная кухня</p>
+""",
+        "fallback_html": (
+            "🍸 <b>Escobar</b>\n"
+            "<i>Брутальный бар в эстетике Тарантино</i>\n\n"
+            "<blockquote>Бар с неординарной кухней в комплексе исторических зданий "
+            "18–19 веков. Брутальный дизайн с лёгким оттенком латиноамериканской "
+            "расслабленности.</blockquote>\n\n"
+            "🎬 Киноаскетика · 🏛 Исторический центр · 🌶 Необычная кухня"
+        ),
+    },
+    {
+        "file": "nebar.jpg",
+        "rich_html": """
+<h2>🔊 Небар</h2>
+<p><i>Один из самых популярных и громких баров столицы</i></p>
+<blockquote>Уникальный стиль и авторская коктейльная карта для тех, кто любит эксперименты: 13 сезонных коктейлей на любой вкус, названных в честь известных городов мира.</blockquote>
+<p>🍸 Авторские коктейли · 🌃 Атмосфера · 🎉 Громко и ярко</p>
+""",
+        "fallback_html": (
+            "🔊 <b>Небар</b>\n"
+            "<i>Один из самых популярных и громких баров столицы</i>\n\n"
+            "<blockquote>Уникальный стиль и авторская коктейльная карта для тех, "
+            "кто любит эксперименты: 13 сезонных коктейлей на любой вкус, "
+            "названных в честь известных городов мира.</blockquote>\n\n"
+            "🍸 Авторские коктейли · 🌃 Атмосфера · 🎉 Громко и ярко"
+        ),
+    },
+)
 
 RULES_TEXT = """📋 <b>Правила посещения шоу:</b>
 
@@ -193,6 +327,30 @@ def _parse_best_event_callback(data):
     return payload, "best_dates"
 
 
+def _host_lines(host: str) -> list[str]:
+    """Разбивает поле host из БД на строки по людям."""
+    text = (host or "").replace("\r\n", "\n").strip()
+    if not text:
+        return []
+    lines = [line.strip(" -–—\t") for line in text.split("\n") if line.strip()]
+    if len(lines) == 1 and " - " in lines[0]:
+        # Иногда несколько человек в одной строке через перевод строки уже есть;
+        # если одна длинная строка — оставляем как есть.
+        pass
+    return [line for line in lines if line]
+
+
+def _format_host_quote(host: str) -> str:
+    """Красивая цитата с составом для карточки события."""
+    lines = _host_lines(host)
+    if not lines:
+        return ""
+    body = "\n".join(f"🎤 {escape(line)}" for line in lines)
+    # expandable — если состав длинный, цитату можно свернуть
+    tag = "blockquote expandable" if len(body) > 280 else "blockquote"
+    return f"\n<{tag}>{body}</{tag.split()[0]}>"
+
+
 def _best_event_text(event):
     parts = [
         f"<b>{format_date(event['date'])}</b>",
@@ -202,7 +360,14 @@ def _best_event_text(event):
         escape(event.get("address") or ""),
         escape(event.get("description") or ""),
     ]
-    return "\n".join(parts)
+    host_quote = _format_host_quote(event.get("host") or "")
+    if host_quote:
+        parts.append(host_quote)
+    text = "\n".join(parts)
+    # Лимит подписи к фото в Telegram — 1024 символа
+    if len(text) > 1024:
+        text = text[:1021].rstrip() + "..."
+    return text
 
 
 async def _send_best_event_card(message, event, back_callback="best_dates"):
@@ -298,6 +463,7 @@ async def _edit_best_location_carousel(call: CallbackQuery, events, index: int):
 def _nav_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="🎟 Забронировать места", callback_data="book")
+    kb.button(text="💳 Купить билет", callback_data="buy_ticket")
     kb.button(text="🎭 Наши форматы ШОУ", callback_data="formats")
     kb.button(text="📍 Наши площадки", callback_data="venues")
     kb.button(text="📋 Правила посещения шоу", callback_data="rules")
@@ -331,46 +497,43 @@ async def _delete_previous_menu_message(call: CallbackQuery):
 async def show_formats(call: CallbackQuery):
     await delete_booking_nav(call.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🎟 Бронь Формат StandUp BEST", callback_data="best")
-    kb.button(text="🎟 Бронь Формат Хитлото", callback_data="hitloto")
-    kb.button(text="🎟 Бронь Формат StandUp Проверка материала", callback_data="check")
-    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
-    kb.adjust(1)
-    await call.message.answer(FORMATS_TEXT, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await send_all_formats(call.message)
     await call.answer()
 
 
 @router.callback_query(lambda c: c.data == "venues")
 async def show_venues(call: CallbackQuery):
     await _delete_previous_menu_message(call)
-    photo_files = ["temple_bar.jpg", "escobar.jpg", "nebar.jpg"]
-    text = """Мероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус: для любителей вкусно покушать — рестораны с изысканной кухней разных народов мира, для поклонников шумных вечеринок — бары, для любителей попеть — заведения с караоке, везде можно остаться после шоу.
 
-Наши площадки:
+    linked_ids: list[int] = []
+    intro = await _send_rich_or_html(
+        call.message,
+        rich_html=VENUES_INTRO_RICH_HTML,
+        fallback_html=VENUES_INTRO_TEXT,
+    )
+    if intro:
+        linked_ids.append(intro.message_id)
 
-<b>Temple Bar</b> - это английская респектабельность, ирландское жизнелюбие и русское гостеприимство в одном ресторане, где каждый гость будет чувствовать демократическую атмосферу, и сможет насладиться великолепными стейками, большим ассортиментом коктейлей, а также отменными блюдами из мяса и овощей на мангале.
-
-<b>Escobar</b> - бар с неординарной кухней, расположенный в комплексе исторических зданий 18-19 веков, брутальный дизайн в эстетике фильмов Квентина Тарантино, с легким оттенком латиноамериканской расслабленности.
-
-<b>Небар</b> - один из самых популярных и громких баров столицы с уникальным стилем. Авторская коктейльная карта для тех, кто любит эксперименты, насчитывает 13 сезонных коктейлей на любой вкус, названных в честь известных городов мира."""
-    kb = _nav_kb()
-
-    media = MediaGroupBuilder()
-    for photo_file in photo_files:
-        path = os.path.join(PHOTOS_DIR, photo_file)
+    for card in VENUE_CARDS:
+        path = os.path.join(PHOTOS_DIR, card["file"])
         if os.path.exists(path):
-            media.add_photo(FSInputFile(path))
-    album = media.build()
-    album_messages = []
-    if album:
-        album_messages = await call.message.answer_media_group(media=album)
+            try:
+                photo_msg = await call.message.answer_photo(photo=FSInputFile(path))
+                linked_ids.append(photo_msg.message_id)
+            except Exception:
+                logger.exception("Failed to send venue photo %s", card["file"])
 
-    text_message = await call.message.answer(text, parse_mode="HTML", reply_markup=kb)
-    if album_messages:
-        _VENUE_ALBUM_MESSAGE_IDS[text_message.message_id] = [
-            message.message_id for message in album_messages
-        ]
+        # Подпись к фото не умеет полноценный Rich — текст площадки отдельным Rich-сообщением
+        text_msg = await _send_rich_or_html(
+            call.message,
+            rich_html=card["rich_html"],
+            fallback_html=card["fallback_html"],
+        )
+        if text_msg:
+            linked_ids.append(text_msg.message_id)
+
+    menu = await call.message.answer("Можно продолжить в меню 👇", reply_markup=_nav_kb())
+    _VENUE_ALBUM_MESSAGE_IDS[menu.message_id] = linked_ids
     await call.answer()
 
 
@@ -381,36 +544,61 @@ async def show_rules(call: CallbackQuery):
     await call.answer()
 
 
-@router.callback_query(lambda c: c.data == "book")
-async def book(call: CallbackQuery):
-    await delete_booking_nav(call.bot, call.message.chat.id)
-    await _delete_previous_menu_message(call)
+def _all_formats_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="STANDUP BEST", callback_data="best")
     kb.button(text="Хитлото", callback_data="hitloto")
     kb.button(text="StandUp Проверка материала", callback_data="check")
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     kb.adjust(1)
-    await call.message.answer(
-        "Выбирай формат шоу 👇\n\n"
-        "<b>Формат StandUp BEST:</b>\n"
-        "Только лучший, уже проверенный стэндап материал от троих комиков, "
-        "именитых участников многочисленных телевизионных проектов. "
-        "Вы не услышите ни одной несмешной шутки, только BEST!!\n"
-        "Билеты - от 500 рублей.\n\n"
-        "<b>Формат Хитлото от Moscow StandUp Show:</b>\n"
-        "Музыкальное лото в компании стендап-комика! Веселись, пой, пей, "
-        "зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥\n"
-        "Билеты - от 990 рублей.\n\n"
-        "<b>Формат StandUp проверка материала:</b>\n"
-        "5-7 опытных комиков, участников известных проектов ТНТ и YouTube, "
-        "рассказывают по 10-15 минут свежих, но не проверенных шуток, "
-        "Вы услышите настоящий эксклюзив и поможете комикам понять, "
-        "что смешно, а что стоит убрать из материала 🙈\n"
-        "Вход бесплатный.",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML",
+    return kb.as_markup()
+
+
+def _paid_formats_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="STANDUP BEST", callback_data="best")
+    kb.button(text="Хитлото", callback_data="hitloto")
+    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+async def send_all_formats(message):
+    """Все форматы: кнопка «Наши форматы ШОУ» и deep link ?start=quick_booking."""
+    await _send_rich_or_html(
+        message,
+        rich_html=ALL_FORMATS_RICH_HTML,
+        fallback_html=ALL_FORMATS_TEXT,
+        reply_markup=_all_formats_kb(),
     )
+
+
+async def send_buy_ticket_formats(message):
+    """Платные форматы: кнопка «Купить билет» — только BEST и Хитлото."""
+    await _send_rich_or_html(
+        message,
+        rich_html=BUY_TICKET_RICH_HTML,
+        fallback_html=BUY_TICKET_TEXT,
+        reply_markup=_paid_formats_kb(),
+    )
+
+
+@router.callback_query(lambda c: c.data == "book")
+async def book(call: CallbackQuery):
+    """Бесплатная бронь: сразу экран Проверки материала."""
+    from bot.handlers.booking import check_format_entry
+
+    await delete_booking_nav(call.bot, call.message.chat.id)
+    await _delete_previous_menu_message(call)
+    await check_format_entry(call.message)
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data == "buy_ticket")
+async def buy_ticket(call: CallbackQuery):
+    await delete_booking_nav(call.bot, call.message.chat.id)
+    await _delete_previous_menu_message(call)
+    await send_buy_ticket_formats(call.message)
     await call.answer()
 
 
@@ -604,16 +792,15 @@ async def _hitloto_dates_kb():
         except Exception:
             label = date
         kb.button(text=label, callback_data=f"hitloto_date_{date}")
-    kb.button(text="📍 Выбор по площадкам", callback_data="hitloto_venues")
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     if dates:
         widths = [2] * (len(dates) // 2)
         if len(dates) % 2:
             widths.append(1)
-        widths.extend([1, 1])
+        widths.append(1)
         kb.adjust(*widths)
     else:
-        kb.adjust(1, 1)
+        kb.adjust(1)
     return kb.as_markup()
 
 
@@ -655,8 +842,7 @@ async def _send_hitloto_event_card(message, event, back_callback="hitloto_dates"
         kb.button(text="🎟 Купить билет", url=payment_url)
     else:
         kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
-    kb.button(text="🎤 Ведущие", callback_data=f"hitloto_speakers_{event['id']}")
-    kb.button(text="◀️ Назад", callback_data="hitloto_dates")
+    kb.button(text="◀️ Назад", callback_data=back_callback)
     kb.adjust(1)
     text = _hitloto_event_text(event)
     image = event.get("image") or ""
@@ -687,16 +873,12 @@ async def hitloto_format_entry(message):
         )
         return
 
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📅 Выбрать по дате", callback_data="hitloto_dates")
-    kb.button(text="📍 Выбор по локации", callback_data="hitloto_venues")
-    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
-    kb.adjust(1)
+    # Сразу выбор даты — для Хитлото выбор по локации не нужен
     await _answer_with_hitloto_photo(
         message,
         "Привет 😊 Я помогу тебе выбрать билеты на <b>Хитлото</b> "
-        "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇",
-        reply_markup=kb.as_markup(),
+        "от Moscow StandUp Show 🎤\n\nВыбирай дату 👇",
+        reply_markup=await _hitloto_dates_kb(),
         parse_mode="HTML",
         track_nav=True,
     )
@@ -828,14 +1010,3 @@ async def hitloto_event(call: CallbackQuery):
     await call.answer()
 
 
-@router.callback_query(lambda c: c.data.startswith("hitloto_speakers_"))
-async def hitloto_speakers(call: CallbackQuery):
-    event_id = call.data.replace("hitloto_speakers_", "", 1)
-    event = next((e for e in await load_events("hitloto") if str(e["id"]) == event_id), None)
-    host = (event or {}).get("host") or ""
-    if not host:
-        await call.answer(f"По ведущему напишите менеджеру {_manager_username()}", show_alert=True)
-        return
-    if len(host) > 190:
-        host = host[:187].rstrip() + "..."
-    await call.answer(host, show_alert=True)

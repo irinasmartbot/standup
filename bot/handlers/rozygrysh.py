@@ -69,7 +69,10 @@ from bot.db.crud import (
     update_raffle_submission_status,
 )
 from bot.services.sheets import load_events
+from bot.utils.booking_texts import reminder_details_cut
 from bot.utils.bot_commands import refresh_user_commands
+from bot.utils.nav_messages import delete_my_bookings_messages
+from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
 from bot.utils.ticket import MONTHS, format_date, generate_ticket, guests_word, now_msk, parse_event_datetime
 
 router = Router()
@@ -192,12 +195,12 @@ POST_REJECT_TEXT = (
 
 TICKET_ISSUED_TEXT = (
     "Отлично!\n\n"
-    "Данные по билету:\n\n"
-    "Ваше имя: {name}\n"
-    "Дата: {date}\n"
-    "Время: {time}\n"
-    "Место: {place}\n"
-    "Количество гостей: 1 гость\n\n"
+    "<b>Данные по билету:</b>\n\n"
+    "<b>Ваше имя:</b> {name}\n"
+    "<b>Дата:</b> {date}\n"
+    "<b>Время:</b> {time}\n"
+    "<b>Место:</b> {place}\n"
+    "<b>Количество гостей:</b> 1 гость\n\n"
     "Ждем вас на мероприятии ❤️\n\n"
     "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
     "чтобы вас посадили вместе — нажмите кнопку «Что, если я хочу прийти не один?» "
@@ -1285,16 +1288,9 @@ async def rz_process_name(message: Message, state: FSMContext):
     await _ask_phone(message, state, message.from_user.id)
 
 
-def _phone_looks_valid(phone: str | None) -> bool:
-    if not phone:
-        return False
-    digits = "".join(ch for ch in str(phone) if ch.isdigit())
-    return 10 <= len(digits) <= 15
-
-
 async def _ask_phone(message, state: FSMContext, telegram_id: int):
-    saved = get_last_phone(telegram_id)
-    if saved and _phone_looks_valid(saved):
+    saved = normalize_phone(get_last_phone(telegram_id))
+    if saved:
         kb = InlineKeyboardBuilder()
         kb.button(text="✅ Да, использовать", callback_data="rz_phone_saved")
         kb.button(text="✏️ Ввести другой номер", callback_data="rz_phone_change")
@@ -1361,15 +1357,16 @@ async def rz_phone_change(call: CallbackQuery, state: FSMContext):
 
 @router.message(RaffleState.waiting_phone, F.contact)
 async def rz_phone_contact(message: Message, state: FSMContext):
-    await state.update_data(phone=message.contact.phone_number)
+    phone = normalize_phone(message.contact.phone_number) or (message.contact.phone_number or "").strip()
+    await state.update_data(phone=phone)
     await _finish_booking(message, state, message.from_user)
 
 
 @router.message(RaffleState.waiting_phone)
 async def rz_phone_text(message: Message, state: FSMContext):
-    phone = (message.text or "").strip()
-    if len(phone) < 5:
-        await message.answer("Кажется, это не номер. Пришли контакт или номер ещё раз.")
+    phone = normalize_phone(message.text)
+    if not phone:
+        await message.answer(PHONE_INVALID_TEXT, reply_markup=_phone_kb(), parse_mode="HTML")
         return
     await state.update_data(phone=phone)
     await _finish_booking(message, state, message.from_user)
@@ -1438,10 +1435,12 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             )
             return
 
-        if not _phone_looks_valid(phone):
+        phone = normalize_phone(phone)
+        if not phone:
             await message.answer(
-                "Кажется, номер телефона некорректный. Введи номер ещё раз:",
+                PHONE_INVALID_TEXT,
                 reply_markup=_phone_kb(),
+                parse_mode="HTML",
             )
             await state.set_state(RaffleState.waiting_phone)
             await state.update_data(
@@ -1455,6 +1454,7 @@ async def _finish_booking(message: Message, state: FSMContext, user):
                 name=name,
             )
             return
+        await state.update_data(phone=phone)
 
         try:
             booking_id = create_booking(
@@ -1497,14 +1497,7 @@ async def _finish_booking(message: Message, state: FSMContext, user):
                 f"<b>Время:</b> {event_time}\n\n"
                 f"<b>ОБЯЗАТЕЛЬНО подтвердите бронь, нажав на кнопку «Получить билет»</b>\n\n"
                 f"❗ Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.\n\n"
-                f"Напоминаем, что :\n"
-                f"1. Сбор гостей начинается за полчаса до начала шоу, старт в {event_time}\n"
-                f"2. Рассадка осуществляется администратором рассадки на ближайшие к сцене свободные места. "
-                f"Возможна подсадка за один стол других гостей для небольших компаний.\n"
-                f"3. Обратите внимание, что при посещении шоу заказ минимум одной позиции по меню является обязательным.\n"
-                f"4. {escape(location_line)}\n"
-                f"5. Количество гостей - 1 чел.\n"
-                f"6. Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО ПРЕДУПРЕДИТЕ 😊"
+                f"{reminder_details_cut(event_time=event_time, location_line=location_line, guests=1)}"
             )
             markup = _manage_kb(booking_id, include_ticket=True)
         else:
@@ -1684,12 +1677,13 @@ async def rz_cancel_do(call: CallbackQuery):
         await call.answer("Бронь уже неактивна", show_alert=True)
         return
 
-    # удаляем UI брони + подсказку «Подтверждаю»
+    # удаляем UI брони + подсказку «Подтверждаю» + старый вывод /my_bookings
     await _delete_raffle_ui(
         call.from_user.id,
         booking_id,
         extra_message_ids=(call.message.message_id,),
     )
+    await delete_my_bookings_messages(call.message.bot, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
     set_rozygrysh_used(call.from_user.id, False)
     await refresh_user_commands(call.message.bot, call.from_user.id)

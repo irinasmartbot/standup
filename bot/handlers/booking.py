@@ -17,8 +17,15 @@ from bot.db.crud import (
 )
 from bot.services.sheets import load_events, get_event
 from bot.utils.bot_commands import refresh_user_commands
+from bot.utils.booking_texts import reminder_details_cut
+from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
 from bot.utils.ticket import format_date, guests_word, generate_ticket, MONTHS, now_msk, parse_event_datetime
-from bot.utils.nav_messages import remember_booking_nav, forget_booking_nav, delete_booking_nav
+from bot.utils.nav_messages import (
+    remember_booking_nav,
+    forget_booking_nav,
+    delete_booking_nav,
+    delete_my_bookings_messages,
+)
 
 router = Router()
 
@@ -28,7 +35,7 @@ _TICKET_IN_PROGRESS: set[int] = set()
 # Корень проекта — два уровня выше bot/handlers/booking.py
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
-WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
+WELCOME_MARKER = "Здесь можно забронировать места на бесплатные шоу или купить билеты на StandUp BEST и Хитлото."
 VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
 MAX_RANDOM_PHOTO_SIZE = 10 * 1024 * 1024
 
@@ -194,22 +201,27 @@ async def send_event_card(message, event, back_callback="check_dates"):
         await message.answer(text, reply_markup=kb.as_markup())
 
 
-@router.callback_query(lambda c: c.data == "check")
-async def check_format(call: CallbackQuery):
-    await _delete_previous_menu_message(call)
+async def check_format_entry(message):
+    """Экран бесплатной брони: Проверка материала (дата / площадка)."""
     kb = InlineKeyboardBuilder()
     kb.button(text="📅 Выбрать по дате", callback_data="check_dates")
     kb.button(text="📍 Выбор по площадке", callback_data="by_venue")
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     kb.adjust(1)
     await _answer_with_check_photo(
-        call.message,
+        message,
         "Привет! 😊 Я помогу тебе забронировать места на <b>Проверку материала</b> "
         "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇",
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
         track_nav=True,
     )
+
+
+@router.callback_query(lambda c: c.data == "check")
+async def check_format(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    await check_format_entry(call.message)
     await call.answer()
 
 
@@ -422,7 +434,7 @@ def _phone_kb():
 
 @router.callback_query(lambda c: c.data == "name_confirm")
 async def name_confirmed(call: CallbackQuery, state: FSMContext):
-    saved_phone = get_last_phone(call.from_user.id)
+    saved_phone = normalize_phone(get_last_phone(call.from_user.id))
     if saved_phone:
         await state.update_data(phone=saved_phone)
         kb = InlineKeyboardBuilder()
@@ -454,9 +466,7 @@ async def process_name(message: Message, state: FSMContext):
     await state.set_state(BookingState.waiting_phone)
 
 
-@router.message(BookingState.waiting_phone, F.contact)
-async def process_phone_contact(message: Message, state: FSMContext):
-    await state.update_data(phone=message.contact.phone_number)
+async def _ask_guests_after_phone(message: Message, state: FSMContext):
     data = await state.get_data()
     await message.answer(
         f"{data.get('name', '')}, напишите пожалуйста цифрой, на какое количество человек бронируете?\n\n"
@@ -465,32 +475,40 @@ async def process_phone_contact(message: Message, state: FSMContext):
         parse_mode="HTML",
     )
     await state.set_state(BookingState.waiting_guests)
+
+
+@router.message(BookingState.waiting_phone, F.contact)
+async def process_phone_contact(message: Message, state: FSMContext):
+    phone = normalize_phone(message.contact.phone_number) or (message.contact.phone_number or "").strip()
+    await state.update_data(phone=phone)
+    await _ask_guests_after_phone(message, state)
 
 
 @router.message(BookingState.waiting_phone)
 async def process_phone_text(message: Message, state: FSMContext):
-    await state.update_data(phone=message.text)
-    data = await state.get_data()
-    await message.answer(
-        f"{data.get('name', '')}, напишите пожалуйста цифрой, на какое количество человек бронируете?\n\n"
-        f"<b>Внимание, бронь на один билет максимум 4 человека</b>",
-        reply_markup=ReplyKeyboardRemove(),
-        parse_mode="HTML",
-    )
-    await state.set_state(BookingState.waiting_guests)
+    phone = normalize_phone(message.text)
+    if not phone:
+        await message.answer(PHONE_INVALID_TEXT, reply_markup=_phone_kb(), parse_mode="HTML")
+        return
+    await state.update_data(phone=phone)
+    await _ask_guests_after_phone(message, state)
 
 
 @router.callback_query(lambda c: c.data == "phone_use_saved")
 async def phone_use_saved(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    name = data.get("name", "")
-    await call.message.answer(
-        f"{name}, напишите пожалуйста цифрой, на какое количество человек бронируете?\n\n"
-        f"<b>Внимание, бронь на один билет максимум 4 человека</b>",
-        reply_markup=ReplyKeyboardRemove(),
-        parse_mode="HTML",
-    )
-    await state.set_state(BookingState.waiting_guests)
+    phone = normalize_phone(data.get("phone"))
+    if not phone:
+        await call.message.answer(
+            PHONE_INVALID_TEXT,
+            reply_markup=_phone_kb(),
+            parse_mode="HTML",
+        )
+        await state.set_state(BookingState.waiting_phone)
+        await call.answer()
+        return
+    await state.update_data(phone=phone)
+    await _ask_guests_after_phone(call.message, state)
     await call.answer()
 
 
@@ -560,15 +578,19 @@ async def process_guests(message: Message, state: FSMContext):
     kb.button(text="📢 Заглянуть на наш канал анонсов", url=CHANNEL_LINK)
     kb.adjust(1)
 
+    location_line = f"📍 Локация {event_location}, {event_address}".strip(", ")
+    weekday = (event or {}).get("weekday") or ""
+    weekday_part = f" ({weekday})" if weekday else ""
     if days_until <= 1:
         text = (
-            f"Отлично! Мы внесли Вас в списки гостей:\n\n"
-            f"<b>Дата:</b> {date_str} ({event['weekday'] if event else ''})\n"
-            f"<b>Время:</b> {event_time}\n"
-            f"<b>Локация:</b> {event_address}\n"
-            f"<b>Количество гостей:</b> {guests} чел.\n\n"
-            f"<b>❗ Важная информация — для того чтобы мы окончательно закрепили за Вами место ОБЯЗАТЕЛЬНО подтвердите бронь, нажав на кнопку «Получить билет»</b>\n\n"
-            f"<b>❗ Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.</b>"
+            f"Отлично!\n\n"
+            f"❗ <b>Важная информация</b> — для того чтобы мы окончательно закрепили за Вами место "
+            f"на дату и время:\n"
+            f"<b>Дата:</b> {date_str}{weekday_part}\n"
+            f"<b>Время:</b> {event_time}\n\n"
+            f"<b>ОБЯЗАТЕЛЬНО подтвердите бронь, нажав на кнопку «Получить билет»</b>\n\n"
+            f"❗ Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.\n\n"
+            f"{reminder_details_cut(event_time=event_time, location_line=location_line, guests=guests)}"
         )
     else:
         text = (
@@ -777,6 +799,7 @@ async def cancel_do(call: CallbackQuery):
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
     await refresh_user_commands(call.message.bot, call.from_user.id)
+    await delete_my_bookings_messages(call.message.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="Перейти в главное меню", callback_data="main_menu")
@@ -801,6 +824,7 @@ async def change_date_do(call: CallbackQuery):
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
     await refresh_user_commands(call.message.bot, call.from_user.id)
+    await delete_my_bookings_messages(call.message.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     await call.message.answer("Бронь отменена. Выбери новую дату 👇", reply_markup=await check_dates_kb())
     await call.answer()
@@ -1022,11 +1046,20 @@ async def process_new_guests(message: Message, state: FSMContext):
 @router.message(F.chat.type == "private")
 async def unknown_message(message: Message, state: FSMContext):
     # Только личка: в группах/чате модерации бот не отвечает на произвольный текст
-    # Картинки не должны вызывать главное меню (скрин розыгрыша и т.п.)
+    # Картинки не обрабатываем (скрин розыгрыша и т.п.)
     if message.photo or (
         message.document and (message.document.mime_type or "").startswith("image/")
     ):
         return
-    if await state.get_state() is None:
-        from bot.handlers.start import main_menu_kb
-        await message.answer("Пожалуйста, выбери вариант из кнопок ниже 👇", reply_markup=main_menu_kb())
+    if await state.get_state() is not None:
+        return
+
+    from bot.handlers.start import _is_meaningful_free_text, submit_help_question
+
+    text = message.text or message.caption or ""
+    # Короткий спам / абракадабра — молчим и меню не показываем
+    if not _is_meaningful_free_text(text):
+        return
+
+    # Осмысленный текст (≥10 символов) — в тот же чат, что и вопросы из /help
+    await submit_help_question(message, thank_you=True)

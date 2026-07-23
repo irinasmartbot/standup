@@ -582,17 +582,23 @@ def get_active_raffle_booking(telegram_id):
             return _fetchone_tuple(cur)
 
 
-def get_user_bookings_for_commands(telegram_id, status):
-    """Активные брони/билеты для команд /active_bookings и /myticket."""
+def get_user_bookings_for_commands(telegram_id, status=None):
+    """Активные бесплатные брони для /my_bookings (proverka + rozygrysh).
+
+    status=None — и booked, и confirmed.
+    status='booked'|'confirmed' — фильтр (для совместимости со старыми вызовами).
+    """
     if not _use_postgres():
         return []
-    if status not in {"booked", "confirmed"}:
+    if status is not None and status not in {"booked", "confirmed"}:
         return []
 
     with _pg_connect() as conn:
         with conn.cursor() as cur:
+            status_sql = "AND b.status = %s" if status else "AND b.status IN ('booked', 'confirmed')"
+            params = (telegram_id, status) if status else (telegram_id,)
             cur.execute(
-                """
+                f"""
                 SELECT
                     b.id,
                     b.format,
@@ -610,11 +616,11 @@ def get_user_bookings_for_commands(telegram_id, status):
                 JOIN events e ON e.id = b.event_id
                 WHERE u.telegram_id = %s
                   AND b.format IN ('proverka', 'rozygrysh')
-                  AND b.status = %s
+                  {status_sql}
                   AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
                 ORDER BY e.event_date, e.event_time
                 """,
-                (telegram_id, status),
+                params,
             )
             return _fetchall_tuples(cur)
 
