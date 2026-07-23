@@ -39,10 +39,17 @@ async def main():
     dp.include_router(booking.router)
     asyncio.create_task(reminder_loop())
     asyncio.create_task(raffle_reminder_loop())
-    await dp.start_polling(
-        bot,
-        allowed_updates=["message", "callback_query", "chat_member", "my_chat_member"],
-    )
+    # Telegram Bad Gateway on initial getMe must not kill the process forever
+    while True:
+        try:
+            await dp.start_polling(
+                bot,
+                allowed_updates=["message", "callback_query", "chat_member", "my_chat_member"],
+            )
+            break
+        except (TelegramNetworkError, TelegramServerError) as exc:
+            logger.warning("Polling failed due to Telegram API: %s; retry in 15s", exc)
+            await asyncio.sleep(15)
 
 
 if __name__ == "__main__":
