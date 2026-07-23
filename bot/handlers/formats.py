@@ -346,20 +346,24 @@ def _format_host_quote(host: str, *, title: str) -> str:
     body = "\n".join(f"🎤 {escape(line)}" for line in lines)
     # expandable — если состав длинный, цитату можно свернуть
     tag = "blockquote expandable" if len(body) > 280 else "blockquote"
-    return f"\n\n<b>{escape(title)}</b>\n<{tag}>{body}</{tag.split()[0]}>"
+    return f"<b>{escape(title)}</b>\n<{tag}>{body}</{tag.split()[0]}>"
 
 
 def _best_event_text(event, *, host_title: str = "Кто выступает"):
     parts = [
         f"<b>{format_date(event['date'])}</b>",
-        escape(event.get("weekday") or ""),
+        escape((event.get("weekday") or "").strip()),
         "",
-        f"<b>{escape(event.get('time') or '')}</b>",
-        escape(event.get("address") or ""),
-        escape(event.get("description") or ""),
+        f"<b>{escape((event.get('time') or '').strip())}</b>",
+        escape((event.get("address") or "").strip()),
+        escape((event.get("description") or "").strip()),
     ]
     host_quote = _format_host_quote(event.get("host") or "", title=host_title)
     if host_quote:
+        # без пустых строк между описанием и «Кто выступает» / «Ведущий»
+        parts = [p for p in parts if p is not None]
+        while parts and parts[-1] == "":
+            parts.pop()
         parts.append(host_quote)
     text = "\n".join(parts)
     # Лимит подписи к фото в Telegram — 1024 символа

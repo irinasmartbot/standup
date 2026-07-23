@@ -31,17 +31,17 @@ router = Router()
 WELCOME_TEXT = (
     "<b>Moscow StandUp Show</b>\n\n"
     "Привет! Мы делаем шоу в различных заведениях в центре Москвы каждый день.\n\n"
-    "<i>Только опытные комики, участники проектов ТНТ и YouTube, харизматичные ведущие, "
+    "⭐ <i>Только опытные комики, участники проектов ТНТ и YouTube, харизматичные ведущие, "
     "интерактив со зрителями, атмосферные залы, подарки на каждом мероприятии — это всё мы!</i>\n\n"
-    "Здесь можно забронировать места на бесплатные шоу или купить билеты на "
+    "Здесь можно забронировать места на <b><u>бесплатные шоу</u></b> или купить билеты на "
     "<b>StandUp BEST</b> и <b>Хитлото</b>."
 )
 
 WELCOME_RICH_HTML = """
 <h2>Moscow StandUp Show</h2>
 <p>Привет! Мы делаем шоу в различных заведениях в центре Москвы каждый день.</p>
-<p><i>Только опытные комики, участники проектов ТНТ и YouTube, харизматичные ведущие, интерактив со зрителями, атмосферные залы, подарки на каждом мероприятии — это всё мы!</i></p>
-<p>Здесь можно забронировать места на бесплатные шоу или купить билеты на <b>StandUp BEST</b> и <b>Хитлото</b>.</p>
+<p>⭐ <i>Только опытные комики, участники проектов ТНТ и YouTube, харизматичные ведущие, интерактив со зрителями, атмосферные залы, подарки на каждом мероприятии — это всё мы!</i></p>
+<p>Здесь можно забронировать места на <b><u>бесплатные шоу</u></b> или купить билеты на <b>StandUp BEST</b> и <b>Хитлото</b>.</p>
 """
 
 
@@ -260,17 +260,22 @@ def _booking_command_kb(row, page: int = 0, total: int = 1):
             kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
             action_count += 2
 
+    nav_count = 0
     if total > 1:
-        prev_page = (page - 1) % total
-        next_page = (page + 1) % total
-        kb.button(text="⬅️ Назад", callback_data=f"cmd_bookings:{prev_page}")
+        # На первой странице — только «Далее», на последней — только «Назад»
+        if page > 0:
+            kb.button(text="⬅️ Назад", callback_data=f"cmd_bookings:{page - 1}")
+            nav_count += 1
         kb.button(text=f"{page + 1}/{total}", callback_data="cmd_bookings_noop")
-        kb.button(text="Далее ➡️", callback_data=f"cmd_bookings:{next_page}")
+        nav_count += 1
+        if page < total - 1:
+            kb.button(text="Далее ➡️", callback_data=f"cmd_bookings:{page + 1}")
+            nav_count += 1
 
     kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
     kb.button(text="⬅️ В главное меню", callback_data="main_menu")
     if total > 1:
-        kb.adjust(*([1] * action_count), 3, 1, 1)
+        kb.adjust(*([1] * action_count), nav_count, 1, 1)
     else:
         kb.adjust(1)
     return kb.as_markup()
