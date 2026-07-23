@@ -419,12 +419,12 @@ def _best_location_carousel_kb(events, index: int):
 
     nav_buttons = 0
     if index > 0:
-        kb.button(text="‹", callback_data=f"best_loc_carousel_{event['id']}_prev")
+        kb.button(text="⬅️", callback_data=f"best_loc_carousel_{event['id']}_prev")
         nav_buttons += 1
     kb.button(text=f"{index + 1}/{len(events)}", callback_data="best_carousel_position")
     nav_buttons += 1
     if index < len(events) - 1:
-        kb.button(text="›", callback_data=f"best_loc_carousel_{event['id']}_next")
+        kb.button(text="➡️", callback_data=f"best_loc_carousel_{event['id']}_next")
         nav_buttons += 1
 
     kb.button(text="◀️ Назад", callback_data="best_venues")
