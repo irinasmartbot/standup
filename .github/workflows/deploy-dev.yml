@@ -28,7 +28,10 @@ jobs:
           cd /home/standup/app
           git fetch origin dev
           git checkout dev
-          git pull --ff-only origin dev
+          # Код на сервере всегда = origin/dev (.env не в git, не затрагивается).
+          # Иначе локальные hotfix'ы на VPS блокируют pull.
+          git reset --hard origin/dev
+          git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc'
           /home/standup/app/venv/bin/python -m pip install -r requirements.txt
           /home/standup/app/venv/bin/python -c "from bot.db.crud import ensure_help_tables, ensure_raffle_tables; ensure_raffle_tables(); ensure_help_tables()"
           /home/standup/app/venv/bin/python -c "import main"
