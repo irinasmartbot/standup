@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
-WELCOME_MARKER = "Здесь можно забронировать места на бесплатные шоу или купить билеты на StandUp BEST и Хитлото."
+WELCOME_MARKER = "Мы делаем шоу в различных заведениях в центре Москвы каждый день"
 VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
 _VENUE_ALBUM_MESSAGE_IDS = {}
 BEST_DATES_PAGE_SIZE = 10
