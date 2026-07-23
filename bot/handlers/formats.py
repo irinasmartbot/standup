@@ -38,17 +38,17 @@ FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
 🆓 Вход <b>бесплатный</b>."""
 
 BUY_TICKET_TEXT = (
-    "Привет! 😊 Я — бот <b>Moscow StandUp Show</b>. Здесь можно купить билет на платные форматы.\n\n"
-    "Выбирай формат шоу 👇\n\n"
-    "⭐ <b>StandUp BEST</b>\n"
+    "Здесь можно посмотреть афишу по платным форматам и купить билет.\n\n"
+    "<b>Выбирай формат шоу</b>\n\n"
+    "<b>StandUp BEST</b>\n"
     "<i>Только лучший, уже проверенный стэндап материал от троих комиков, "
     "именитых участников многочисленных телевизионных проектов. "
     "Вы не услышите ни одной несмешной шутки, только BEST!!</i>\n"
-    "🎟 Билеты — от <b>500 ₽</b>\n\n"
-    "🎵 <b>Хитлото</b>\n"
+    "Билеты — от <b>500 ₽</b>\n\n"
+    "<b>Хитлото</b>\n"
     "<i>Музыкальное лото в компании стендап-комика! Веселись, пой, пей, "
-    "зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥</i>\n"
-    "🎟 Билеты — от <b>990 ₽</b>."
+    "зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы.</i>\n"
+    "Билеты — от <b>990 ₽</b>."
 )
 
 # Rich Messages HTML: крупные заголовки как в редакторе Telegram
@@ -66,23 +66,21 @@ FORMATS_RICH_HTML = """
 """
 
 BUY_TICKET_RICH_HTML = """
-<p>Привет! 😊 Я — бот <b>Moscow StandUp Show</b>. Здесь можно купить билет на платные форматы.</p>
-<h2>Выбирай формат шоу 👇</h2>
-<h3>⭐ StandUp BEST</h3>
+<p>Здесь можно посмотреть афишу по платным форматам и купить билет.</p>
+<h2>Выбирай формат шоу</h2>
+<h3>StandUp BEST</h3>
 <p><i>Только лучший, уже проверенный стэндап материал от троих комиков, именитых участников многочисленных телевизионных проектов. Вы не услышите ни одной несмешной шутки, только BEST!!</i></p>
-<p>🎟 Билеты — от <b>500 ₽</b></p>
-<h3>🎵 Хитлото</h3>
-<p><i>Музыкальное лото в компании стендап-комика! Веселись, пой, пей, зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥</i></p>
-<p>🎟 Билеты — от <b>990 ₽</b></p>
+<p>Билеты — от <b>500 ₽</b></p>
+<h3>Хитлото</h3>
+<p><i>Музыкальное лото в компании стендап-комика! Веселись, пой, пей, зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы.</i></p>
+<p>Билеты — от <b>990 ₽</b></p>
 """
 
-ALL_FORMATS_RICH_HTML = """
-<p>Привет! 😊 Я — бот <b>Moscow StandUp Show</b> для бронирования мест на мероприятия.</p>
-""" + FORMATS_RICH_HTML
-
-ALL_FORMATS_TEXT = (
-    "Привет! 😊 Я — бот <b>Moscow StandUp Show</b> для бронирования мест на мероприятия.\n\n"
-    + FORMATS_TEXT
+QUICK_BOOKING_GREETING_RICH = (
+    "<p>Привет! Я — бот <b>Moscow StandUp Show</b> для бронирования мест на мероприятия.</p>"
+)
+QUICK_BOOKING_GREETING_TEXT = (
+    "Привет! Я — бот <b>Moscow StandUp Show</b> для бронирования мест на мероприятия.\n\n"
 )
 
 
@@ -102,17 +100,17 @@ async def _send_rich_or_html(message, *, rich_html: str, fallback_html: str, rep
             parse_mode="HTML",
         )
 
-VENUES_INTRO_RICH_HTML = """
-<h2>📍 Наши площадки</h2>
-<p>Мероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус: для любителей вкусно покушать — рестораны с изысканной кухней разных народов мира, для поклонников шумных вечеринок — бары, для любителей попеть — заведения с караоке. Везде можно остаться после шоу ✨</p>
+VENUES_OUTRO_RICH_HTML = """
+<h2>Наши площадки</h2>
+<p>Мероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус: для любителей вкусно покушать — рестораны с изысканной кухней разных народов мира, для поклонников шумных вечеринок — бары, для любителей попеть — заведения с караоке. Везде можно остаться после шоу.</p>
 """
 
-VENUES_INTRO_TEXT = (
-    "📍 <b>Наши площадки</b>\n\n"
+VENUES_OUTRO_TEXT = (
+    "<b>Наши площадки</b>\n\n"
     "Мероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус: "
     "для любителей вкусно покушать — рестораны с изысканной кухней разных народов мира, "
     "для поклонников шумных вечеринок — бары, для любителей попеть — заведения с караоке. "
-    "Везде можно остаться после шоу ✨"
+    "Везде можно остаться после шоу."
 )
 
 VENUE_CARDS = (
@@ -340,7 +338,7 @@ def _host_lines(host: str) -> list[str]:
     return [line for line in lines if line]
 
 
-def _format_host_quote(host: str) -> str:
+def _format_host_quote(host: str, *, title: str) -> str:
     """Красивая цитата с составом для карточки события."""
     lines = _host_lines(host)
     if not lines:
@@ -348,10 +346,10 @@ def _format_host_quote(host: str) -> str:
     body = "\n".join(f"🎤 {escape(line)}" for line in lines)
     # expandable — если состав длинный, цитату можно свернуть
     tag = "blockquote expandable" if len(body) > 280 else "blockquote"
-    return f"\n<{tag}>{body}</{tag.split()[0]}>"
+    return f"\n\n<b>{escape(title)}</b>\n<{tag}>{body}</{tag.split()[0]}>"
 
 
-def _best_event_text(event):
+def _best_event_text(event, *, host_title: str = "Кто выступает"):
     parts = [
         f"<b>{format_date(event['date'])}</b>",
         escape(event.get("weekday") or ""),
@@ -360,7 +358,7 @@ def _best_event_text(event):
         escape(event.get("address") or ""),
         escape(event.get("description") or ""),
     ]
-    host_quote = _format_host_quote(event.get("host") or "")
+    host_quote = _format_host_quote(event.get("host") or "", title=host_title)
     if host_quote:
         parts.append(host_quote)
     text = "\n".join(parts)
@@ -506,14 +504,7 @@ async def show_venues(call: CallbackQuery):
     await _delete_previous_menu_message(call)
 
     linked_ids: list[int] = []
-    intro = await _send_rich_or_html(
-        call.message,
-        rich_html=VENUES_INTRO_RICH_HTML,
-        fallback_html=VENUES_INTRO_TEXT,
-    )
-    if intro:
-        linked_ids.append(intro.message_id)
-
+    # Сначала три блока площадок, в конце общий текст + кнопки меню
     for card in VENUE_CARDS:
         path = os.path.join(PHOTOS_DIR, card["file"])
         if os.path.exists(path):
@@ -532,8 +523,14 @@ async def show_venues(call: CallbackQuery):
         if text_msg:
             linked_ids.append(text_msg.message_id)
 
-    menu = await call.message.answer("Можно продолжить в меню 👇", reply_markup=_nav_kb())
-    _VENUE_ALBUM_MESSAGE_IDS[menu.message_id] = linked_ids
+    menu = await _send_rich_or_html(
+        call.message,
+        rich_html=VENUES_OUTRO_RICH_HTML,
+        fallback_html=VENUES_OUTRO_TEXT,
+        reply_markup=_nav_kb(),
+    )
+    if menu:
+        _VENUE_ALBUM_MESSAGE_IDS[menu.message_id] = linked_ids
     await call.answer()
 
 
@@ -544,12 +541,14 @@ async def show_rules(call: CallbackQuery):
     await call.answer()
 
 
-def _all_formats_kb():
+def _all_formats_kb(*, from_deep_link: bool = False):
     kb = InlineKeyboardBuilder()
     kb.button(text="STANDUP BEST", callback_data="best")
     kb.button(text="Хитлото", callback_data="hitloto")
     kb.button(text="StandUp Проверка материала", callback_data="check")
-    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    # По deep link нет «предыдущего» экрана — сразу в главное меню
+    back_text = "В главное меню" if from_deep_link else "◀️ Назад в меню"
+    kb.button(text=back_text, callback_data="main_menu")
     kb.adjust(1)
     return kb.as_markup()
 
@@ -563,13 +562,20 @@ def _paid_formats_kb():
     return kb.as_markup()
 
 
-async def send_all_formats(message):
+async def send_all_formats(message, *, from_deep_link: bool = False):
     """Все форматы: кнопка «Наши форматы ШОУ» и deep link ?start=quick_booking."""
+    # Приветствие — только по deep link; из меню сразу «Наши форматы»
+    if from_deep_link:
+        rich_html = QUICK_BOOKING_GREETING_RICH + FORMATS_RICH_HTML
+        fallback_html = QUICK_BOOKING_GREETING_TEXT + FORMATS_TEXT
+    else:
+        rich_html = FORMATS_RICH_HTML
+        fallback_html = FORMATS_TEXT
     await _send_rich_or_html(
         message,
-        rich_html=ALL_FORMATS_RICH_HTML,
-        fallback_html=ALL_FORMATS_TEXT,
-        reply_markup=_all_formats_kb(),
+        rich_html=rich_html,
+        fallback_html=fallback_html,
+        reply_markup=_all_formats_kb(from_deep_link=from_deep_link),
     )
 
 
@@ -832,7 +838,9 @@ def _parse_hitloto_event_callback(data):
 
 
 def _hitloto_event_text(event):
-    return _best_event_text(event)
+    lines = _host_lines(event.get("host") or "")
+    title = "Ведущие" if len(lines) > 1 else "Ведущий"
+    return _best_event_text(event, host_title=title)
 
 
 async def _send_hitloto_event_card(message, event, back_callback="hitloto_dates"):

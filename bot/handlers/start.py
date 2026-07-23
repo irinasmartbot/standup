@@ -27,12 +27,33 @@ from bot.utils.ticket import generate_ticket
 
 router = Router()
 
+# Маркер для WELCOME_MARKER в booking/formats — фразу в конце не менять.
 WELCOME_TEXT = (
-    "Привет! Это Moscow StandUp Show! Мы делаем шоу в различных заведениях в центре Москвы каждый день!\n\n"
-    "Только опытные комики, участники проектов ТНТ и YouTube, харизматичные ведущие, интерактив со зрителями, "
-    "атмосферные залы, подарки на каждом мероприятии — это всё мы! 😊\n\n"
-    "Здесь можно забронировать места на бесплатные шоу или купить билеты на StandUp BEST и Хитлото."
+    "<b>Moscow StandUp Show</b>\n\n"
+    "Привет! Мы делаем шоу в различных заведениях в центре Москвы каждый день.\n\n"
+    "<i>Только опытные комики, участники проектов ТНТ и YouTube, харизматичные ведущие, "
+    "интерактив со зрителями, атмосферные залы, подарки на каждом мероприятии — это всё мы!</i>\n\n"
+    "Здесь можно забронировать места на бесплатные шоу или купить билеты на "
+    "<b>StandUp BEST</b> и <b>Хитлото</b>."
 )
+
+WELCOME_RICH_HTML = """
+<h2>Moscow StandUp Show</h2>
+<p>Привет! Мы делаем шоу в различных заведениях в центре Москвы каждый день.</p>
+<p><i>Только опытные комики, участники проектов ТНТ и YouTube, харизматичные ведущие, интерактив со зрителями, атмосферные залы, подарки на каждом мероприятии — это всё мы!</i></p>
+<p>Здесь можно забронировать места на бесплатные шоу или купить билеты на <b>StandUp BEST</b> и <b>Хитлото</b>.</p>
+"""
+
+
+async def _send_welcome(message: Message):
+    from bot.handlers.formats import _send_rich_or_html
+
+    await _send_rich_or_html(
+        message,
+        rich_html=WELCOME_RICH_HTML,
+        fallback_html=WELCOME_TEXT,
+        reply_markup=main_menu_kb(),
+    )
 
 
 class HelpState(StatesGroup):
@@ -169,12 +190,13 @@ MY_BOOKINGS_INTRO = (
 def _booking_command_text(row, page: int = 0, total: int = 1) -> str:
     _, format_name, status, event_date, event_time, address, location, guests, *_ = row
     position = f" {page + 1}/{total}" if total > 1 else ""
+    title = escape(_format_label(format_name))
+    # Счётчик броней — рядом с типом, строку «Ваши активные брони» не показываем
+    title_line = f"<b>{title}</b>{position}" if position else f"<b>{title}</b>"
     lines = [
-        MY_BOOKINGS_INTRO,
+        f"<b><i>{escape(MY_BOOKINGS_INTRO)}</i></b>",
         "",
-        f"<b>Ваши активные брони{position}</b>",
-        "",
-        f"<b>{escape(_format_label(format_name))}</b>",
+        title_line,
         f"📅 {escape(event_date)} в {escape(event_time)}",
         f"📍 {escape(location or '')}",
         f"Адрес: {escape(address or '')}",
@@ -303,15 +325,22 @@ def _help_card_text(
     return "\n".join(lines)
 
 
-async def _send_command_bookings(message: Message, page: int = 0):
-    await refresh_user_commands(message.bot, message.from_user.id)
+async def _send_command_bookings(
+    message: Message,
+    page: int = 0,
+    telegram_id: int | None = None,
+):
+    # Из callback message.from_user — это бот; нужен id клиента явно.
+    user_id = telegram_id or (message.from_user.id if message.from_user else message.chat.id)
+    await refresh_user_commands(message.bot, user_id)
     # Убираем прошлый вывод /my_bookings, чтобы не копились устаревшие карточки
     await delete_my_bookings_messages(message.bot, message.chat.id)
-    rows = get_user_bookings_for_commands(message.from_user.id)
+    rows = get_user_bookings_for_commands(user_id)
     if not rows:
         sent = await message.answer(
-            f"{MY_BOOKINGS_INTRO}\n\nАктивных броней пока нет.",
+            f"<b><i>{escape(MY_BOOKINGS_INTRO)}</i></b>\n\nАктивных броней пока нет.",
             reply_markup=main_menu_kb(),
+            parse_mode="HTML",
         )
         remember_my_bookings_message(message.chat.id, sent.message_id)
         return
@@ -361,7 +390,7 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
 
     if payload == "quick_booking":
         from bot.handlers.formats import send_all_formats
-        await send_all_formats(message)
+        await send_all_formats(message, from_deep_link=True)
         return
 
     if payload == PAID_BEST_START:
@@ -370,14 +399,14 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
         await best_format_entry(message)
         return
 
-    await message.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
+    await _send_welcome(message)
 
 
 @router.message(Command("main_menu"), F.chat.type == "private")
 async def main_menu_command(message: Message, state: FSMContext):
     await state.clear()
     await refresh_user_commands(message.bot, message.from_user.id)
-    await message.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
+    await _send_welcome(message)
 
 
 @router.message(Command("buy_ticket"), F.chat.type == "private")
@@ -463,8 +492,9 @@ async def command_bookings_page(call: CallbackQuery):
     chat_id = call.message.chat.id
     if not rows:
         await call.message.edit_text(
-            f"{MY_BOOKINGS_INTRO}\n\nАктивных броней пока нет.",
+            f"<b><i>{escape(MY_BOOKINGS_INTRO)}</i></b>\n\nАктивных броней пока нет.",
             reply_markup=main_menu_kb(),
+            parse_mode="HTML",
         )
         remember_my_bookings_message(chat_id, call.message.message_id)
         await call.answer()
@@ -539,7 +569,11 @@ async def command_bookings_back(call: CallbackQuery):
         forget_my_bookings_message(chat_id, old_id)
     except Exception:
         pass
-    await _send_command_bookings(call.message, page=page)
+    await _send_command_bookings(
+        call.message,
+        page=page,
+        telegram_id=call.from_user.id,
+    )
     await call.answer()
 
 
@@ -625,5 +659,5 @@ async def back_to_menu(call: CallbackQuery, state: FSMContext):
         return
     await state.clear()
     await _delete_previous_menu_message(call)
-    await call.message.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
+    await _send_welcome(call.message)
     await call.answer()
