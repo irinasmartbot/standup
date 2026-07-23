@@ -157,10 +157,13 @@ def _normalize_status(value):
 
 def _format_filter_sql(filters: dict, params: dict, include_empty_events: bool) -> str:
     fmt = filters.get("format")
+    if not fmt:
+        return ""
+    # Always bind %(format)s when the SQL fragment uses it
+    params["format"] = fmt
     if fmt == "rozygrysh":
         return "b.format = %(format)s"
     if fmt == "proverka":
-        params["format"] = fmt
         if include_empty_events:
             return "(b.format = %(format)s OR (b.id IS NULL AND e.format = %(format)s))"
         return "b.format = %(format)s"
