@@ -5,7 +5,7 @@ import os
 import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import psycopg
@@ -13,15 +13,21 @@ from aiohttp import web
 from psycopg.rows import dict_row
 
 
+MSK = timezone(timedelta(hours=3))
 STATUSES = ("booked", "confirmed", "cancelled", "annulled")
 ACTIVE_STATUSES = {"booked", "confirmed"}
 FORMAT_OPTIONS = ("proverka", "rozygrysh")
+FORMAT_LABELS = {
+    "proverka": "проверка",
+    "rozygrysh": "розыгрыш",
+}
 STATUS_LABELS = {
     "booked": "Забронировано",
     "confirmed": "Подтверждено",
     "cancelled": "Отменено",
     "annulled": "Аннулировано",
 }
+BOOKING_SORT_OPTIONS = ("user_id", "status", "date", "location", "created", "changed")
 STATUS_COLORS = {
     "booked": "#f59e0b",
     "confirmed": "#22c55e",
@@ -131,10 +137,12 @@ def _parse_date_for_db(value: str):
         return None
 
 
-def _short_dt(value):
+def _parse_dt(value):
     if not value:
-        return ""
-    text = str(value)
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
     for fmt in (
         "%Y-%m-%d %H:%M:%S.%f%z",
         "%Y-%m-%d %H:%M:%S%z",
@@ -142,13 +150,37 @@ def _short_dt(value):
         "%Y-%m-%d %H:%M:%S",
     ):
         try:
-            return datetime.strptime(text, fmt).strftime("%d.%m %H:%M")
+            return datetime.strptime(text, fmt)
         except ValueError:
             pass
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%d.%m %H:%M")
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
-        return text[:16]
+        return None
+
+
+def _short_dt(value):
+    dt = _parse_dt(value)
+    if not dt:
+        return str(value)[:16] if value else ""
+    if dt.tzinfo is None:
+        # Postgres TIMESTAMPTZ is UTC under the hood; naive values treat as UTC
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(MSK).strftime("%d.%m %H:%M")
+
+
+def _event_dt_key(date_str: str, time_str: str):
+    clean_time = (time_str or "00:00").strip().replace(".", ":")
+    for fmt in ("%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(f"{date_str} {clean_time}", fmt)
+        except ValueError:
+            pass
+    return datetime.min
+
+
+def _format_label(fmt: str) -> str:
+    return FORMAT_LABELS.get(fmt, fmt or "")
 
 
 def _normalize_status(value):
@@ -208,6 +240,7 @@ def _fetch_postgres_rows(config: AdminConfig, filters: dict, include_empty_event
             b.updated_at::text,
             b.reminder_24h_sent,
             b.reminder_day_sent,
+            u.id AS user_id,
             u.telegram_id,
             u.vk_id,
             u.username,
@@ -293,6 +326,7 @@ def _fetch_sqlite_rows(config: AdminConfig, filters: dict, include_empty_events=
                 "cancelled_at": "",
                 "updated_at": item.get("created_at") or "",
                 "vk_id": "",
+                "user_id": item.get("telegram_id") or "",
             }
         )
         result.append(item)
@@ -441,6 +475,7 @@ def _booking_from_row(row: dict, event: dict | None = None) -> dict:
     )
     return {
         "id": row.get("booking_id"),
+        "user_id": row.get("user_id") or "",
         "status": status,
         "status_label": STATUS_LABELS[status],
         "guests": _parse_int(row.get("guests")),
@@ -448,6 +483,8 @@ def _booking_from_row(row: dict, event: dict | None = None) -> dict:
         "format": row.get("booking_format") or row.get("event_format") or "",
         "created_at": _short_dt(row.get("created_at")),
         "changed_at": _short_dt(changed_at),
+        "created_at_raw": row.get("created_at") or "",
+        "changed_at_raw": changed_at or "",
         "event_date": row.get("event_date") or "",
         "event_time": row.get("event_time") or "",
         "location": row.get("location") or "",
@@ -506,11 +543,19 @@ def build_dashboard(rows: list[dict]) -> dict:
         totals["bookings"] += 1
         bookings.append(booking)
 
-        user_key = str(booking["telegram_id"] or booking["vk_id"] or booking["phone"] or booking["name"] or booking["id"])
+        user_key = str(
+            booking["user_id"]
+            or booking["telegram_id"]
+            or booking["vk_id"]
+            or booking["phone"]
+            or booking["name"]
+            or booking["id"]
+        )
         user = users.setdefault(
             user_key,
             {
                 "key": user_key,
+                "user_id": booking["user_id"],
                 "name": booking["name"],
                 "username": booking["username"],
                 "phone": booking["phone"],
@@ -523,6 +568,8 @@ def build_dashboard(rows: list[dict]) -> dict:
                 "guests_reserved": 0,
             },
         )
+        if booking["user_id"] and not user.get("user_id"):
+            user["user_id"] = booking["user_id"]
         user["bookings"].append(booking)
         user["status_counts"][status] += 1
         if status in ACTIVE_STATUSES:
@@ -587,9 +634,63 @@ def _seat_bar(event: dict) -> str:
     )
 
 
-def _booking_table(bookings: list[dict], compact=False) -> str:
+def _sort_header(label: str, key: str, filters: dict, sortable: bool) -> str:
+    if not sortable:
+        return f"<th>{_h(label)}</th>"
+    current = filters.get("sort") or ""
+    order = filters.get("order") or "asc"
+    if current == key:
+        next_order = "desc" if order == "asc" else "asc"
+        mark = " ▲" if order == "asc" else " ▼"
+    else:
+        next_order = "asc"
+        mark = ""
+    href = _query_link(filters, sort=key, order=next_order)
+    return (
+        f'<th class="sortable"><a href="{href}">{_h(label)}'
+        f'<span class="sort-mark">{mark}</span></a></th>'
+    )
+
+
+def _sort_bookings(bookings: list[dict], filters: dict) -> list[dict]:
+    sort_key = filters.get("sort") or ""
+    if sort_key not in BOOKING_SORT_OPTIONS:
+        return bookings
+    reverse = (filters.get("order") or "asc") == "desc"
+
+    def key_fn(booking: dict):
+        if sort_key == "user_id":
+            return (_parse_int(booking.get("user_id")), str(booking.get("user_id") or ""))
+        if sort_key == "status":
+            status = booking.get("status")
+            return (STATUSES.index(status) if status in STATUSES else 99, status or "")
+        if sort_key == "date":
+            return (_event_dt_key(booking.get("event_date") or "", booking.get("event_time") or ""),)
+        if sort_key == "location":
+            return ((booking.get("location") or "").lower(), (booking.get("address") or "").lower())
+        if sort_key in ("created", "changed"):
+            raw = booking.get("created_at_raw" if sort_key == "created" else "changed_at_raw")
+            dt = _parse_dt(raw)
+            if dt is None:
+                dt = datetime.min.replace(tzinfo=timezone.utc)
+            elif dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (dt,)
+        return (0,)
+
+    return sorted(bookings, key=key_fn, reverse=reverse)
+
+
+def _booking_table(
+    bookings: list[dict],
+    compact=False,
+    show_format=False,
+    filters: dict | None = None,
+    sortable=False,
+) -> str:
     if not bookings:
         return '<p class="muted">Броней пока нет.</p>'
+    filters = filters or {}
     rows = []
     for booking in bookings:
         contact = _h(booking["phone"])
@@ -598,14 +699,17 @@ def _booking_table(bookings: list[dict], compact=False) -> str:
         event_cols = ""
         if not compact:
             event_cols = (
-                f"<td>{_h(booking['event_date'])}</td>"
-                f"<td>{_h(booking['event_time'])}</td>"
-                f"<td>{_h(booking['location'])}<br><span class='muted'>{_h(booking['address'])}</span></td>"
+                f"<td>{_h(booking['event_date'])}<br><span class='muted'>{_h(booking['event_time'])}</span></td>"
+                f"<td class='loc'>{_h(booking['location'])}<br><span class='muted'>{_h(booking['address'])}</span></td>"
             )
+        status_cell = _status_badge(booking["status"])
+        if show_format and booking.get("format"):
+            status_cell += f'<br><span class="format-tag">{_h(_format_label(booking["format"]))}</span>'
+        user_id = booking.get("user_id") or "—"
         rows.append(
             "<tr>"
-            f"<td>#{_h(booking['id'])}</td>"
-            f"<td>{_status_badge(booking['status'])}</td>"
+            f"<td>{_h(user_id)}</td>"
+            f"<td>{status_cell}</td>"
             f"<td><b>{_h(booking['name'])}</b><br><span class='muted'>{_h(booking['source'])}</span></td>"
             f"<td>{contact}</td>"
             f"<td>{_h(booking['guests'])}</td>"
@@ -614,11 +718,29 @@ def _booking_table(bookings: list[dict], compact=False) -> str:
             f"<td>{_h(booking['changed_at'])}</td>"
             "</tr>"
         )
-    event_headers = "" if compact else "<th>Дата</th><th>Время</th><th>Локация</th>"
+    if compact:
+        headers = (
+            f"{_sort_header('user_id', 'user_id', filters, False)}"
+            f"{_sort_header('Статус', 'status', filters, False)}"
+            "<th>Клиент</th><th>Контакт</th><th>Гости</th>"
+            f"{_sort_header('Создана', 'created', filters, False)}"
+            f"{_sort_header('Изменена', 'changed', filters, False)}"
+        )
+        table_class = "bookings compact"
+    else:
+        headers = (
+            f"{_sort_header('user_id', 'user_id', filters, sortable)}"
+            f"{_sort_header('Статус', 'status', filters, sortable)}"
+            "<th>Клиент</th><th>Контакт</th><th>Гости</th>"
+            f"{_sort_header('Дата', 'date', filters, sortable)}"
+            f"{_sort_header('Локация', 'location', filters, sortable)}"
+            f"{_sort_header('Создана', 'created', filters, sortable)}"
+            f"{_sort_header('Изменена', 'changed', filters, sortable)}"
+        )
+        table_class = "bookings"
     return (
-        "<table><thead><tr><th>ID</th><th>Статус</th><th>Клиент</th><th>Контакт</th><th>Гости</th>"
-        f"{event_headers}<th>Создана</th><th>Изменена</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table>"
+        f'<div class="table-wrap"><table class="{table_class}"><thead><tr>{headers}</tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
 
 
@@ -632,7 +754,7 @@ def _event_card(event: dict) -> str:
         '<div class="event-head">'
         f'<div><h2>{_h(event["date"])} в {_h(event["time"])} · {_h(event["location"])}</h2>'
         f'<p>{_h(event["address"])}</p></div>'
-        f'<span class="format">{_h(event["format"])}</span>'
+        f'<span class="format">{_h(_format_label(event["format"]) or event["format"])}</span>'
         '</div>'
         f'{_seat_bar(event)}'
         f'{_status_bar(event)}'
@@ -652,7 +774,8 @@ def _tabs(filters: dict, can_view_db: bool = False) -> str:
         tabs.append(("db", "База"))
     current = filters.get("tab") or "date"
     return "".join(
-        f'<a class="tab {"active" if current == key else ""}" href="{_query_link(filters, tab=key, u="", table="", page="")}">{label}</a>'
+        f'<a class="tab {"active" if current == key else ""}" '
+        f'href="{_query_link(filters, tab=key, date="", u="", table="", page="", sort="", order="")}">{label}</a>'
         for key, label in tabs
     )
 
@@ -740,7 +863,9 @@ def _format_select(filters: dict) -> str:
     options = ['<option value="">Все форматы</option>']
     for fmt in FORMAT_OPTIONS:
         selected = "selected" if filters.get("format") == fmt else ""
-        options.append(f'<option value="{fmt}" {selected}>{fmt}</option>')
+        options.append(
+            f'<option value="{fmt}" {selected}>{_h(FORMAT_LABELS.get(fmt, fmt))}</option>'
+        )
     return "".join(options)
 
 
@@ -765,7 +890,7 @@ def _date_tab(dashboard: dict, filters: dict) -> str:
 
 
 def _bookings_tab(dashboard: dict, filters: dict) -> str:
-    bookings = dashboard["bookings"]
+    bookings = _sort_bookings(dashboard["bookings"], filters)
     by_format = defaultdict(list)
     for booking in bookings:
         by_format[booking["format"]].append(booking)
@@ -773,7 +898,10 @@ def _bookings_tab(dashboard: dict, filters: dict) -> str:
     for fmt, title in (("proverka", "Проверка материала"), ("rozygrysh", "Розыгрыш")):
         if filters.get("format") and filters["format"] != fmt:
             continue
-        sections.append(f'<section class="card"><h2>{title}</h2>{_booking_table(by_format.get(fmt, []))}</section>')
+        sections.append(
+            f'<section class="card"><h2>{title}</h2>'
+            f'{_booking_table(by_format.get(fmt, []), filters=filters, sortable=True)}</section>'
+        )
     if not sections:
         return '<section class="card empty-state"><h2>Броней пока нет</h2></section>'
     return "".join(sections)
@@ -793,13 +921,18 @@ def _user_stage(user: dict) -> str:
 
 
 def _users_tab(dashboard: dict, filters: dict) -> str:
-    users = sorted(dashboard["users"].values(), key=lambda u: (u["name"] or "", u["phone"] or ""))
+    users = sorted(
+        dashboard["users"].values(),
+        key=lambda u: (_parse_int(u.get("user_id")), u["name"] or "", u["phone"] or ""),
+    )
     selected_key = filters.get("u", "")
     rows = []
     for user in users:
         rows.append(
             "<tr>"
-            f"<td><a href='{_query_link(filters, u=user['key'])}'>{_h(user['name'] or 'Без имени')}</a><br><span class='muted'>{_h(user['source'])}</span></td>"
+            f"<td>{_h(user.get('user_id') or '—')}</td>"
+            f"<td><a href='{_query_link(filters, u=user['key'])}'>{_h(user['name'] or 'Без имени')}</a>"
+            f"<br><span class='muted'>{_h(user['source'])}</span></td>"
             f"<td>{_h(user['phone'])}<br><span class='muted'>@{_h(user['username'])}</span></td>"
             f"<td>{len(user['bookings'])}</td>"
             f"<td>{user['status_counts'].get('booked', 0)}</td>"
@@ -809,9 +942,11 @@ def _users_tab(dashboard: dict, filters: dict) -> str:
             "</tr>"
         )
     table = (
-        "<table><thead><tr><th>Клиент</th><th>Контакт</th><th>Всего</th><th>Активные</th>"
+        '<div class="table-wrap"><table class="users">'
+        "<thead><tr><th>user_id</th><th>Клиент</th><th>Контакт</th><th>Всего</th><th>Активные</th>"
         "<th>Билеты</th><th>Отмены</th><th>Этап</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"7\" class=\"muted\">Пользователей пока нет</td></tr>'}</tbody></table>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"muted\">Пользователей пока нет</td></tr>'}</tbody>"
+        "</table></div>"
     )
     detail = ""
     if selected_key and selected_key in dashboard["users"]:
@@ -821,7 +956,8 @@ def _users_tab(dashboard: dict, filters: dict) -> str:
         detail = (
             '<section class="card user-detail">'
             f'<h2>{_h(user["name"] or "Без имени")}</h2>'
-            f'<p class="muted">{_h(user["phone"])} · @{_h(user["username"])} · источник: {_h(user["source"])}</p>'
+            f'<p class="muted">user_id: {_h(user.get("user_id") or "—")} · {_h(user["phone"])} · '
+            f'@{_h(user["username"])} · источник: {_h(user["source"])}</p>'
             '<div class="mini-metrics">'
             f'<span>Всего броней: <b>{len(user["bookings"])}</b></span>'
             f'<span>Активных: <b>{user["status_counts"].get("booked", 0)}</b></span>'
@@ -831,7 +967,7 @@ def _users_tab(dashboard: dict, filters: dict) -> str:
             f'<span>Напоминание в день: <b>{reminders_day}</b></span>'
             '</div>'
             f'<p><b>Текущий этап:</b> {_h(_user_stage(user))}</p>'
-            f'{_booking_table(user["bookings"])}'
+            f'{_booking_table(user["bookings"], show_format=True)}'
             '</section>'
         )
     return detail + f'<section class="card"><h2>Users</h2>{table}</section>'
@@ -860,6 +996,8 @@ def render_admin_html(
     date_value = _date_to_input(filters.get("date", ""))
     date_input = '<input name="date" type="date" value="{}">'.format(_h(date_value))
     hidden_status = f'<input type="hidden" name="status" value="{_h(filters.get("status"))}">' if filters.get("status") else ""
+    hidden_sort = f'<input type="hidden" name="sort" value="{_h(filters.get("sort"))}">' if filters.get("sort") else ""
+    hidden_order = f'<input type="hidden" name="order" value="{_h(filters.get("order"))}">' if filters.get("sort") else ""
     is_db = (filters.get("tab") or "date") == "db"
     summary_html = ""
     filters_html = ""
@@ -878,6 +1016,8 @@ def render_admin_html(
         {date_input}
         <select name="format">{_format_select(filters)}</select>
         {hidden_status}
+        {hidden_sort}
+        {hidden_order}
         <button type="submit">Показать</button>
         <a class="pill" href="/admin?tab={_h(filters.get('tab') or 'date')}">Сбросить</a>
       </form>
@@ -924,11 +1064,27 @@ def render_admin_html(
     .active-bookings {{ margin-top:10px; color:#334155; }}
     .counters, .mini-metrics {{ display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; align-items:center; }}
     .counter, .mini-metrics span {{ background:#f8fafc; border:1px solid var(--line); border-radius:999px; padding:7px 10px; color:#334155; }}
-    .table-wrap {{ overflow-x:auto; }}
+    .table-wrap {{ overflow-x:auto; -webkit-overflow-scrolling:touch; }}
     table {{ width:100%; border-collapse:collapse; margin-top:12px; }}
+    table.bookings {{ table-layout:fixed; min-width:1080px; }}
+    table.bookings.compact {{ min-width:760px; }}
+    table.bookings th:nth-child(1), table.bookings td:nth-child(1) {{ width:72px; }}
+    table.bookings th:nth-child(2), table.bookings td:nth-child(2) {{ width:120px; }}
+    table.bookings th:nth-child(3), table.bookings td:nth-child(3) {{ width:140px; }}
+    table.bookings th:nth-child(4), table.bookings td:nth-child(4) {{ width:140px; }}
+    table.bookings th:nth-child(5), table.bookings td:nth-child(5) {{ width:56px; }}
+    table.bookings:not(.compact) th:nth-child(6), table.bookings:not(.compact) td:nth-child(6) {{ width:96px; }}
+    table.bookings:not(.compact) th:nth-child(7), table.bookings:not(.compact) td:nth-child(7) {{ width:220px; }}
+    table.bookings:not(.compact) th:nth-child(8), table.bookings:not(.compact) td:nth-child(8),
+    table.bookings:not(.compact) th:nth-child(9), table.bookings:not(.compact) td:nth-child(9) {{ width:92px; }}
     th, td {{ padding:11px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; white-space:nowrap; }}
+    td.loc {{ white-space:normal; word-break:break-word; overflow-wrap:anywhere; }}
     th {{ color:#475467; font-size:13px; background:#f8fafc; }}
+    th.sortable a {{ color:inherit; text-decoration:none; }}
+    th.sortable a:hover {{ text-decoration:underline; }}
+    .sort-mark {{ color:#94a3b8; font-size:11px; }}
     .badge {{ display:inline-block; color:white; border-radius:999px; padding:5px 9px; font-size:12px; font-weight:700; }}
+    .format-tag {{ display:inline-block; margin-top:6px; background:#eef2ff; color:#3730a3; border-radius:999px; padding:3px 8px; font-size:12px; font-weight:700; }}
     .muted {{ color:var(--muted); }}
     .empty-state {{ text-align:center; padding:36px; color:#475467; }}
     @media (max-width: 780px) {{
@@ -954,6 +1110,12 @@ def render_admin_html(
 
 
 def _filters_from_request(request: web.Request) -> dict:
+    sort = request.query.get("sort", "").strip()
+    order = request.query.get("order", "").strip().lower()
+    if sort not in BOOKING_SORT_OPTIONS:
+        sort = ""
+    if order not in ("asc", "desc"):
+        order = "asc" if sort else ""
     return {
         "tab": request.query.get("tab", "date").strip() or "date",
         "status": request.query.get("status", "").strip(),
@@ -962,6 +1124,8 @@ def _filters_from_request(request: web.Request) -> dict:
         "u": request.query.get("u", "").strip(),
         "table": request.query.get("table", "").strip(),
         "page": request.query.get("page", "1").strip() or "1",
+        "sort": sort,
+        "order": order,
     }
 
 
