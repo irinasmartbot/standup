@@ -1140,6 +1140,53 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "</div>"
     )
 
+    event_labels = {
+        "bot_start": "Зашли в бот (/start)",
+        "help_open": "Открыли Help / FAQ",
+        "help_question": "Написали в поддержку",
+        "branch_best": "Ветка BEST",
+        "branch_hitloto": "Ветка Hit Loto",
+        "branch_proverka": "Ветка проверка",
+        "show_card": "Открыли карточку шоу",
+        "buy_click": "Купить (если трекаем)",
+        "raffle_enter": "Розыгрыш · вход",
+        "raffle_branch": "Розыгрыш · выбор ветки",
+        "raffle_screenshot": "Розыгрыш · скрин",
+        "raffle_approved": "Розыгрыш · скрин принят",
+        "raffle_rejected": "Розыгрыш · скрин отклонён",
+        "raffle_subscribed": "Розыгрыш · подписка ок",
+        "raffle_sub_failed": "Розыгрыш · подписка нет",
+        "booking_created": "Бронь создана",
+        "booking_confirmed": "Билет получен",
+        "booking_cancelled": "Бронь отменена",
+        "bot_blocked": "Заблокировали бота",
+        "bot_unblocked": "Разблокировали бота",
+    }
+    all_event_rows = []
+    for name, metric in sorted(
+        by_name.items(),
+        key=lambda item: (-item[1].get("events", 0), item[0]),
+    ):
+        all_event_rows.append(
+            "<tr>"
+            f"<td>{_h(event_labels.get(name, name))}</td>"
+            f"<td><code>{_h(name)}</code></td>"
+            f"<td>{metric.get('events', 0)}</td>"
+            f"<td>{metric.get('uniques', 0)}</td>"
+            "</tr>"
+        )
+    all_events_table = (
+        '<section class="card">'
+        "<h2>Все события за период</h2>"
+        '<p class="muted">Для любого события: сколько раз сработало и сколько уникальных людей. '
+        "Пример: Hit Loto 10 нажатий / 1 человек.</p>"
+        '<div class="table-wrap"><table><thead><tr>'
+        "<th>Событие</th><th>Код</th><th>Нажатий / заходов</th><th>Уникальных людей</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(all_event_rows) or '<tr><td colspan=\"4\" class=\"muted\">За выбранный период событий нет</td></tr>'}</tbody>"
+        "</table></div></section>"
+    )
+
     payload_rows = []
     for row in report.get("starts_by_payload") or []:
         payload_rows.append(
@@ -1246,7 +1293,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     В карточках: число = заходы, ниже — уникальные люди.</p>
     """
 
-    return filters_bar + overview + starts_table + cards_table + raffle + audience_html
+    return filters_bar + overview + all_events_table + starts_table + cards_table + raffle + audience_html
 
 
 def _content(dashboard: dict, filters: dict, db_data: dict | None = None, analytics: dict | None = None) -> str:
