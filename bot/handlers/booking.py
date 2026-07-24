@@ -559,9 +559,6 @@ async def process_guests(message: Message, state: FSMContext):
 
     event_address = event["address"] if event else ""
     event_location = event["location"] if event else ""
-    same_day_warn = same_day_booking_warning(
-        message.from_user.id, event_date, exclude_time=event_time
-    )
     booking_id = create_booking(
         message.from_user.id, message.from_user.username or "",
         name, phone, event_date, event_time, event_address, event_location, guests,
@@ -593,10 +590,8 @@ async def process_guests(message: Message, state: FSMContext):
     location_line = f"📍 Локация {event_location}, {event_address}".strip(", ")
     weekday = (event or {}).get("weekday") or ""
     weekday_part = f" ({weekday})" if weekday else ""
-    warn_prefix = f"{same_day_warn}\n\n" if same_day_warn else ""
     if days_until <= 1:
         text = (
-            f"{warn_prefix}"
             f"Отлично!\n\n"
             f"❗ <b>Важная информация</b> — для того чтобы мы окончательно закрепили за Вами место "
             f"на дату и время:\n"
@@ -608,7 +603,6 @@ async def process_guests(message: Message, state: FSMContext):
         )
     else:
         text = (
-            f"{warn_prefix}"
             f"Отлично! Мы внесли Вас в списки гостей:\n\n"
             f"<b>Дата:</b> {date_str} ({event['weekday'] if event else ''})\n"
             f"<b>Время:</b> {event_time}\n"

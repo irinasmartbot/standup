@@ -176,16 +176,6 @@ def _format_label(format_name: str) -> str:
     return format_name
 
 
-def _days_until(event_date: str) -> int | None:
-    try:
-        date_value = datetime.strptime(event_date, "%d.%m.%Y").date()
-    except (TypeError, ValueError):
-        return None
-    from bot.utils.ticket import now_msk
-
-    return (date_value - now_msk().date()).days
-
-
 MY_BOOKINGS_INTRO = (
     "Здесь ты можешь смотреть свои активные брони по бесплатному бронированию."
 )
@@ -230,24 +220,17 @@ def _ticket_command_photo(row):
 
 
 def _booking_command_kb(row, page: int = 0, total: int = 1):
-    booking_id, format_name, status, event_date, *_ = row
+    booking_id, format_name, status, *_ = row
     kb = InlineKeyboardBuilder()
-    days_until = _days_until(event_date)
-    can_get_ticket = days_until is not None and days_until <= 1
     action_count = 0
 
+    # «Получить билет» только из напоминания; в карточке — «Билет по брони», если уже выдан
     if status == "booked":
         if format_name == "rozygrysh":
-            if can_get_ticket:
-                kb.button(text="🎟 Получить билет 🎟", callback_data=f"rz_ticket_{booking_id}")
-                action_count += 1
             kb.button(text="Что, если я хочу прийти не один?", callback_data="rz_not_alone")
             kb.button(text="Отменить бронь", callback_data=f"rz_cancel_{booking_id}")
             action_count += 2
         else:
-            if can_get_ticket:
-                kb.button(text="🎟 Получить билет 🎟", callback_data=f"get_ticket_{booking_id}")
-                action_count += 1
             kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
             kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
             kb.button(text="Изменить количество гостей", callback_data=f"change_guests_confirm_{booking_id}")
@@ -276,10 +259,9 @@ def _booking_command_kb(row, page: int = 0, total: int = 1):
             kb.button(text="Далее ➡️", callback_data=f"cmd_bookings:{page + 1}")
             nav_count += 1
 
-    kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
     kb.button(text="⬅️ В главное меню", callback_data="main_menu")
     if total > 1:
-        kb.adjust(*([1] * action_count), nav_count, 1, 1)
+        kb.adjust(*([1] * action_count), nav_count, 1)
     else:
         kb.adjust(1)
     return kb.as_markup()

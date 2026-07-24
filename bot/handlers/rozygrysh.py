@@ -206,11 +206,13 @@ TICKET_ISSUED_TEXT = (
     "чтобы вас посадили вместе — нажмите кнопку «Что, если я хочу прийти не один?» "
     "и узнайте информацию.\n"
     "<u>В противном случае вы будете сидеть на месте, которое предложит администратор рассадки.</u>\n\n"
+    "<blockquote expandable>"
     "Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
     f"При возникновении вопросов — можно писать менеджеру {{manager}} "
     f"(если срочно — звоните {MANAGER_PHONE})\n\n"
     f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
     "(там часто дарят бесплатные билеты на платные шоу 😉)"
+    "</blockquote>"
 )
 
 SCREEN_OK_TEXT = (
@@ -1464,10 +1466,6 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             return
         await state.update_data(phone=phone)
 
-        same_day_warn = same_day_booking_warning(
-            user.id, event_date, exclude_time=event_time
-        )
-
         try:
             booking_id = create_booking(
                 user.id,
@@ -1500,10 +1498,8 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             days_until = 99
 
         location_line = f"📍 Локация {event_location}, {event_address}".strip(", ")
-        warn_prefix = f"{same_day_warn}\n\n" if same_day_warn else ""
         if days_until <= 1:
             text = (
-                f"{warn_prefix}"
                 f"Отлично!\n\n"
                 f"❗ <b>Важная информация</b> — для того чтобы мы окончательно закрепили за Вами место "
                 f"на дату и время:\n"
@@ -1516,7 +1512,6 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             markup = _manage_kb(booking_id, include_ticket=True)
         else:
             text = (
-                f"{warn_prefix}"
                 f"Отлично! Мы внесли Вас в списки гостей:\n\n"
                 f"<b>Дата:</b> {date_str} ({escape(weekday)})\n"
                 f"<b>Время:</b> {event_time}\n"
