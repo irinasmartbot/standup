@@ -188,18 +188,25 @@ def _normalize_status(value):
 
 
 def _format_filter_sql(filters: dict, params: dict, include_empty_events: bool) -> str:
+    """Restrict admin to проверка/розыгрыш; hide hitloto and other sheet formats."""
     fmt = filters.get("format")
-    if not fmt:
-        return ""
-    # Always bind %(format)s when the SQL fragment uses it
-    params["format"] = fmt
-    if fmt == "rozygrysh":
-        return "b.format = %(format)s"
-    if fmt == "proverka":
+    if fmt in FORMAT_OPTIONS:
+        params["format"] = fmt
+        if fmt == "rozygrysh":
+            # Розыгрыш-брони могут быть на event.format=best — берём по booking.format
+            return "b.format = %(format)s"
         if include_empty_events:
             return "(b.format = %(format)s OR (b.id IS NULL AND e.format = %(format)s))"
         return "b.format = %(format)s"
-    return ""
+
+    # «Все форматы» в админке = только проверка + розыгрыш (не hitloto/best без таких броней)
+    params["admin_formats"] = list(FORMAT_OPTIONS)
+    if include_empty_events:
+        return (
+            "(b.format = ANY(%(admin_formats)s) "
+            "OR (b.id IS NULL AND e.format = ANY(%(admin_formats)s)))"
+        )
+    return "b.format = ANY(%(admin_formats)s)"
 
 
 def _fetch_postgres_rows(config: AdminConfig, filters: dict, include_empty_events=False) -> list[dict]:
@@ -815,22 +822,24 @@ def _event_label(event: dict) -> str:
     return " · ".join(parts)
 
 
+def _event_matches_admin_format(event: dict, fmt: str = "") -> bool:
+    """True if event belongs in admin for the selected format filter."""
+    wanted = (fmt,) if fmt in FORMAT_OPTIONS else FORMAT_OPTIONS
+    if event.get("format") in wanted:
+        return True
+    return any(b.get("format") in wanted for b in event.get("bookings") or [])
+
+
 def _events_for_filter(dashboard: dict, filters: dict) -> list[dict]:
     """Events available for the show picker (current date + optional format)."""
     if not filters.get("date"):
         return []
-    events = list(dashboard.get("events") or [])
-    fmt = filters.get("format")
-    if fmt:
-        # Match by booking format too: розыгрыш-брони могут висеть на event.format=best
-        filtered = []
-        for event in events:
-            if event.get("format") == fmt:
-                filtered.append(event)
-                continue
-            if any(b.get("format") == fmt for b in event.get("bookings") or []):
-                filtered.append(event)
-        events = filtered
+    fmt = filters.get("format") or ""
+    events = [
+        event
+        for event in (dashboard.get("events") or [])
+        if _event_matches_admin_format(event, fmt)
+    ]
     events.sort(key=lambda e: (_event_dt_key(e.get("date") or "", e.get("time") or ""), e.get("location") or ""))
     return events
 
