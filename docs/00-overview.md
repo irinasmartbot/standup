@@ -17,6 +17,7 @@
 - `docs/database.md` — модель данных, правила хранения и PostgreSQL-схема.
 - `docs/vk_mvp.md` — MVP по VK-направлению.
 - `docs/flows/proverka_materiala.md` — пользовательский flow проверки материала.
+- `docs/technical-audit-2026-07-24.md` — технический аудит, P0/P1/P2 находки и план стабилизации.
 
 ## Регламент
 
