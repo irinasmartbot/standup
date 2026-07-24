@@ -44,6 +44,16 @@ jobs:
             sudo /usr/bin/journalctl -u standup-bot -n 80 --no-pager
             exit 1
           )
+          if sudo /usr/bin/systemctl list-unit-files standup-admin.service --no-legend | grep -q standup-admin.service; then
+            sudo /usr/bin/systemctl restart standup-admin
+            sleep 1
+            sudo /usr/bin/systemctl is-active --quiet standup-admin || (
+              sudo /usr/bin/journalctl -u standup-admin -n 80 --no-pager
+              exit 1
+            )
+          else
+            echo "standup-admin.service not found; skipping restart"
+          fi
           if sudo /usr/bin/systemctl list-unit-files standup-events-sync.service --no-legend | grep -q standup-events-sync.service; then
             sudo /usr/bin/systemctl restart standup-events-sync || echo "standup-events-sync restart failed; bot deploy continues"
           else
