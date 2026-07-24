@@ -1134,8 +1134,8 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         f'{_analytics_metric_card("BEST", by_name.get("branch_best"))}'
         f'{_analytics_metric_card("Hit Loto", by_name.get("branch_hitloto"))}'
         f'{_analytics_metric_card("Брони созданы", by_name.get("booking_created"))}'
-        f'{_analytics_metric_card("Билеты", by_name.get("booking_confirmed"))}'
-        f'{_analytics_metric_card("Отмены", by_name.get("booking_cancelled"))}'
+        f'{_analytics_metric_card("Билет получен", by_name.get("booking_confirmed"))}'
+        f'{_analytics_metric_card("Отмены брони", by_name.get("booking_cancelled"))}'
         f'{_analytics_metric_card("Help / FAQ", by_name.get("help_open"))}'
         "</div>"
     )
