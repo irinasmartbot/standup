@@ -36,6 +36,7 @@ EVENT_RAFFLE_SUB_FAILED = "raffle_sub_failed"
 EVENT_BOOKING_CREATED = "booking_created"
 EVENT_BOOKING_CONFIRMED = "booking_confirmed"
 EVENT_BOOKING_CANCELLED = "booking_cancelled"
+EVENT_BOOKING_ANNULLED = "booking_annulled"
 EVENT_BOT_BLOCKED = "bot_blocked"
 EVENT_BOT_UNBLOCKED = "bot_unblocked"
 
@@ -248,6 +249,7 @@ def fetch_analytics_report(
         "starts_by_payload": [],
         "show_cards": [],
         "raffle_branches": [],
+        "raffle_bookings": {},
         "audience": {
             "telegram_users": 0,
             "telegram_blocked": 0,
@@ -375,6 +377,47 @@ def fetch_analytics_report(
                 )
                 raffle_branches = [dict(row) for row in cur.fetchall()]
 
+                # Raffle booking stages from bookings table (format=rozygrysh),
+                # so history and annulments are visible even before analytics existed.
+                booking_where = ["b.format = 'rozygrysh'"]
+                booking_params: dict[str, Any] = {}
+                if day_from and day_to:
+                    booking_params["start"] = params["start"]
+                    booking_params["end"] = params["end"]
+                if channel in ("telegram", "vkontakte"):
+                    booking_where.append("b.source = %(channel)s")
+                    booking_params["channel"] = channel
+                booking_where_sql = " AND ".join(booking_where)
+
+                def _raffle_booking_metric(time_column: str) -> dict:
+                    time_filter = ""
+                    if "start" in booking_params and "end" in booking_params:
+                        time_filter = f" AND b.{time_column} >= %(start)s AND b.{time_column} < %(end)s"
+                    cur.execute(
+                        f"""
+                        SELECT
+                            COUNT(*)::int AS events,
+                            COUNT(DISTINCT b.user_id)::int AS uniques
+                        FROM bookings b
+                        WHERE {booking_where_sql}
+                          AND b.{time_column} IS NOT NULL
+                          {time_filter}
+                        """,
+                        booking_params,
+                    )
+                    row = cur.fetchone() or {}
+                    return {
+                        "events": int(row.get("events") or 0),
+                        "uniques": int(row.get("uniques") or 0),
+                    }
+
+                raffle_bookings = {
+                    "created": _raffle_booking_metric("created_at"),
+                    "confirmed": _raffle_booking_metric("confirmed_at"),
+                    "cancelled": _raffle_booking_metric("cancelled_at"),
+                    "annulled": _raffle_booking_metric("annulled_at"),
+                }
+
                 # Audience is a snapshot (not period-bound), except blocked_at if we want — keep snapshot.
                 cur.execute(
                     """
@@ -402,6 +445,7 @@ def fetch_analytics_report(
             "starts_by_payload": starts_by_payload,
             "show_cards": show_cards,
             "raffle_branches": raffle_branches,
+            "raffle_bookings": raffle_bookings,
             "audience": audience,
         }
     except Exception:

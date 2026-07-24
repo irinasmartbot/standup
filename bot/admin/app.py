@@ -1159,6 +1159,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "booking_created": "Бронь создана",
         "booking_confirmed": "Билет получен",
         "booking_cancelled": "Бронь отменена",
+        "booking_annulled": "Бронь аннулирована",
         "bot_blocked": "Заблокировали бота",
         "bot_unblocked": "Разблокировали бота",
     }
@@ -1255,6 +1256,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "</table></div></section>"
     )
 
+    raffle_bookings = report.get("raffle_bookings") or {}
     raffle = (
         '<section class="card">'
         "<h2>Розыгрыш</h2>"
@@ -1265,30 +1267,34 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         f'<span>Отклонён: {_metric_pair(by_name.get("raffle_rejected"))}</span>'
         f'<span>Подписка ок: {_metric_pair(by_name.get("raffle_subscribed"))}</span>'
         f'<span>Подписка нет: {_metric_pair(by_name.get("raffle_sub_failed"))}</span>'
+        f'<span>Забронировали: {_metric_pair(raffle_bookings.get("created"))}</span>'
+        f'<span>Получили билет: {_metric_pair(raffle_bookings.get("confirmed"))}</span>'
+        f'<span>Отменили: {_metric_pair(raffle_bookings.get("cancelled"))}</span>'
+        f'<span>Аннулировано: {_metric_pair(raffle_bookings.get("annulled"))}</span>'
         "</div>"
     )
+    branch_map = {row["kind"]: row for row in (report.get("raffle_branches") or [])}
     branch_rows = []
-    kind_labels = {"post": "пост", "review": "отзыв", "unknown": "неизвестно"}
-    for row in report.get("raffle_branches") or []:
+    for kind, title in (("post", "пост"), ("review", "отзыв")):
+        row = branch_map.get(kind) or {"events": 0, "uniques": 0}
         branch_rows.append(
             "<tr>"
-            f"<td>{_h(kind_labels.get(row['kind'], row['kind']))}</td>"
-            f"<td>{row['events']}</td>"
-            f"<td>{row['uniques']}</td>"
+            f"<td>{_h(title)}</td>"
+            f"<td>{row.get('events', 0)}</td>"
+            f"<td>{row.get('uniques', 0)}</td>"
             "</tr>"
         )
     raffle += (
         '<div class="table-wrap"><table><thead><tr><th>Ветка</th><th>Выборы</th><th>Люди</th></tr></thead>'
-        f"<tbody>{''.join(branch_rows) or '<tr><td colspan=\"3\" class=\"muted\">Пока нет выборов ветки</td></tr>'}</tbody>"
+        f"<tbody>{''.join(branch_rows)}</tbody>"
         "</table></div></section>"
     )
 
     audience = report.get("audience") or {}
     audience_html = (
         '<section class="card">'
-        "<h2>База для рассылки</h2>"
-        '<p class="muted">Снимок сейчас (не зависит от периода). «Можно слать» = есть id и не заблокировали бота.</p>'
-        '<div class="summary analytics-summary">'
+        "<h2>База для рассылки <span class='muted'>(всего)</span></h2>"
+        '<div class="summary analytics-audience">'
         f'<div class="metric"><span>Telegram · всего</span><b>{audience.get("telegram_users", 0)}</b></div>'
         f'<div class="metric"><span>Telegram · можно слать</span><b>{audience.get("telegram_mailable", 0)}</b></div>'
         f'<div class="metric"><span>Telegram · заблокировали</span><b>{audience.get("telegram_blocked", 0)}</b></div>'
@@ -1398,6 +1404,7 @@ def render_admin_html(
     .tab.active, .pill.active {{ background:#111827; color:white; border-color:#111827; }}
     .summary {{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:16px; margin-bottom:20px; }}
     .analytics-summary {{ grid-template-columns: repeat(4, minmax(0,1fr)); }}
+    .analytics-audience {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
     .metric, .card, .filters {{ background:var(--card); border:1px solid var(--line); border-radius:18px; box-shadow:0 8px 30px rgba(15,23,42,.05); }}
     .metric {{ padding:18px; }}
     .metric span {{ display:block; color:var(--muted); font-size:14px; }}
@@ -1454,7 +1461,7 @@ def render_admin_html(
     @media (max-width: 780px) {{
       header {{ padding:22px 18px; }}
       main {{ padding:16px; }}
-      .summary, .analytics-summary {{ grid-template-columns:1fr; }}
+      .summary, .analytics-summary, .analytics-audience {{ grid-template-columns:1fr; }}
       .event-head {{ display:block; }}
     }}
   </style>
