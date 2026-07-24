@@ -98,12 +98,12 @@ async def _send_rich_or_html(message, *, rich_html: str, fallback_html: str, rep
             parse_mode="HTML",
         )
 
-VENUES_OUTRO_RICH_HTML = """
+VENUES_INTRO_RICH_HTML = """
 <h2>Наши площадки</h2>
 <p>Мероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус: для любителей вкусно покушать — рестораны с изысканной кухней разных народов мира, для поклонников шумных вечеринок — бары, для любителей попеть — заведения с караоке. Везде можно остаться после шоу.</p>
 """
 
-VENUES_OUTRO_TEXT = (
+VENUES_INTRO_TEXT = (
     "<b>Наши площадки</b>\n\n"
     "Мероприятия проходят в заведениях, где каждый найдёт что-то на свой вкус: "
     "для любителей вкусно покушать — рестораны с изысканной кухней разных народов мира, "
@@ -516,38 +516,104 @@ async def show_formats(call: CallbackQuery):
     await call.answer()
 
 
+def _venues_intro_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Узнать подробнее", callback_data="venues_details")
+    kb.button(text="⬅️ В главное меню", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def _venues_card_kb(index: int):
+    kb = InlineKeyboardBuilder()
+    next_index = (index + 1) % len(VENUE_CARDS)
+    kb.button(text="Смотреть ещё", callback_data=f"venues_card_{next_index}")
+    kb.button(text="⬅️ В главное меню", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def _venue_card_path(index: int) -> str:
+    return os.path.join(PHOTOS_DIR, VENUE_CARDS[index]["file"])
+
+
+async def _send_venue_card(message, index: int = 0):
+    index = max(0, min(index, len(VENUE_CARDS) - 1))
+    card = VENUE_CARDS[index]
+    caption = card["fallback_html"]
+    markup = _venues_card_kb(index)
+    path = _venue_card_path(index)
+    if os.path.exists(path):
+        try:
+            await message.answer_photo(
+                photo=FSInputFile(path),
+                caption=caption,
+                reply_markup=markup,
+                parse_mode="HTML",
+            )
+            return
+        except Exception:
+            logger.exception("Failed to send venue card photo %s", card["file"])
+    await message.answer(caption, reply_markup=markup, parse_mode="HTML")
+
+
+async def _edit_venue_card(call: CallbackQuery, index: int):
+    index = max(0, min(index, len(VENUE_CARDS) - 1))
+    card = VENUE_CARDS[index]
+    caption = card["fallback_html"]
+    markup = _venues_card_kb(index)
+    path = _venue_card_path(index)
+    try:
+        if call.message.photo and os.path.exists(path):
+            await call.message.edit_media(
+                media=InputMediaPhoto(
+                    media=FSInputFile(path),
+                    caption=caption,
+                    parse_mode="HTML",
+                ),
+                reply_markup=markup,
+            )
+            return
+        if call.message.photo:
+            await call.message.edit_caption(
+                caption=caption,
+                reply_markup=markup,
+                parse_mode="HTML",
+            )
+            return
+        await call.message.edit_text(caption, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        await _delete_previous_menu_message(call)
+        await _send_venue_card(call.message, index)
+
+
 @router.callback_query(lambda c: c.data == "venues")
 async def show_venues(call: CallbackQuery):
     await _delete_previous_menu_message(call)
-
-    linked_ids: list[int] = []
-    # Сначала три блока площадок, в конце общий текст + кнопки меню
-    for card in VENUE_CARDS:
-        path = os.path.join(PHOTOS_DIR, card["file"])
-        if os.path.exists(path):
-            try:
-                photo_msg = await call.message.answer_photo(photo=FSInputFile(path))
-                linked_ids.append(photo_msg.message_id)
-            except Exception:
-                logger.exception("Failed to send venue photo %s", card["file"])
-
-        # Подпись к фото не умеет полноценный Rich — текст площадки отдельным Rich-сообщением
-        text_msg = await _send_rich_or_html(
-            call.message,
-            rich_html=card["rich_html"],
-            fallback_html=card["fallback_html"],
-        )
-        if text_msg:
-            linked_ids.append(text_msg.message_id)
-
-    menu = await _send_rich_or_html(
+    await _send_rich_or_html(
         call.message,
-        rich_html=VENUES_OUTRO_RICH_HTML,
-        fallback_html=VENUES_OUTRO_TEXT,
-        reply_markup=_nav_kb(),
+        rich_html=VENUES_INTRO_RICH_HTML,
+        fallback_html=VENUES_INTRO_TEXT,
+        reply_markup=_venues_intro_kb(),
     )
-    if menu:
-        _VENUE_ALBUM_MESSAGE_IDS[menu.message_id] = linked_ids
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data == "venues_details")
+async def venues_details(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    await _send_venue_card(call.message, 0)
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("venues_card_"))
+async def venues_card(call: CallbackQuery):
+    try:
+        index = int(call.data.replace("venues_card_", "", 1))
+    except ValueError:
+        await call.answer()
+        return
+    await _edit_venue_card(call, index)
     await call.answer()
 
 

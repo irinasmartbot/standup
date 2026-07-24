@@ -143,7 +143,7 @@ async def submit_help_question(message: Message, *, thank_you: bool = True) -> b
         )
 
     if thank_you:
-        await message.answer("Спасибо! Передали вопрос менеджеру, скоро ответим.")
+        await message.answer("Спасибо! Передали вопрос в техподдержку, скоро ответим.")
     return True
 
 
@@ -353,6 +353,15 @@ async def _send_command_bookings(
         )
         remember_my_bookings_message(message.chat.id, sent.message_id)
         return
+
+    # По возрастанию даты/времени мероприятия (раньше → позже)
+    def _booking_sort_key(row):
+        try:
+            return datetime.strptime(f"{row[3]} {row[4]}", "%d.%m.%Y %H:%M")
+        except (TypeError, ValueError, IndexError):
+            return datetime.max
+
+    rows = sorted(rows, key=_booking_sort_key)
 
     page = page % len(rows)
     sent = await message.answer(
@@ -634,7 +643,7 @@ async def help_chat_reply(message: Message):
     if message.text:
         await message.bot.send_message(
             telegram_id,
-            f"Ответ менеджера:\n\n{message.text}",
+            f"Ответ техподдержки:\n\n{message.text}",
         )
     else:
         await message.bot.copy_message(

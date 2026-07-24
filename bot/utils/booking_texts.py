@@ -2,6 +2,42 @@
 
 from html import escape
 
+from bot.db.crud import get_active_bookings_by_user
+from bot.utils.ticket import format_date
+
+
+def same_day_booking_warning(
+    telegram_id: int,
+    event_date: str,
+    *,
+    exclude_time: str | None = None,
+) -> str:
+    """Мягкое предупреждение: на эту дату уже есть другая активная бронь.
+
+    Не блокирует — только текст. exclude_time пропускает то же самое шоу.
+    """
+    others: list[str] = []
+    for booking in get_active_bookings_by_user(telegram_id):
+        if (booking[5] or "") != event_date:
+            continue
+        if exclude_time and (booking[6] or "") == exclude_time:
+            continue
+        time = booking[6] or ""
+        location = (booking[8] or "").strip()
+        label = f"{time}" + (f" — {location}" if location else "")
+        others.append(label)
+    if not others:
+        return ""
+
+    date_label = format_date(event_date)
+    listed = "\n".join(f"• {escape(item)}" for item in others)
+    return (
+        f"⚠️ <b>Обратите внимание:</b> на {escape(date_label)} у вас уже есть бронь:\n"
+        f"{listed}\n\n"
+        "Шоу проходят рядом — теоретически можно успеть на оба. "
+        "Жёстких ограничений нет. Если планы изменятся, отмените лишнюю бронь."
+    )
+
 
 def reminder_details_cut(*, event_time: str, location_line: str, guests: int) -> str:
     """Длинный блок «Напоминаем» под раскрывающийся кат (expandable blockquote)."""

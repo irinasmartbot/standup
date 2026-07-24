@@ -266,7 +266,7 @@ def get_active_bookings_by_user(telegram_id):
                     + """
                     WHERE u.telegram_id = %s
                       AND b.status IN ('booked', 'confirmed')
-                    ORDER BY e.event_date, e.event_time
+                    ORDER BY e.event_date ASC, e.event_time ASC, b.id ASC
                     """,
                     (telegram_id,),
                 )
@@ -275,7 +275,7 @@ def get_active_bookings_by_user(telegram_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "SELECT * FROM bookings WHERE telegram_id=? AND status IN ('booked', 'confirmed') ORDER BY event_date",
+        "SELECT * FROM bookings WHERE telegram_id=? AND status IN ('booked', 'confirmed') ORDER BY event_date ASC, event_time ASC, id ASC",
         (telegram_id,),
     )
     rows = c.fetchall()
@@ -618,7 +618,7 @@ def get_user_bookings_for_commands(telegram_id, status=None):
                   AND b.format IN ('proverka', 'rozygrysh')
                   {status_sql}
                   AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
-                ORDER BY e.event_date, e.event_time
+                ORDER BY e.event_date ASC, e.event_time ASC, b.id ASC
                 """,
                 params,
             )

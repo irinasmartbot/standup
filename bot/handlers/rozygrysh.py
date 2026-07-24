@@ -69,7 +69,7 @@ from bot.db.crud import (
     update_raffle_submission_status,
 )
 from bot.services.sheets import load_events
-from bot.utils.booking_texts import reminder_details_cut
+from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
 from bot.utils.bot_commands import refresh_user_commands
 from bot.utils.nav_messages import delete_my_bookings_messages
 from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
@@ -1252,6 +1252,13 @@ async def rz_book(call: CallbackQuery, state: FSMContext):
     )
     name = _full_name(call.from_user)
     await state.update_data(name=name)
+
+    same_day_warn = same_day_booking_warning(
+        call.from_user.id, event["date"], exclude_time=event["time"]
+    )
+    if same_day_warn:
+        await call.message.answer(same_day_warn, parse_mode="HTML")
+
     kb = InlineKeyboardBuilder()
     kb.button(text="Все верно 👌", callback_data="rz_name_ok")
     kb.button(text="Изменить", callback_data="rz_name_change")
@@ -1456,6 +1463,10 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             return
         await state.update_data(phone=phone)
 
+        same_day_warn = same_day_booking_warning(
+            user.id, event_date, exclude_time=event_time
+        )
+
         try:
             booking_id = create_booking(
                 user.id,
@@ -1488,8 +1499,10 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             days_until = 99
 
         location_line = f"📍 Локация {event_location}, {event_address}".strip(", ")
+        warn_prefix = f"{same_day_warn}\n\n" if same_day_warn else ""
         if days_until <= 1:
             text = (
+                f"{warn_prefix}"
                 f"Отлично!\n\n"
                 f"❗ <b>Важная информация</b> — для того чтобы мы окончательно закрепили за Вами место "
                 f"на дату и время:\n"
@@ -1502,6 +1515,7 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             markup = _manage_kb(booking_id, include_ticket=True)
         else:
             text = (
+                f"{warn_prefix}"
                 f"Отлично! Мы внесли Вас в списки гостей:\n\n"
                 f"<b>Дата:</b> {date_str} ({escape(weekday)})\n"
                 f"<b>Время:</b> {event_time}\n"

@@ -17,7 +17,7 @@ from bot.db.crud import (
 )
 from bot.services.sheets import load_events, get_event
 from bot.utils.bot_commands import refresh_user_commands
-from bot.utils.booking_texts import reminder_details_cut
+from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
 from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
 from bot.utils.ticket import format_date, guests_word, generate_ticket, MONTHS, now_msk, parse_event_datetime
 from bot.utils.nav_messages import (
@@ -410,6 +410,12 @@ async def start_booking(call: CallbackQuery, state: FSMContext):
         name += f" {call.from_user.last_name}"
     await state.update_data(name=name)
 
+    same_day_warn = same_day_booking_warning(
+        call.from_user.id, event_date, exclude_time=event_time
+    )
+    if same_day_warn:
+        await call.message.answer(same_day_warn, parse_mode="HTML")
+
     kb = InlineKeyboardBuilder()
     kb.button(text="Все верно 👌", callback_data="name_confirm")
     kb.button(text="Изменить", callback_data="name_change")
@@ -550,6 +556,9 @@ async def process_guests(message: Message, state: FSMContext):
 
     event_address = event["address"] if event else ""
     event_location = event["location"] if event else ""
+    same_day_warn = same_day_booking_warning(
+        message.from_user.id, event_date, exclude_time=event_time
+    )
     booking_id = create_booking(
         message.from_user.id, message.from_user.username or "",
         name, phone, event_date, event_time, event_address, event_location, guests,
@@ -581,8 +590,10 @@ async def process_guests(message: Message, state: FSMContext):
     location_line = f"📍 Локация {event_location}, {event_address}".strip(", ")
     weekday = (event or {}).get("weekday") or ""
     weekday_part = f" ({weekday})" if weekday else ""
+    warn_prefix = f"{same_day_warn}\n\n" if same_day_warn else ""
     if days_until <= 1:
         text = (
+            f"{warn_prefix}"
             f"Отлично!\n\n"
             f"❗ <b>Важная информация</b> — для того чтобы мы окончательно закрепили за Вами место "
             f"на дату и время:\n"
@@ -594,6 +605,7 @@ async def process_guests(message: Message, state: FSMContext):
         )
     else:
         text = (
+            f"{warn_prefix}"
             f"Отлично! Мы внесли Вас в списки гостей:\n\n"
             f"<b>Дата:</b> {date_str} ({event['weekday'] if event else ''})\n"
             f"<b>Время:</b> {event_time}\n"
@@ -656,14 +668,11 @@ async def get_ticket(call: CallbackQuery):
 
         caption = (
             "Ждем вас на мероприятии ❤️\n\n"
-            "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
-            "чтобы вас посадили вместе — напишите менеджеру, мы поможем с рассадкой.\n"
-            "<u>В противном случае вы будете сидеть на месте, которое предложит администратор рассадки.</u>\n\n"
             "Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
-            f"При возникновении вопросов — можно писать менеджеру @ccoverr "
-            f"(если срочно — звоните {MANAGER_PHONE})\n\n"
+            f"При возникновении вопросов - можно писать менеджеру @ccoverr "
+            f"(если срочно - звоните {MANAGER_PHONE})\n\n"
             f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
-            "(там часто дарят бесплатные билеты на платные шоу 😉)"
+            "(там часто дарят бесплатные билеты на платные шоу😉)"
         )
         ticket_msg = await call.message.answer_photo(
             photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
@@ -724,28 +733,16 @@ async def cancel_confirm(call: CallbackQuery):
     if not this_booking:
         return
     await _delete_previous_menu_message(call)
-    bookings = get_active_bookings_by_user(call.from_user.id)
-
-    if len(bookings) > 1:
-        kb = InlineKeyboardBuilder()
-        for b in bookings:
-            label = f"❌ {format_date(b[5])} {b[6]}"
-            kb.button(text=label, callback_data=f"cancel_select_{b[0]}")
-        kb.adjust(1)
-        await call.message.answer(
-            _multi_booking_text(bookings, "Уточните, какую бронь вы бы хотели отменить?"),
-            reply_markup=kb.as_markup(),
-        )
-    else:
-        date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
-        kb = InlineKeyboardBuilder()
-        kb.button(text="Подтверждаю", callback_data=f"cancel_do_{booking_id}")
-        kb.adjust(1)
-        await call.message.answer(
-            f"Для подтверждения отмены брони на <b>{date_label}</b> нажмите кнопку ниже",
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML",
-        )
+    # booking_id уже из карточки — сразу подтверждение, без выбора «какая бронь»
+    date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Подтверждаю", callback_data=f"cancel_do_{booking_id}")
+    kb.adjust(1)
+    await call.message.answer(
+        f"Для подтверждения отмены брони на <b>{date_label}</b> нажмите кнопку ниже",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
     await call.answer()
 
 
@@ -841,28 +838,16 @@ async def change_date_confirm(call: CallbackQuery):
     if not this_booking:
         return
     await _delete_previous_menu_message(call)
-    bookings = get_active_bookings_by_user(call.from_user.id)
-
-    if len(bookings) > 1:
-        kb = InlineKeyboardBuilder()
-        for b in bookings:
-            label = f"📅 {format_date(b[5])} {b[6]}"
-            kb.button(text=label, callback_data=f"change_date_select_{b[0]}")
-        kb.adjust(1)
-        await call.message.answer(
-            _multi_booking_text(bookings, "Уточните, на какую бронь хотели бы изменить дату?"),
-            reply_markup=kb.as_markup(),
-        )
-    else:
-        date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
-        kb = InlineKeyboardBuilder()
-        kb.button(text="Подтверждаю", callback_data=f"change_date_do_{booking_id}")
-        kb.adjust(1)
-        await call.message.answer(
-            f"Для подтверждения изменения даты брони на <b>{date_label}</b> нажмите кнопку ниже",
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML",
-        )
+    # booking_id уже из карточки — сразу подтверждение, без выбора «какая бронь»
+    date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Подтверждаю", callback_data=f"change_date_do_{booking_id}")
+    kb.adjust(1)
+    await call.message.answer(
+        f"Для подтверждения изменения даты брони на <b>{date_label}</b> нажмите кнопку ниже",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
     await call.answer()
 
 
@@ -917,28 +902,17 @@ async def change_guests_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
-    bookings = get_active_bookings_by_user(call.from_user.id)
-
-    if len(bookings) > 1:
-        kb = InlineKeyboardBuilder()
-        for b in bookings:
-            label = f"👥 {format_date(b[5])} {b[6]}"
-            kb.button(text=label, callback_data=f"change_guests_select_{b[0]}")
-        kb.adjust(1)
-        await call.message.answer(
-            _multi_booking_text(bookings, "Уточните, на какой брони меняем количество гостей?"),
-            reply_markup=kb.as_markup(),
-        )
-    else:
-        date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
-        kb = InlineKeyboardBuilder()
-        kb.button(text="Подтверждаю", callback_data=f"change_guests_do_{booking_id}")
-        kb.adjust(1)
-        await call.message.answer(
-            f"Для подтверждения изменения количества гостей на бронь <b>{date_label}</b> нажмите кнопку ниже 👇",
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML",
-        )
+    await _delete_previous_menu_message(call)
+    # booking_id уже из карточки — сразу подтверждение, без выбора «какая бронь»
+    date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Подтверждаю", callback_data=f"change_guests_do_{booking_id}")
+    kb.adjust(1)
+    await call.message.answer(
+        f"Для подтверждения изменения количества гостей на бронь <b>{date_label}</b> нажмите кнопку ниже 👇",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
     await call.answer()
 
 
