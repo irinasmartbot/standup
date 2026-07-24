@@ -1170,21 +1170,22 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         all_event_rows.append(
             "<tr>"
             f"<td>{_h(event_labels.get(name, name))}</td>"
-            f"<td><code>{_h(name)}</code></td>"
             f"<td>{metric.get('events', 0)}</td>"
             f"<td>{metric.get('uniques', 0)}</td>"
             "</tr>"
         )
     all_events_table = (
         '<section class="card">'
-        "<h2>Все события за период</h2>"
-        '<p class="muted">Для любого события: сколько раз сработало и сколько уникальных людей. '
-        "Пример: Hit Loto 10 нажатий / 1 человек.</p>"
+        "<details>"
+        "<summary><h2>Все события за период</h2></summary>"
+        '<p class="muted">Для любого события: сколько раз сработало и сколько уникальных людей.</p>'
         '<div class="table-wrap"><table><thead><tr>'
-        "<th>Событие</th><th>Код</th><th>Нажатий / заходов</th><th>Уникальных людей</th>"
+        "<th>Событие</th><th>Нажатий / заходов</th><th>Уникальных людей</th>"
         "</tr></thead>"
-        f"<tbody>{''.join(all_event_rows) or '<tr><td colspan=\"4\" class=\"muted\">За выбранный период событий нет</td></tr>'}</tbody>"
-        "</table></div></section>"
+        f"<tbody>{''.join(all_event_rows) or '<tr><td colspan=\"3\" class=\"muted\">За выбранный период событий нет</td></tr>'}</tbody>"
+        "</table></div>"
+        "</details>"
+        "</section>"
     )
 
     payload_rows = []
@@ -1420,6 +1421,13 @@ def render_admin_html(
     .format-tag {{ display:inline-block; margin-top:6px; background:#eef2ff; color:#3730a3; border-radius:999px; padding:3px 8px; font-size:12px; font-weight:700; }}
     .muted {{ color:var(--muted); }}
     .empty-state {{ text-align:center; padding:36px; color:#475467; }}
+    details {{ margin:0; }}
+    details summary {{ cursor:pointer; list-style:none; }}
+    details summary::-webkit-details-marker {{ display:none; }}
+    details summary h2 {{ display:inline; margin:0; }}
+    details summary::before {{ content:"▸ "; color:#94a3b8; }}
+    details[open] summary::before {{ content:"▾ "; }}
+    details .muted, details .table-wrap {{ margin-top:12px; }}
     @media (max-width: 780px) {{
       header {{ padding:22px 18px; }}
       main {{ padding:16px; }}
