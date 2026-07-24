@@ -1,6 +1,8 @@
 import os
 import random
 from datetime import datetime
+from html import escape
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, FSInputFile, BufferedInputFile
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
@@ -661,12 +663,19 @@ async def get_ticket(call: CallbackQuery):
                 await call.answer()
                 return
 
-        date_str = format_date(event_date)
         short_address = f"{event_location}, {event_address.split(',')[1] if ',' in event_address else event_address}"
+        place = f"{event_location}, {event_address}".strip(", ") if event_location else (event_address or "")
         ticket_buf = generate_ticket(name, event_date, event_time, short_address, guests)
         update_booking_status(booking_id, "confirmed")
 
         caption = (
+            "Отлично!\n\n"
+            "<b>Данные по билету:</b>\n\n"
+            f"<b>Ваше имя:</b> {escape(name or '')}\n"
+            f"<b>Дата:</b> {escape(event_date or '')}\n"
+            f"<b>Время:</b> {escape(event_time or '')}\n"
+            f"<b>Место:</b> {escape(place)}\n"
+            f"<b>Количество гостей:</b> {guests_word(guests)}\n\n"
             "Ждем вас на мероприятии ❤️\n\n"
             "Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
             f"При возникновении вопросов - можно писать менеджеру @ccoverr "
@@ -732,8 +741,7 @@ async def cancel_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
-    await _delete_previous_menu_message(call)
-    # booking_id уже из карточки — сразу подтверждение, без выбора «какая бронь»
+    # Карточку /my_bookings не удаляем — подтверждение отдельным сообщением
     date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
     kb = InlineKeyboardBuilder()
     kb.button(text="Подтверждаю", callback_data=f"cancel_do_{booking_id}")
@@ -837,8 +845,7 @@ async def change_date_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
-    await _delete_previous_menu_message(call)
-    # booking_id уже из карточки — сразу подтверждение, без выбора «какая бронь»
+    # Карточку /my_bookings не удаляем — подтверждение отдельным сообщением
     date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
     kb = InlineKeyboardBuilder()
     kb.button(text="Подтверждаю", callback_data=f"change_date_do_{booking_id}")
@@ -902,8 +909,7 @@ async def change_guests_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
-    await _delete_previous_menu_message(call)
-    # booking_id уже из карточки — сразу подтверждение, без выбора «какая бронь»
+    # Карточку /my_bookings не удаляем — подтверждение отдельным сообщением
     date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
     kb = InlineKeyboardBuilder()
     kb.button(text="Подтверждаю", callback_data=f"change_guests_do_{booking_id}")

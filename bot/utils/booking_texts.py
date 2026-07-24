@@ -2,8 +2,20 @@
 
 from html import escape
 
-from bot.db.crud import get_active_bookings_by_user
+from bot.db.crud import get_same_day_bookings_summary
 from bot.utils.ticket import format_date
+
+_FORMAT_LABELS = {
+    "proverka": "проверка материала",
+    "rozygrysh": "розыгрыш",
+    "best": "StandUp BEST",
+    "hitloto": "Хитлото",
+}
+
+
+def _format_label(format_name: str | None) -> str:
+    key = (format_name or "").strip().lower()
+    return _FORMAT_LABELS.get(key, format_name or "бронь")
 
 
 def same_day_booking_warning(
@@ -17,14 +29,18 @@ def same_day_booking_warning(
     Не блокирует — только текст. exclude_time пропускает то же самое шоу.
     """
     others: list[str] = []
-    for booking in get_active_bookings_by_user(telegram_id):
-        if (booking[5] or "") != event_date:
-            continue
-        if exclude_time and (booking[6] or "") == exclude_time:
-            continue
-        time = booking[6] or ""
-        location = (booking[8] or "").strip()
-        label = f"{time}" + (f" — {location}" if location else "")
+    for time, location, format_name in get_same_day_bookings_summary(
+        telegram_id, event_date, exclude_time=exclude_time
+    ):
+        time = time or ""
+        location = (location or "").strip()
+        fmt = _format_label(format_name)
+        if time and location:
+            label = f"{time} — {location} ({fmt})"
+        elif time:
+            label = f"{time} ({fmt})"
+        else:
+            label = fmt
         others.append(label)
     if not others:
         return ""
@@ -34,8 +50,7 @@ def same_day_booking_warning(
     return (
         f"⚠️ <b>Обратите внимание:</b> на {escape(date_label)} у вас уже есть бронь:\n"
         f"{listed}\n\n"
-        "Шоу проходят рядом — теоретически можно успеть на оба. "
-        "Жёстких ограничений нет. Если планы изменятся, отмените лишнюю бронь."
+        "Если планы изменятся, отмените лишнюю бронь."
     )
 
 

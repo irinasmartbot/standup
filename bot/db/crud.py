@@ -283,6 +283,43 @@ def get_active_bookings_by_user(telegram_id):
     return rows
 
 
+def get_same_day_bookings_summary(telegram_id, event_date, exclude_time=None):
+    """Активные брони на дату: [(time, location, format), ...]."""
+    if _use_postgres():
+        with _pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        to_char(e.event_time, 'HH24:MI') AS event_time,
+                        e.location,
+                        b.format
+                    FROM bookings b
+                    JOIN users u ON u.id = b.user_id
+                    JOIN events e ON e.id = b.event_id
+                    WHERE u.telegram_id = %s
+                      AND b.status IN ('booked', 'confirmed')
+                      AND e.event_date = %s
+                    ORDER BY e.event_time ASC, b.id ASC
+                    """,
+                    (telegram_id, _parse_event_date(event_date)),
+                )
+                rows = _fetchall_tuples(cur)
+        if exclude_time:
+            rows = [r for r in rows if (r[0] or "") != exclude_time]
+        return rows
+
+    rows = []
+    for booking in get_active_bookings_by_user(telegram_id):
+        if (booking[5] or "") != event_date:
+            continue
+        if exclude_time and (booking[6] or "") == exclude_time:
+            continue
+        # SQLite legacy: format колонки может не быть
+        rows.append((booking[6], booking[8], "proverka"))
+    return rows
+
+
 def get_last_phone(telegram_id):
     """Возвращает последний номер телефона пользователя из его броней."""
     if _use_postgres():
