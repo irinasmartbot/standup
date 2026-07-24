@@ -337,7 +337,7 @@ def fetch_analytics_report(
                 )
                 starts_by_payload = [
                     {
-                        "payload": row["payload"] or "(без ссылки)",
+                        "payload": row["payload"] or "",
                         "events": row["events"],
                         "uniques": row["uniques"],
                     }

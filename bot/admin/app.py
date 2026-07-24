@@ -1188,11 +1188,19 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "</section>"
     )
 
+    start_payload_labels = {
+        "": "вход через старт",
+        "standup_rozygr": "вход розыгрыш",
+        "quick_booking": "вход быстрая бронь",
+        "afisha_plat": "вход платный BEST",
+    }
     payload_rows = []
     for row in report.get("starts_by_payload") or []:
+        raw = row.get("payload") or ""
+        label = start_payload_labels.get(raw, raw or "вход через старт")
         payload_rows.append(
             "<tr>"
-            f"<td>{_h(row['payload'])}</td>"
+            f"<td>{_h(label)}</td>"
             f"<td>{row['events']}</td>"
             f"<td>{row['uniques']}</td>"
             "</tr>"
@@ -1200,35 +1208,50 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     starts_table = (
         '<section class="card">'
         "<h2>Входы в бот по ссылкам</h2>"
-        '<p class="muted">Заходы / уникальные люди. Пустой payload = обычный /start.</p>'
-        '<div class="table-wrap"><table><thead><tr><th>Ссылка (start=)</th><th>Заходы</th><th>Люди</th></tr></thead>'
+        '<p class="muted">Заходы / уникальные люди.</p>'
+        '<div class="table-wrap"><table><thead><tr><th>Вход</th><th>Заходы</th><th>Люди</th></tr></thead>'
         f"<tbody>{''.join(payload_rows) or '<tr><td colspan=\"3\" class=\"muted\">Пока нет данных</td></tr>'}</tbody>"
         "</table></div></section>"
     )
 
-    browse_labels = {"date": "по дате", "venue": "по площадке", "": "—"}
-    format_labels = {
-        "proverka": "проверка",
-        "best": "BEST",
-        "hitloto": "Hit Loto",
-        "unknown": "другое",
+    def _card_cell(events: int, uniques: int) -> str:
+        if not events and not uniques:
+            return '<span class="muted">0</span>'
+        return f"{events}<br><span class='muted'>{uniques} чел.</span>"
+
+    card_matrix = {
+        "best": {"date": (0, 0), "venue": (0, 0)},
+        "hitloto": {"date": (0, 0), "venue": (0, 0)},
+        "proverka": {"date": (0, 0), "venue": (0, 0)},
     }
-    card_rows = []
     for row in report.get("show_cards") or []:
+        fmt = row.get("format") or ""
+        browse = row.get("browse") or "date"
+        if fmt not in card_matrix:
+            continue
+        if browse not in ("date", "venue"):
+            browse = "date"
+        card_matrix[fmt][browse] = (int(row.get("events") or 0), int(row.get("uniques") or 0))
+
+    card_rows = []
+    for fmt, title in (("best", "BEST"), ("hitloto", "Hit Loto"), ("proverka", "проверка")):
+        by_date = card_matrix[fmt]["date"]
+        by_venue = card_matrix[fmt]["venue"]
         card_rows.append(
             "<tr>"
-            f"<td>{_h(format_labels.get(row['format'], row['format']))}</td>"
-            f"<td>{_h(browse_labels.get(row.get('browse') or '', row.get('browse') or '—'))}</td>"
-            f"<td>{row['events']}</td>"
-            f"<td>{row['uniques']}</td>"
+            f"<td>{_h(title)}</td>"
+            f"<td>{_card_cell(*by_date)}</td>"
+            f"<td>{_card_cell(*by_venue)}</td>"
             "</tr>"
         )
     cards_table = (
         '<section class="card">'
         "<h2>Просмотры карточек шоу</h2>"
-        '<p class="muted">Каждый открытый показ карточки. Потом можно решить, нужен ли шаг «по площадкам».</p>'
-        '<div class="table-wrap"><table><thead><tr><th>Формат</th><th>Как дошли</th><th>Просмотры</th><th>Люди</th></tr></thead>'
-        f"<tbody>{''.join(card_rows) or '<tr><td colspan=\"4\" class=\"muted\">Пока нет данных</td></tr>'}</tbody>"
+        '<p class="muted">Сколько раз открыли карточку и сколько уникальных людей — по способу поиска.</p>'
+        '<div class="table-wrap"><table><thead><tr>'
+        "<th>Формат</th><th>Зашли по дате</th><th>Зашли по площадке</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(card_rows)}</tbody>"
         "</table></div></section>"
     )
 
