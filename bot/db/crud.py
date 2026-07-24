@@ -238,6 +238,26 @@ def create_booking(
                 )
                 booking_id = cur.fetchone()[0]
             conn.commit()
+            try:
+                from bot.db.analytics import EVENT_BOOKING_CREATED, track_event
+
+                track_event(
+                    EVENT_BOOKING_CREATED,
+                    telegram_id=telegram_id,
+                    user_id=user_id,
+                    event_id=found_event_id,
+                    booking_id=booking_id,
+                    props={
+                        "format": booking_format,
+                        "event_format": event_format,
+                        "guests": guests,
+                        "event_date": event_date,
+                        "event_time": event_time,
+                        "location": event_location,
+                    },
+                )
+            except Exception:
+                pass
             return booking_id
 
     conn = sqlite3.connect(DB_PATH)
@@ -416,10 +436,50 @@ def update_booking_status(booking_id, status):
             sql = "UPDATE bookings SET status = %s, updated_at = now() WHERE id = %s"
             params = (status, booking_id)
 
+        meta = None
         with _pg_connect() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT u.telegram_id, b.format, b.event_id, b.user_id
+                    FROM bookings b
+                    JOIN users u ON u.id = b.user_id
+                    WHERE b.id = %s
+                    """,
+                    (booking_id,),
+                )
+                meta = cur.fetchone()
                 cur.execute(sql, params)
             conn.commit()
+        if meta:
+            try:
+                from bot.db.analytics import (
+                    EVENT_BOOKING_CANCELLED,
+                    EVENT_BOOKING_CONFIRMED,
+                    track_event,
+                )
+
+                telegram_id, booking_format, event_id, user_id = meta
+                if status == "confirmed":
+                    track_event(
+                        EVENT_BOOKING_CONFIRMED,
+                        telegram_id=telegram_id,
+                        user_id=user_id,
+                        event_id=event_id,
+                        booking_id=booking_id,
+                        props={"format": booking_format},
+                    )
+                elif status == "cancelled":
+                    track_event(
+                        EVENT_BOOKING_CANCELLED,
+                        telegram_id=telegram_id,
+                        user_id=user_id,
+                        event_id=event_id,
+                        booking_id=booking_id,
+                        props={"format": booking_format},
+                    )
+            except Exception:
+                pass
         return
 
     conn = sqlite3.connect(DB_PATH)

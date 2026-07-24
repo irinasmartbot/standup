@@ -5,6 +5,7 @@ from aiogram.exceptions import TelegramNetworkError, TelegramServerError
 
 from bot.config import MODERATION_CHAT_ID, bot, dp
 from bot.db.models import init_db
+from bot.db.analytics import ensure_analytics_tables
 from bot.db.crud import ensure_help_tables, ensure_raffle_tables
 from bot.handlers import start, formats, booking, rozygrysh
 from bot.handlers.reminders import reminder_loop
@@ -19,6 +20,7 @@ async def main():
     init_db()
     ensure_raffle_tables()
     ensure_help_tables()
+    ensure_analytics_tables()
     try:
         await start.setup_bot_commands(bot)
     except (TelegramNetworkError, TelegramServerError) as exc:

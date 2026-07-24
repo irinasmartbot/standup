@@ -43,6 +43,7 @@ DB_VIEW_TABLES = (
     "raffle_submissions",
     "raffle_nav",
     "help_requests",
+    "analytics_events",
 )
 DB_PAGE_SIZE = 50
 

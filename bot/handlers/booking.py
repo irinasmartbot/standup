@@ -11,6 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import bot, MANAGER_LINK, CHANNEL_LINK, MANAGER_PHONE, TICKET_TEMPLATE
+from bot.db.analytics import EVENT_BRANCH_PROVERKA, EVENT_SHOW_CARD, browse_mode_from_callback, track_event
 from bot.db.crud import (
     get_booking, get_active_booking_by_id, get_booking_by_id, create_booking,
     update_booking_status, update_booking_guests, get_total_guests,
@@ -189,7 +190,20 @@ async def check_dates_kb():
     return kb.as_markup()
 
 
-async def send_event_card(message, event, back_callback="check_dates"):
+async def send_event_card(message, event, back_callback="check_dates", *, telegram_id=None):
+    if telegram_id:
+        track_event(
+            EVENT_SHOW_CARD,
+            telegram_id=telegram_id,
+            event_id=event.get("id"),
+            props={
+                "format": "proverka",
+                "browse": browse_mode_from_callback(back_callback),
+                "date": event.get("date"),
+                "time": event.get("time"),
+                "location": event.get("location"),
+            },
+        )
     date_str = format_date(event["date"])
     text = f"{date_str}\n{event['weekday']}\n\n{event['time']}\n{event['address']}\n{event['description']}"
     kb = InlineKeyboardBuilder()
@@ -205,6 +219,7 @@ async def send_event_card(message, event, back_callback="check_dates"):
 
 async def check_format_entry(message):
     """Экран бесплатной брони: Проверка материала (дата / площадка)."""
+    track_event(EVENT_BRANCH_PROVERKA, telegram_id=message.from_user.id)
     kb = InlineKeyboardBuilder()
     kb.button(text="📅 Выбрать по дате", callback_data="check_dates")
     kb.button(text="📍 Выбор по площадке", callback_data="by_venue")
@@ -265,7 +280,9 @@ async def venue_events(call: CallbackQuery):
         key=lambda x: datetime.strptime(x["date"], "%d.%m.%Y"),
     )
     if len(filtered) == 1:
-        await send_event_card(call.message, filtered[0], back_callback="by_venue")
+        await send_event_card(
+            call.message, filtered[0], back_callback="by_venue", telegram_id=call.from_user.id
+        )
         await call.answer()
         return
 
@@ -304,7 +321,12 @@ async def venue_date_events(call: CallbackQuery):
         await call.answer()
         return
     if len(day_events) == 1:
-        await send_event_card(call.message, day_events[0], back_callback=f"venue_{venue}")
+        await send_event_card(
+            call.message,
+            day_events[0],
+            back_callback=f"venue_{venue}",
+            telegram_id=call.from_user.id,
+        )
         await call.answer()
         return
 
@@ -331,7 +353,7 @@ async def show_event(call: CallbackQuery):
         await call.answer()
         return
     if len(day_events) == 1:
-        await send_event_card(call.message, day_events[0])
+        await send_event_card(call.message, day_events[0], telegram_id=call.from_user.id)
     else:
         kb = InlineKeyboardBuilder()
         for e in day_events:
@@ -348,7 +370,7 @@ async def show_specific_event(call: CallbackQuery):
     events = await load_events()
     event = next((e for e in events if e["date"] == event_date and e["time"] == event_time), None)
     if event:
-        await send_event_card(call.message, event)
+        await send_event_card(call.message, event, telegram_id=call.from_user.id)
     await call.answer()
 
 
@@ -365,7 +387,9 @@ async def show_specific_venue_event(call: CallbackQuery):
         None,
     )
     if event:
-        await send_event_card(call.message, event, back_callback=f"venue_{venue}")
+        await send_event_card(
+            call.message, event, back_callback=f"venue_{venue}", telegram_id=call.from_user.id
+        )
     await call.answer()
 
 

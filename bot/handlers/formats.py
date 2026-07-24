@@ -8,6 +8,13 @@ from aiogram import Router
 from aiogram.types import CallbackQuery, FSInputFile, InputMediaPhoto, InputRichMessage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK, TICKET_TEMPLATE
+from bot.db.analytics import (
+    EVENT_BRANCH_BEST,
+    EVENT_BRANCH_HITLOTO,
+    EVENT_SHOW_CARD,
+    browse_mode_from_callback,
+    track_event,
+)
 from bot.services.sheets import load_events
 from bot.utils.ticket import MONTHS, format_date
 from bot.utils.nav_messages import remember_booking_nav, forget_booking_nav, delete_booking_nav
@@ -390,7 +397,32 @@ def _best_event_text(event, *, host_title: str = "Кто выступает"):
     return text
 
 
-async def _send_best_event_card(message, event, back_callback="best_dates"):
+def _track_show_card(telegram_id, event, *, fmt: str, browse: str):
+    if not telegram_id or not event:
+        return
+    track_event(
+        EVENT_SHOW_CARD,
+        telegram_id=telegram_id,
+        event_id=event.get("id"),
+        props={
+            "format": fmt,
+            "browse": browse,
+            "date": event.get("date"),
+            "time": event.get("time"),
+            "location": event.get("location"),
+            "has_payment": bool(event.get("payment_url")),
+        },
+    )
+
+
+async def _send_best_event_card(message, event, back_callback="best_dates", *, telegram_id=None):
+    if telegram_id:
+        _track_show_card(
+            telegram_id,
+            event,
+            fmt="best",
+            browse=browse_mode_from_callback(back_callback),
+        )
     kb = InlineKeyboardBuilder()
     payment_url = event.get("payment_url") or ""
     if payment_url:
@@ -437,8 +469,10 @@ def _best_location_carousel_kb(events, index: int):
     return kb.as_markup()
 
 
-async def _send_best_location_carousel(message, events, index: int = 0):
+async def _send_best_location_carousel(message, events, index: int = 0, *, telegram_id=None):
     event = events[index]
+    if telegram_id:
+        _track_show_card(telegram_id, event, fmt="best", browse="venue")
     text = _best_event_text(event)
     image = event.get("image") or ""
     markup = _best_location_carousel_kb(events, index)
@@ -456,6 +490,7 @@ async def _send_best_location_carousel(message, events, index: int = 0):
 
 async def _edit_best_location_carousel(call: CallbackQuery, events, index: int):
     event = events[index]
+    _track_show_card(call.from_user.id, event, fmt="best", browse="venue")
     text = _best_event_text(event)
     image = event.get("image") or ""
     markup = _best_location_carousel_kb(events, index)
@@ -684,6 +719,7 @@ async def buy_ticket(call: CallbackQuery):
 
 async def best_format_entry(message):
     """Точка входа в платную ветку BEST (меню или deep link afisha_plat)."""
+    track_event(EVENT_BRANCH_BEST, telegram_id=message.from_user.id)
     events = await load_events("best")
     if not events:
         kb = InlineKeyboardBuilder()
@@ -763,7 +799,9 @@ async def best_venue_events(call: CallbackQuery):
         await call.answer()
         return
 
-    await _send_best_location_carousel(call.message, events, 0)
+    await _send_best_location_carousel(
+        call.message, events, 0, telegram_id=call.from_user.id
+    )
     await call.answer()
 
 
@@ -807,7 +845,12 @@ async def best_venue_date(call: CallbackQuery):
         await call.answer()
         return
     if len(events) == 1:
-        await _send_best_event_card(call.message, events[0], back_callback=f"best_venue_{venue}")
+        await _send_best_event_card(
+            call.message,
+            events[0],
+            back_callback=f"best_venue_{venue}",
+            telegram_id=call.from_user.id,
+        )
         await call.answer()
         return
 
@@ -833,7 +876,12 @@ async def best_date(call: CallbackQuery):
         await call.answer()
         return
     if len(events) == 1:
-        await _send_best_event_card(call.message, events[0], back_callback="best_dates")
+        await _send_best_event_card(
+            call.message,
+            events[0],
+            back_callback="best_dates",
+            telegram_id=call.from_user.id,
+        )
         await call.answer()
         return
 
@@ -855,7 +903,12 @@ async def best_event(call: CallbackQuery):
     event_id, back_callback = _parse_best_event_callback(call.data)
     event = _best_event_by_id(await load_events("best"), event_id)
     if event:
-        await _send_best_event_card(call.message, event, back_callback=back_callback)
+        await _send_best_event_card(
+            call.message,
+            event,
+            back_callback=back_callback,
+            telegram_id=call.from_user.id,
+        )
     else:
         await call.message.answer("Мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await _best_dates_kb())
     await call.answer()
@@ -917,7 +970,14 @@ def _hitloto_event_text(event):
     return _best_event_text(event, host_title=title)
 
 
-async def _send_hitloto_event_card(message, event, back_callback="hitloto_dates"):
+async def _send_hitloto_event_card(message, event, back_callback="hitloto_dates", *, telegram_id=None):
+    if telegram_id:
+        _track_show_card(
+            telegram_id,
+            event,
+            fmt="hitloto",
+            browse=browse_mode_from_callback(back_callback),
+        )
     kb = InlineKeyboardBuilder()
     payment_url = event.get("payment_url") or ""
     if payment_url:
@@ -941,6 +1001,7 @@ async def _send_hitloto_event_card(message, event, back_callback="hitloto_dates"
 
 
 async def hitloto_format_entry(message):
+    track_event(EVENT_BRANCH_HITLOTO, telegram_id=message.from_user.id)
     events = await load_events("hitloto")
     if not events:
         kb = InlineKeyboardBuilder()
@@ -1000,7 +1061,12 @@ async def hitloto_venue_events(call: CallbackQuery):
         key=_event_sort_key,
     )
     if len(events) == 1:
-        await _send_hitloto_event_card(call.message, events[0], back_callback="hitloto_venues")
+        await _send_hitloto_event_card(
+            call.message,
+            events[0],
+            back_callback="hitloto_venues",
+            telegram_id=call.from_user.id,
+        )
         await call.answer()
         return
 
@@ -1038,7 +1104,12 @@ async def hitloto_venue_date(call: CallbackQuery):
         await call.answer()
         return
     if len(events) == 1:
-        await _send_hitloto_event_card(call.message, events[0], back_callback=f"hitloto_venue_{venue}")
+        await _send_hitloto_event_card(
+            call.message,
+            events[0],
+            back_callback=f"hitloto_venue_{venue}",
+            telegram_id=call.from_user.id,
+        )
         await call.answer()
         return
 
@@ -1064,7 +1135,12 @@ async def hitloto_date(call: CallbackQuery):
         await call.answer()
         return
     if len(events) == 1:
-        await _send_hitloto_event_card(call.message, events[0], back_callback="hitloto_dates")
+        await _send_hitloto_event_card(
+            call.message,
+            events[0],
+            back_callback="hitloto_dates",
+            telegram_id=call.from_user.id,
+        )
         await call.answer()
         return
 
@@ -1086,7 +1162,12 @@ async def hitloto_event(call: CallbackQuery):
     event_id, back_callback = _parse_hitloto_event_callback(call.data)
     event = _hitloto_event_by_id(await load_events("hitloto"), event_id)
     if event:
-        await _send_hitloto_event_card(call.message, event, back_callback=back_callback)
+        await _send_hitloto_event_card(
+            call.message,
+            event,
+            back_callback=back_callback,
+            telegram_id=call.from_user.id,
+        )
     else:
         await call.message.answer("Мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await _hitloto_dates_kb())
     await call.answer()

@@ -41,6 +41,16 @@ from bot.config import (
     bot,
     dp,
 )
+from bot.db.analytics import (
+    EVENT_RAFFLE_APPROVED,
+    EVENT_RAFFLE_BRANCH,
+    EVENT_RAFFLE_ENTER,
+    EVENT_RAFFLE_REJECTED,
+    EVENT_RAFFLE_SCREENSHOT,
+    EVENT_RAFFLE_SUB_FAILED,
+    EVENT_RAFFLE_SUBSCRIBED,
+    track_event,
+)
 from bot.db.crud import (
     clear_raffle_awaiting_screenshot,
     clear_raffle_nav,
@@ -404,6 +414,7 @@ async def reset_rozygrysh_cmd(message: Message, state: FSMContext):
 
 async def send_raffle_start(message: Message, state: FSMContext):
     ensure_user(message.from_user.id, message.from_user.username, _full_name(message.from_user))
+    track_event(EVENT_RAFFLE_ENTER, telegram_id=message.from_user.id)
     ok, reason, booking_id = await can_enter_raffle(message.from_user.id)
     if not ok:
         markup = None
@@ -451,6 +462,11 @@ async def rz_post(call: CallbackQuery, state: FSMContext):
     kb.adjust(1)
     await call.message.answer(POST_TEXT, reply_markup=kb.as_markup(), parse_mode="HTML")
     await state.update_data(rz_kind="post")
+    track_event(
+        EVENT_RAFFLE_BRANCH,
+        telegram_id=call.from_user.id,
+        props={"kind": "post"},
+    )
     await call.answer()
 
 
@@ -506,6 +522,11 @@ async def rz_review(call: CallbackQuery, state: FSMContext):
         disable_web_page_preview=True,
     )
     await state.update_data(rz_kind="review")
+    track_event(
+        EVENT_RAFFLE_BRANCH,
+        telegram_id=call.from_user.id,
+        props={"kind": "review"},
+    )
     await call.answer()
 
 
@@ -644,6 +665,12 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
         await message.answer("Не удалось отправить скрин на проверку. Попробуй позже или напиши менеджеру.")
         await _arm_screenshot_wait_for_telegram_id(message.from_user.id, kind)
         return
+
+    track_event(
+        EVENT_RAFFLE_SCREENSHOT,
+        telegram_id=message.from_user.id,
+        props={"kind": kind, "submission_id": submission_id},
+    )
 
     sent_ok = await _send_to_moderation(
         submission_id, message.from_user.id, username, full_name, kind, file_id
@@ -788,6 +815,11 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
 
     # только клиент из этой заявки
     telegram_id = int(row[1])
+    track_event(
+        EVENT_RAFFLE_APPROVED,
+        telegram_id=telegram_id,
+        props={"kind": row[4], "submission_id": submission_id},
+    )
     await call.answer()
     await bot.send_message(
         telegram_id,
@@ -808,6 +840,11 @@ async def _reject_submission(row, reason: str | None, card_ref, cleanup_chat_id=
     """Отклоняет заявку, обновляет карточку, пишет клиенту, чистит служебные сообщения."""
     submission_id = int(row[0])
     update_raffle_submission_status(submission_id, "rejected", reject_reason=reason or None)
+    track_event(
+        EVENT_RAFFLE_REJECTED,
+        telegram_id=int(row[1]),
+        props={"kind": row[4], "submission_id": submission_id, "reason": reason or None},
+    )
     now = now_msk().strftime("%d.%m.%Y в %H:%M")
     status_lines = f"\n\n❌ Скрин отклонен {now}"
     if reason:
@@ -971,9 +1008,19 @@ async def _send_happy_sticker(telegram_id: int):
 
 async def _continue_after_subscribe_check(telegram_id: int, manual_attempts: int = 0):
     if await _is_subscribed(telegram_id):
+        track_event(
+            EVENT_RAFFLE_SUBSCRIBED,
+            telegram_id=telegram_id,
+            props={"manual_attempts": manual_attempts},
+        )
         await _send_subscribed_and_dates(telegram_id)
         return
 
+    track_event(
+        EVENT_RAFFLE_SUB_FAILED,
+        telegram_id=telegram_id,
+        props={"manual_attempts": manual_attempts},
+    )
     # без подписки — без радостного стикера
     kb = InlineKeyboardBuilder()
     kb.button(text="Подписаться", url=CHANNEL_LINK)
@@ -1030,6 +1077,11 @@ async def _send_subscribed_and_dates(telegram_id: int):
 async def rz_sub_check(call: CallbackQuery):
     attempts = int(call.data.replace("rz_sub_check_", "") or "0")
     if await _is_subscribed(call.from_user.id):
+        track_event(
+            EVENT_RAFFLE_SUBSCRIBED,
+            telegram_id=call.from_user.id,
+            props={"manual_attempts": attempts, "source": "manual_check"},
+        )
         await call.answer()
         await _send_subscribed_and_dates(call.from_user.id)
         return
@@ -1078,6 +1130,11 @@ async def rz_channel_join(event: ChatMemberUpdated):
     # продолжаем только если ждём подписку
     if user_id not in _SUB_CHECK_MESSAGES:
         return
+    track_event(
+        EVENT_RAFFLE_SUBSCRIBED,
+        telegram_id=user_id,
+        props={"source": "channel_join"},
+    )
     await _send_subscribed_and_dates(user_id)
 
 

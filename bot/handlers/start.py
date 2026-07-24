@@ -5,10 +5,20 @@ from datetime import datetime
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, Message, CallbackQuery
+from aiogram.enums import ChatMemberStatus
+from aiogram.types import BufferedInputFile, ChatMemberUpdated, Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK, PAID_BEST_START, HELP_CHAT_ID
+from bot.db.analytics import (
+    EVENT_BOT_BLOCKED,
+    EVENT_BOT_START,
+    EVENT_BOT_UNBLOCKED,
+    EVENT_HELP_OPEN,
+    EVENT_HELP_QUESTION,
+    set_user_blocked,
+    track_event,
+)
 from bot.db.crud import (
     create_help_request,
     get_help_request_by_message,
@@ -100,6 +110,11 @@ def _is_meaningful_free_text(text: str | None) -> bool:
 
 async def submit_help_question(message: Message, *, thank_you: bool = True) -> bool:
     """Отправляет вопрос пользователя в чат уведомлений (/help). True если ушло."""
+    track_event(
+        EVENT_HELP_QUESTION,
+        telegram_id=message.from_user.id,
+        props={"chars": len((message.text or "").strip())},
+    )
     help_chat_id = _help_chat_id()
     if not help_chat_id:
         return False
@@ -382,6 +397,11 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
     await state.clear()
     await refresh_user_commands(message.bot, message.from_user.id)
     payload = (command.args or "").strip()
+    track_event(
+        EVENT_BOT_START,
+        telegram_id=message.from_user.id,
+        props={"payload": payload or None},
+    )
 
     if payload == "standup_rozygr":
         from bot.handlers.rozygrysh import send_raffle_start
@@ -433,6 +453,7 @@ def _help_hub_kb():
 
 async def _send_help_hub(message: Message, state: FSMContext):
     await state.clear()
+    track_event(EVENT_HELP_OPEN, telegram_id=message.from_user.id)
     await message.answer(HELP_HUB_TEXT, reply_markup=_help_hub_kb())
 
 
@@ -661,3 +682,28 @@ async def back_to_menu(call: CallbackQuery, state: FSMContext):
     await _delete_previous_menu_message(call)
     await _send_welcome(call.message)
     await call.answer()
+
+
+@router.my_chat_member()
+async def bot_block_status(event: ChatMemberUpdated):
+    """Track block/unblock of the bot in private chats (mailing audience)."""
+    if event.chat.type != "private":
+        return
+    user = event.from_user
+    if not user:
+        return
+    new_status = event.new_chat_member.status
+    old_status = event.old_chat_member.status
+    blocked_statuses = {ChatMemberStatus.KICKED, ChatMemberStatus.LEFT}
+    active_statuses = {
+        ChatMemberStatus.MEMBER,
+        ChatMemberStatus.RESTRICTED,
+        ChatMemberStatus.ADMINISTRATOR,
+        ChatMemberStatus.CREATOR,
+    }
+    if new_status in blocked_statuses and old_status not in blocked_statuses:
+        set_user_blocked(user.id, True)
+        track_event(EVENT_BOT_BLOCKED, telegram_id=user.id)
+    elif new_status in active_statuses and old_status in blocked_statuses:
+        set_user_blocked(user.id, False)
+        track_event(EVENT_BOT_UNBLOCKED, telegram_id=user.id)
