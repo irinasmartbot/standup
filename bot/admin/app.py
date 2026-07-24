@@ -473,9 +473,15 @@ def _booking_from_row(row: dict, event: dict | None = None) -> dict:
         or row.get("updated_at")
         or row.get("created_at")
     )
+    event_id = ""
+    if event and event.get("id") is not None:
+        event_id = str(event["id"])
+    elif row.get("event_id") is not None:
+        event_id = str(row.get("event_id"))
     return {
         "id": row.get("booking_id"),
         "user_id": row.get("user_id") or "",
+        "event_id": event_id,
         "status": status,
         "status_label": STATUS_LABELS[status],
         "guests": _parse_int(row.get("guests")),
@@ -618,10 +624,18 @@ def _status_bar(event: dict) -> str:
     return f'<div class="status-bar">{"".join(parts)}</div>'
 
 
+def _tracks_seats(event: dict) -> bool:
+    """Seat capacity is only meaningful for проверка материала."""
+    return (event.get("format") or "") == "proverka"
+
+
 def _seat_bar(event: dict) -> str:
-    max_seats = event["max_seats"]
     reserved = event["reserved_guests"]
     confirmed = event["confirmed_guests"]
+    if not _tracks_seats(event):
+        # Розыгрыш / BEST / Hit Lotto — места не считаем
+        return f'<div class="active-bookings">Активные брони: <b>{reserved} чел</b></div>'
+    max_seats = event["max_seats"]
     if max_seats <= 0:
         return f'<div class="capacity muted">Активные брони: {reserved} чел. Лимит мест не указан.</div>'
     free = max(0, max_seats - confirmed)
@@ -744,6 +758,14 @@ def _booking_table(
     )
 
 
+def _event_format_badge(event: dict) -> str:
+    """Show only known admin labels; hide raw codes like best/hitloto."""
+    label = FORMAT_LABELS.get(event.get("format") or "")
+    if not label:
+        return ""
+    return f'<span class="format">{_h(label)}</span>'
+
+
 def _event_card(event: dict) -> str:
     counts = " ".join(
         f'<span class="counter">{_h(STATUS_LABELS[s])}: <b>{event["status_counts"].get(s, 0)}</b></span>'
@@ -754,7 +776,7 @@ def _event_card(event: dict) -> str:
         '<div class="event-head">'
         f'<div><h2>{_h(event["date"])} в {_h(event["time"])} · {_h(event["location"])}</h2>'
         f'<p>{_h(event["address"])}</p></div>'
-        f'<span class="format">{_h(_format_label(event["format"]) or event["format"])}</span>'
+        f'{_event_format_badge(event)}'
         '</div>'
         f'{_seat_bar(event)}'
         f'{_status_bar(event)}'
@@ -775,9 +797,69 @@ def _tabs(filters: dict, can_view_db: bool = False) -> str:
     current = filters.get("tab") or "date"
     return "".join(
         f'<a class="tab {"active" if current == key else ""}" '
-        f'href="{_query_link(filters, tab=key, date="", u="", table="", page="", sort="", order="")}">{label}</a>'
+        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="")}">{label}</a>'
         for key, label in tabs
     )
+
+
+def _event_label(event: dict) -> str:
+    parts = [event.get("time") or "—", event.get("location") or "Без площадки"]
+    fmt = FORMAT_LABELS.get(event.get("format") or "")
+    if not fmt:
+        for booking in event.get("bookings") or []:
+            fmt = FORMAT_LABELS.get(booking.get("format") or "")
+            if fmt:
+                break
+    if fmt:
+        parts.append(fmt)
+    return " · ".join(parts)
+
+
+def _events_for_filter(dashboard: dict, filters: dict) -> list[dict]:
+    """Events available for the show picker (current date + optional format)."""
+    if not filters.get("date"):
+        return []
+    events = list(dashboard.get("events") or [])
+    fmt = filters.get("format")
+    if fmt:
+        # Match by booking format too: розыгрыш-брони могут висеть на event.format=best
+        filtered = []
+        for event in events:
+            if event.get("format") == fmt:
+                filtered.append(event)
+                continue
+            if any(b.get("format") == fmt for b in event.get("bookings") or []):
+                filtered.append(event)
+        events = filtered
+    events.sort(key=lambda e: (_event_dt_key(e.get("date") or "", e.get("time") or ""), e.get("location") or ""))
+    return events
+
+
+def _normalize_event_filter(dashboard: dict, filters: dict) -> dict:
+    """Drop stale event id when date/format no longer matches."""
+    next_filters = dict(filters)
+    if not next_filters.get("date"):
+        next_filters["event"] = ""
+        return next_filters
+    allowed = {str(event["id"]) for event in _events_for_filter(dashboard, next_filters)}
+    if next_filters.get("event") not in allowed:
+        next_filters["event"] = ""
+    return next_filters
+
+
+def _event_select(dashboard: dict, filters: dict) -> str:
+    events = _events_for_filter(dashboard, filters)
+    if not filters.get("date"):
+        return ""
+    if not events:
+        return '<select name="event" disabled><option value="">Нет шоу на эту дату</option></select>'
+    options = ['<option value="">Все шоу</option>']
+    selected = filters.get("event") or ""
+    for event in events:
+        eid = str(event["id"])
+        mark = "selected" if selected == eid else ""
+        options.append(f'<option value="{_h(eid)}" {mark}>{_h(_event_label(event))}</option>')
+    return f'<select name="event">{"".join(options)}</select>'
 
 
 def _cell_value(value) -> str:
@@ -883,14 +965,22 @@ def _date_tab(dashboard: dict, filters: dict) -> str:
     date_value = filters.get("date", "")
     if not date_value:
         return '<section class="card empty-state"><h2>Выберите дату</h2><p>Выберите дату в календаре выше, чтобы посмотреть брони по мероприятиям.</p></section>'
-    events_with_bookings = [event for event in dashboard["events"] if event["bookings"]]
+    events = list(dashboard["events"])
+    if filters.get("event"):
+        events = [event for event in events if str(event["id"]) == filters["event"]]
+    events_with_bookings = [event for event in events if event["bookings"]]
     if not events_with_bookings:
+        if filters.get("event"):
+            return '<section class="card empty-state"><h2>На это шоу пока нет бронирований</h2><p>Выберите другое шоу или сбросьте фильтр.</p></section>'
         return '<section class="card empty-state"><h2>Пока нет бронирования на указанную дату</h2><p>На эту дату пока не создано ни одной брони.</p></section>'
     return "".join(_event_card(event) for event in events_with_bookings)
 
 
 def _bookings_tab(dashboard: dict, filters: dict) -> str:
-    bookings = _sort_bookings(dashboard["bookings"], filters)
+    bookings = dashboard["bookings"]
+    if filters.get("event"):
+        bookings = [b for b in bookings if str(b.get("event_id")) == filters["event"]]
+    bookings = _sort_bookings(bookings, filters)
     by_format = defaultdict(list)
     for booking in bookings:
         by_format[booking["format"]].append(booking)
@@ -993,8 +1083,10 @@ def render_admin_html(
     can_view_db: bool = False,
 ) -> str:
     totals = dashboard["totals"]
+    filters = _normalize_event_filter(dashboard, filters)
     date_value = _date_to_input(filters.get("date", ""))
     date_input = '<input name="date" type="date" value="{}">'.format(_h(date_value))
+    event_select = _event_select(dashboard, filters)
     hidden_status = f'<input type="hidden" name="status" value="{_h(filters.get("status"))}">' if filters.get("status") else ""
     hidden_sort = f'<input type="hidden" name="sort" value="{_h(filters.get("sort"))}">' if filters.get("sort") else ""
     hidden_order = f'<input type="hidden" name="order" value="{_h(filters.get("order"))}">' if filters.get("sort") else ""
@@ -1014,6 +1106,7 @@ def render_admin_html(
       <form method="get" action="/admin">
         <input type="hidden" name="tab" value="{_h(filters.get('tab') or 'date')}">
         {date_input}
+        {event_select}
         <select name="format">{_format_select(filters)}</select>
         {hidden_status}
         {hidden_sort}
@@ -1116,10 +1209,13 @@ def _filters_from_request(request: web.Request) -> dict:
         sort = ""
     if order not in ("asc", "desc"):
         order = "asc" if sort else ""
+    date = request.query.get("date", "").strip()
+    event = request.query.get("event", "").strip() if date else ""
     return {
         "tab": request.query.get("tab", "date").strip() or "date",
         "status": request.query.get("status", "").strip(),
-        "date": request.query.get("date", "").strip(),
+        "date": date,
+        "event": event,
         "format": request.query.get("format", "").strip(),
         "u": request.query.get("u", "").strip(),
         "table": request.query.get("table", "").strip(),
@@ -1256,7 +1352,8 @@ async def admin_page(request: web.Request) -> web.Response:
             "totals": {"events": 0, "bookings": 0, "reserved_guests": 0, "confirmed_guests": 0},
         }
     else:
-        include_empty_events = filters.get("tab") == "date" and bool(filters.get("date"))
+        # With a date selected, load all shows that day (even empty) so the show picker is complete.
+        include_empty_events = bool(filters.get("date")) and filters.get("tab") in {"date", "bookings"}
         rows = await loop.run_in_executor(None, fetch_admin_rows, config, filters, include_empty_events)
         dashboard = build_dashboard(rows)
     return web.Response(
