@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 import psycopg
+from psycopg.rows import dict_row
 
 from bot.config import BOOKINGS_SOURCE, DATABASE_URL
 
@@ -216,3 +217,194 @@ def browse_mode_from_callback(back_callback: str = "") -> str:
     if "venue" in text or "loc_carousel" in text:
         return "venue"
     return "date"
+
+
+def _metric_map(rows) -> dict:
+    result = {}
+    for row in rows:
+        result[row["name"]] = {
+            "events": int(row["events"] or 0),
+            "uniques": int(row["uniques"] or 0),
+        }
+    return result
+
+
+def fetch_analytics_report(
+    *,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    channel: str = "",
+) -> dict:
+    """Aggregate funnel metrics for the admin analytics tab.
+
+    date_from / date_to: YYYY-MM-DD in Moscow calendar, inclusive.
+    Empty both = all time.
+    """
+    empty = {
+        "available": False,
+        "period_label": "",
+        "channel": channel or "all",
+        "by_name": {},
+        "starts_by_payload": [],
+        "show_cards": [],
+        "raffle_branches": [],
+        "audience": {
+            "telegram_users": 0,
+            "telegram_blocked": 0,
+            "telegram_mailable": 0,
+            "vk_users": 0,
+            "vk_blocked": 0,
+            "vk_mailable": 0,
+        },
+    }
+    if not _use_postgres():
+        return empty
+
+    from datetime import time, timedelta, timezone
+
+    msk = timezone(timedelta(hours=3))
+    where = ["1=1"]
+    params: dict[str, Any] = {}
+    period_label = "весь период"
+
+    def _parse_day(value: str):
+        value = (value or "").strip()
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            try:
+                return datetime.strptime(value, "%d.%m.%Y").date()
+            except ValueError:
+                return None
+
+    day_from = _parse_day(date_from or "")
+    day_to = _parse_day(date_to or "")
+    if day_from and not day_to:
+        day_to = day_from
+    if day_to and not day_from:
+        day_from = day_to
+    if day_from and day_to and day_to < day_from:
+        day_from, day_to = day_to, day_from
+
+    if day_from and day_to:
+        start = datetime.combine(day_from, time.min, tzinfo=msk)
+        end = datetime.combine(day_to + timedelta(days=1), time.min, tzinfo=msk)
+        where.append("created_at >= %(start)s AND created_at < %(end)s")
+        params["start"] = start
+        params["end"] = end
+        if day_from == day_to:
+            period_label = day_from.strftime("%d.%m.%Y")
+        else:
+            period_label = f"{day_from.strftime('%d.%m.%Y')} — {day_to.strftime('%d.%m.%Y')}"
+
+    if channel in ("telegram", "vkontakte"):
+        where.append("channel = %(channel)s")
+        params["channel"] = channel
+
+    where_sql = " AND ".join(where)
+
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        name,
+                        COUNT(*)::int AS events,
+                        COUNT(DISTINCT telegram_id)::int AS uniques
+                    FROM analytics_events
+                    WHERE {where_sql}
+                    GROUP BY name
+                    """,
+                    params,
+                )
+                by_name = _metric_map(cur.fetchall())
+
+                cur.execute(
+                    f"""
+                    SELECT
+                        COALESCE(props->>'payload', '') AS payload,
+                        COUNT(*)::int AS events,
+                        COUNT(DISTINCT telegram_id)::int AS uniques
+                    FROM analytics_events
+                    WHERE {where_sql} AND name = 'bot_start'
+                    GROUP BY 1
+                    ORDER BY events DESC
+                    """,
+                    params,
+                )
+                starts_by_payload = [
+                    {
+                        "payload": row["payload"] or "(без ссылки)",
+                        "events": row["events"],
+                        "uniques": row["uniques"],
+                    }
+                    for row in cur.fetchall()
+                ]
+
+                cur.execute(
+                    f"""
+                    SELECT
+                        COALESCE(props->>'format', 'unknown') AS format,
+                        COALESCE(props->>'browse', '') AS browse,
+                        COUNT(*)::int AS events,
+                        COUNT(DISTINCT telegram_id)::int AS uniques
+                    FROM analytics_events
+                    WHERE {where_sql} AND name = 'show_card'
+                    GROUP BY 1, 2
+                    ORDER BY format, browse
+                    """,
+                    params,
+                )
+                show_cards = [dict(row) for row in cur.fetchall()]
+
+                cur.execute(
+                    f"""
+                    SELECT
+                        COALESCE(props->>'kind', 'unknown') AS kind,
+                        COUNT(*)::int AS events,
+                        COUNT(DISTINCT telegram_id)::int AS uniques
+                    FROM analytics_events
+                    WHERE {where_sql} AND name = 'raffle_branch'
+                    GROUP BY 1
+                    ORDER BY kind
+                    """,
+                    params,
+                )
+                raffle_branches = [dict(row) for row in cur.fetchall()]
+
+                # Audience is a snapshot (not period-bound), except blocked_at if we want — keep snapshot.
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE telegram_id IS NOT NULL)::int AS telegram_users,
+                        COUNT(*) FILTER (WHERE telegram_id IS NOT NULL AND COALESCE(is_blocked, false))::int AS telegram_blocked,
+                        COUNT(*) FILTER (
+                            WHERE telegram_id IS NOT NULL AND NOT COALESCE(is_blocked, false)
+                        )::int AS telegram_mailable,
+                        COUNT(*) FILTER (WHERE vk_id IS NOT NULL)::int AS vk_users,
+                        COUNT(*) FILTER (WHERE vk_id IS NOT NULL AND COALESCE(is_blocked, false))::int AS vk_blocked,
+                        COUNT(*) FILTER (
+                            WHERE vk_id IS NOT NULL AND NOT COALESCE(is_blocked, false)
+                        )::int AS vk_mailable
+                    FROM users
+                    """
+                )
+                audience = dict(cur.fetchone() or {})
+
+        return {
+            "available": True,
+            "period_label": period_label,
+            "channel": channel or "all",
+            "by_name": by_name,
+            "starts_by_payload": starts_by_payload,
+            "show_cards": show_cards,
+            "raffle_branches": raffle_branches,
+            "audience": audience,
+        }
+    except Exception:
+        logger.exception("fetch_analytics_report failed")
+        empty["period_label"] = period_label
+        return empty

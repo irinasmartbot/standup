@@ -799,13 +799,14 @@ def _tabs(filters: dict, can_view_db: bool = False) -> str:
         ("date", "По дате"),
         ("bookings", "Все брони"),
         ("users", "Users"),
+        ("analytics", "Аналитика"),
     ]
     if can_view_db:
         tabs.append(("db", "База"))
     current = filters.get("tab") or "date"
     return "".join(
         f'<a class="tab {"active" if current == key else ""}" '
-        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="")}">{label}</a>'
+        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="", date_from="", date_to="", channel="")}">{label}</a>'
         for key, label in tabs
     )
 
@@ -1073,12 +1074,189 @@ def _users_tab(dashboard: dict, filters: dict) -> str:
     return detail + f'<section class="card"><h2>Users</h2>{table}</section>'
 
 
-def _content(dashboard: dict, filters: dict, db_data: dict | None = None) -> str:
+def _metric_pair(metric: dict | None) -> str:
+    metric = metric or {"events": 0, "uniques": 0}
+    return f'<b>{metric.get("events", 0)}</b><span class="muted"> · {metric.get("uniques", 0)} чел.</span>'
+
+
+def _analytics_metric_card(title: str, metric: dict | None, note: str = "") -> str:
+    metric = metric or {"events": 0, "uniques": 0}
+    note_html = f'<span class="muted">{_h(note)}</span>' if note else ""
+    return (
+        '<div class="metric">'
+        f"<span>{_h(title)}</span>"
+        f'<b>{metric.get("events", 0)}</b>'
+        f'<small class="muted">{metric.get("uniques", 0)} уникальных</small>'
+        f"{note_html}"
+        "</div>"
+    )
+
+
+def _analytics_tab(report: dict, filters: dict) -> str:
+    if not report.get("available"):
+        return (
+            '<section class="card empty-state">'
+            "<h2>Аналитика пока недоступна</h2>"
+            "<p>Нужен PostgreSQL и таблица analytics_events. "
+            "После деплоя трекинга сюда подтянутся цифры.</p>"
+            "</section>"
+        )
+
+    by_name = report.get("by_name") or {}
+    today = datetime.now(MSK).date()
+    today_s = today.strftime("%Y-%m-%d")
+    week_s = (today - timedelta(days=6)).strftime("%Y-%m-%d")
+    channel = filters.get("channel") or ""
+    date_from = _date_to_input(filters.get("date_from", ""))
+    date_to = _date_to_input(filters.get("date_to", ""))
+
+    presets = [
+        ("Сегодня", {"date_from": today_s, "date_to": today_s, "all": ""}),
+        ("7 дней", {"date_from": week_s, "date_to": today_s, "all": ""}),
+        ("Весь период", {"date_from": "", "date_to": "", "all": "1"}),
+    ]
+    preset_html = "".join(
+        f'<a class="pill" href="{_query_link(filters, tab="analytics", channel=channel, **preset)}">{label}</a>'
+        for label, preset in presets
+    )
+
+    channel_links = []
+    for key, label in (("", "Все каналы"), ("telegram", "Telegram"), ("vkontakte", "VK")):
+        active = "active" if (filters.get("channel") or "") == key else ""
+        channel_links.append(
+            f'<a class="pill {active}" href="{_query_link(filters, tab="analytics", channel=key)}">{label}</a>'
+        )
+
+    overview = (
+        '<div class="summary analytics-summary">'
+        f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"))}'
+        f'{_analytics_metric_card("Проверка", by_name.get("branch_proverka"))}'
+        f'{_analytics_metric_card("BEST", by_name.get("branch_best"))}'
+        f'{_analytics_metric_card("Hit Loto", by_name.get("branch_hitloto"))}'
+        f'{_analytics_metric_card("Брони созданы", by_name.get("booking_created"))}'
+        f'{_analytics_metric_card("Билеты", by_name.get("booking_confirmed"))}'
+        f'{_analytics_metric_card("Отмены", by_name.get("booking_cancelled"))}'
+        f'{_analytics_metric_card("Help / FAQ", by_name.get("help_open"))}'
+        "</div>"
+    )
+
+    payload_rows = []
+    for row in report.get("starts_by_payload") or []:
+        payload_rows.append(
+            "<tr>"
+            f"<td>{_h(row['payload'])}</td>"
+            f"<td>{row['events']}</td>"
+            f"<td>{row['uniques']}</td>"
+            "</tr>"
+        )
+    starts_table = (
+        '<section class="card">'
+        "<h2>Входы в бот по ссылкам</h2>"
+        '<p class="muted">Заходы / уникальные люди. Пустой payload = обычный /start.</p>'
+        '<div class="table-wrap"><table><thead><tr><th>Ссылка (start=)</th><th>Заходы</th><th>Люди</th></tr></thead>'
+        f"<tbody>{''.join(payload_rows) or '<tr><td colspan=\"3\" class=\"muted\">Пока нет данных</td></tr>'}</tbody>"
+        "</table></div></section>"
+    )
+
+    browse_labels = {"date": "по дате", "venue": "по площадке", "": "—"}
+    format_labels = {
+        "proverka": "проверка",
+        "best": "BEST",
+        "hitloto": "Hit Loto",
+        "unknown": "другое",
+    }
+    card_rows = []
+    for row in report.get("show_cards") or []:
+        card_rows.append(
+            "<tr>"
+            f"<td>{_h(format_labels.get(row['format'], row['format']))}</td>"
+            f"<td>{_h(browse_labels.get(row.get('browse') or '', row.get('browse') or '—'))}</td>"
+            f"<td>{row['events']}</td>"
+            f"<td>{row['uniques']}</td>"
+            "</tr>"
+        )
+    cards_table = (
+        '<section class="card">'
+        "<h2>Просмотры карточек шоу</h2>"
+        '<p class="muted">Каждый открытый показ карточки. Потом можно решить, нужен ли шаг «по площадкам».</p>'
+        '<div class="table-wrap"><table><thead><tr><th>Формат</th><th>Как дошли</th><th>Просмотры</th><th>Люди</th></tr></thead>'
+        f"<tbody>{''.join(card_rows) or '<tr><td colspan=\"4\" class=\"muted\">Пока нет данных</td></tr>'}</tbody>"
+        "</table></div></section>"
+    )
+
+    raffle = (
+        '<section class="card">'
+        "<h2>Розыгрыш</h2>"
+        '<div class="mini-metrics">'
+        f'<span>Зашли: {_metric_pair(by_name.get("raffle_enter"))}</span>'
+        f'<span>Скрин: {_metric_pair(by_name.get("raffle_screenshot"))}</span>'
+        f'<span>Принят: {_metric_pair(by_name.get("raffle_approved"))}</span>'
+        f'<span>Отклонён: {_metric_pair(by_name.get("raffle_rejected"))}</span>'
+        f'<span>Подписка ок: {_metric_pair(by_name.get("raffle_subscribed"))}</span>'
+        f'<span>Подписка нет: {_metric_pair(by_name.get("raffle_sub_failed"))}</span>'
+        "</div>"
+    )
+    branch_rows = []
+    kind_labels = {"post": "пост", "review": "отзыв", "unknown": "неизвестно"}
+    for row in report.get("raffle_branches") or []:
+        branch_rows.append(
+            "<tr>"
+            f"<td>{_h(kind_labels.get(row['kind'], row['kind']))}</td>"
+            f"<td>{row['events']}</td>"
+            f"<td>{row['uniques']}</td>"
+            "</tr>"
+        )
+    raffle += (
+        '<div class="table-wrap"><table><thead><tr><th>Ветка</th><th>Выборы</th><th>Люди</th></tr></thead>'
+        f"<tbody>{''.join(branch_rows) or '<tr><td colspan=\"3\" class=\"muted\">Пока нет выборов ветки</td></tr>'}</tbody>"
+        "</table></div></section>"
+    )
+
+    audience = report.get("audience") or {}
+    audience_html = (
+        '<section class="card">'
+        "<h2>База для рассылки</h2>"
+        '<p class="muted">Снимок сейчас (не зависит от периода). «Можно слать» = есть id и не заблокировали бота.</p>'
+        '<div class="summary analytics-summary">'
+        f'<div class="metric"><span>Telegram · всего</span><b>{audience.get("telegram_users", 0)}</b></div>'
+        f'<div class="metric"><span>Telegram · можно слать</span><b>{audience.get("telegram_mailable", 0)}</b></div>'
+        f'<div class="metric"><span>Telegram · заблокировали</span><b>{audience.get("telegram_blocked", 0)}</b></div>'
+        f'<div class="metric"><span>VK · всего</span><b>{audience.get("vk_users", 0)}</b></div>'
+        f'<div class="metric"><span>VK · можно слать</span><b>{audience.get("vk_mailable", 0)}</b></div>'
+        f'<div class="metric"><span>VK · заблокировали</span><b>{audience.get("vk_blocked", 0)}</b></div>'
+        "</div></section>"
+    )
+
+    filters_bar = f"""
+    <div class="filters analytics-filters">
+      <div class="counters">{''.join(channel_links)}</div>
+      <div class="counters">{preset_html}</div>
+      <form method="get" action="/admin">
+        <input type="hidden" name="tab" value="analytics">
+        <input type="hidden" name="channel" value="{_h(channel)}">
+        <label class="muted">С</label>
+        <input name="date_from" type="date" value="{_h(date_from)}">
+        <label class="muted">По</label>
+        <input name="date_to" type="date" value="{_h(date_to)}">
+        <button type="submit">Показать</button>
+        <a class="pill" href="/admin?tab=analytics&all=1">Сбросить</a>
+      </form>
+    </div>
+    <p class="muted">Период: <b>{_h(report.get("period_label") or "весь период")}</b>.
+    В карточках: число = заходы, ниже — уникальные люди.</p>
+    """
+
+    return filters_bar + overview + starts_table + cards_table + raffle + audience_html
+
+
+def _content(dashboard: dict, filters: dict, db_data: dict | None = None, analytics: dict | None = None) -> str:
     tab = filters.get("tab") or "date"
     if tab == "bookings":
         return _bookings_tab(dashboard, filters)
     if tab == "users":
         return _users_tab(dashboard, filters)
+    if tab == "analytics":
+        return _analytics_tab(analytics or {}, filters)
     if tab == "db":
         db_data = db_data or {"tables": [], "browse": None}
         return _db_tab(db_data.get("tables") or [], db_data.get("browse"), filters)
@@ -1091,19 +1269,21 @@ def render_admin_html(
     source_label: str,
     db_data: dict | None = None,
     can_view_db: bool = False,
+    analytics: dict | None = None,
 ) -> str:
     totals = dashboard["totals"]
-    filters = _normalize_event_filter(dashboard, filters)
+    tab = filters.get("tab") or "date"
+    is_db = tab == "db"
+    is_analytics = tab == "analytics"
+    filters = _normalize_event_filter(dashboard, filters) if not is_analytics else filters
     date_value = _date_to_input(filters.get("date", ""))
     date_input = '<input name="date" type="date" value="{}">'.format(_h(date_value))
     event_select = _event_select(dashboard, filters)
     hidden_status = f'<input type="hidden" name="status" value="{_h(filters.get("status"))}">' if filters.get("status") else ""
     hidden_sort = f'<input type="hidden" name="sort" value="{_h(filters.get("sort"))}">' if filters.get("sort") else ""
     hidden_order = f'<input type="hidden" name="order" value="{_h(filters.get("order"))}">' if filters.get("sort") else ""
-    is_db = (filters.get("tab") or "date") == "db"
     summary_html = ""
-    filters_html = ""
-    if not is_db:
+    if not is_db and not is_analytics:
         summary_html = f"""
     <div class="summary">
       <div class="metric"><span>Мероприятий</span><b>{totals["events"]}</b></div>
@@ -1146,11 +1326,14 @@ def render_admin_html(
     .tab, .pill {{ padding:10px 14px; border-radius:999px; border:1px solid var(--line); color:#111827; background:white; text-decoration:none; }}
     .tab.active, .pill.active {{ background:#111827; color:white; border-color:#111827; }}
     .summary {{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:16px; margin-bottom:20px; }}
+    .analytics-summary {{ grid-template-columns: repeat(4, minmax(0,1fr)); }}
     .metric, .card, .filters {{ background:var(--card); border:1px solid var(--line); border-radius:18px; box-shadow:0 8px 30px rgba(15,23,42,.05); }}
     .metric {{ padding:18px; }}
     .metric span {{ display:block; color:var(--muted); font-size:14px; }}
     .metric b {{ display:block; margin-top:8px; font-size:30px; }}
+    .metric small {{ display:block; margin-top:6px; font-size:13px; }}
     .filters {{ padding:16px; margin-bottom:20px; display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:space-between; }}
+    .analytics-filters {{ flex-direction:column; align-items:stretch; }}
     .filters form {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }}
     input, select, button {{ border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:white; font:inherit; }}
     button {{ background:#111827; color:white; cursor:pointer; }}
@@ -1193,7 +1376,7 @@ def render_admin_html(
     @media (max-width: 780px) {{
       header {{ padding:22px 18px; }}
       main {{ padding:16px; }}
-      .summary {{ grid-template-columns:1fr; }}
+      .summary, .analytics-summary {{ grid-template-columns:1fr; }}
       .event-head {{ display:block; }}
     }}
   </style>
@@ -1206,7 +1389,7 @@ def render_admin_html(
   <main>
     <nav class="tabs">{_tabs(filters, can_view_db)}</nav>
     {summary_html}
-    {_content(dashboard, filters, db_data)}
+    {_content(dashboard, filters, db_data, analytics)}
   </main>
 </body>
 </html>"""
@@ -1221,8 +1404,19 @@ def _filters_from_request(request: web.Request) -> dict:
         order = "asc" if sort else ""
     date = request.query.get("date", "").strip()
     event = request.query.get("event", "").strip() if date else ""
+    channel = request.query.get("channel", "").strip()
+    if channel not in ("telegram", "vkontakte"):
+        channel = ""
+    date_from = request.query.get("date_from", "").strip()
+    date_to = request.query.get("date_to", "").strip()
+    tab = request.query.get("tab", "date").strip() or "date"
+    all_period = request.query.get("all", "").strip() == "1"
+    if tab == "analytics" and not all_period and not date_from and not date_to:
+        today = datetime.now(MSK).strftime("%Y-%m-%d")
+        date_from = today
+        date_to = today
     return {
-        "tab": request.query.get("tab", "date").strip() or "date",
+        "tab": tab,
         "status": request.query.get("status", "").strip(),
         "date": date,
         "event": event,
@@ -1232,6 +1426,10 @@ def _filters_from_request(request: web.Request) -> dict:
         "page": request.query.get("page", "1").strip() or "1",
         "sort": sort,
         "order": order,
+        "channel": channel,
+        "date_from": date_from,
+        "date_to": date_to,
+        "all": "1" if all_period else "",
     }
 
 
@@ -1334,7 +1532,7 @@ async def admin_page(request: web.Request) -> web.Response:
         filters["status"] = ""
     if filters.get("format") and filters["format"] not in FORMAT_OPTIONS:
         filters["format"] = ""
-    if filters.get("tab") not in {"date", "bookings", "users", "db"}:
+    if filters.get("tab") not in {"date", "bookings", "users", "analytics", "db"}:
         filters["tab"] = "date"
     # Managers must not open DB via direct URL
     if filters.get("tab") == "db" and not can_view_db:
@@ -1343,6 +1541,13 @@ async def admin_page(request: web.Request) -> web.Response:
     loop = asyncio.get_running_loop()
     source_label = "PostgreSQL" if _use_postgres(config) else f"SQLite ({config.db_path})"
     db_data = None
+    analytics = None
+    empty_dashboard = {
+        "events": [],
+        "bookings": [],
+        "users": {},
+        "totals": {"events": 0, "bookings": 0, "reserved_guests": 0, "confirmed_guests": 0},
+    }
     if filters.get("tab") == "db":
         tables = await loop.run_in_executor(None, list_db_tables, config)
         browse = None
@@ -1355,19 +1560,26 @@ async def admin_page(request: web.Request) -> web.Response:
                 filters.get("page", "1"),
             )
         db_data = {"tables": tables, "browse": browse}
-        dashboard = {
-            "events": [],
-            "bookings": [],
-            "users": {},
-            "totals": {"events": 0, "bookings": 0, "reserved_guests": 0, "confirmed_guests": 0},
-        }
+        dashboard = empty_dashboard
+    elif filters.get("tab") == "analytics":
+        from bot.db.analytics import fetch_analytics_report
+
+        analytics = await loop.run_in_executor(
+            None,
+            lambda: fetch_analytics_report(
+                date_from=filters.get("date_from") or None,
+                date_to=filters.get("date_to") or None,
+                channel=filters.get("channel") or "",
+            ),
+        )
+        dashboard = empty_dashboard
     else:
         # With a date selected, load all shows that day (even empty) so the show picker is complete.
         include_empty_events = bool(filters.get("date")) and filters.get("tab") in {"date", "bookings"}
         rows = await loop.run_in_executor(None, fetch_admin_rows, config, filters, include_empty_events)
         dashboard = build_dashboard(rows)
     return web.Response(
-        text=render_admin_html(dashboard, filters, source_label, db_data, can_view_db),
+        text=render_admin_html(dashboard, filters, source_label, db_data, can_view_db, analytics),
         content_type="text/html",
     )
 
