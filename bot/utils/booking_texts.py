@@ -23,10 +23,12 @@ def same_day_booking_warning(
     event_date: str,
     *,
     exclude_time: str | None = None,
+    for_alert: bool = False,
 ) -> str:
     """Мягкое предупреждение: на эту дату уже есть другая активная бронь.
 
     Не блокирует — только текст. exclude_time пропускает то же самое шоу.
+    for_alert=True — plain text до 200 символов для Telegram alert.
     """
     others: list[str] = []
     for time, location, format_name in get_same_day_bookings_summary(
@@ -46,6 +48,15 @@ def same_day_booking_warning(
         return ""
 
     date_label = format_date(event_date)
+    if for_alert:
+        listed = "\n".join(f"• {item}" for item in others)
+        text = (
+            f"⚠️ На {date_label} уже есть бронь:\n"
+            f"{listed}\n"
+            "Если планы изменятся — отмените лишнюю."
+        )
+        return text if len(text) <= 200 else text[:197] + "..."
+
     listed = "\n".join(f"• {escape(item)}" for item in others)
     return (
         f"⚠️ <b>Обратите внимание:</b> на {escape(date_label)} у вас уже есть бронь:\n"

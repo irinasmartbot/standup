@@ -1253,11 +1253,9 @@ async def rz_book(call: CallbackQuery, state: FSMContext):
     name = _full_name(call.from_user)
     await state.update_data(name=name)
 
-    same_day_warn = same_day_booking_warning(
-        call.from_user.id, event["date"], exclude_time=event["time"]
+    same_day_alert = same_day_booking_warning(
+        call.from_user.id, event["date"], exclude_time=event["time"], for_alert=True
     )
-    if same_day_warn:
-        await call.message.answer(same_day_warn, parse_mode="HTML")
 
     kb = InlineKeyboardBuilder()
     kb.button(text="Все верно 👌", callback_data="rz_name_ok")
@@ -1269,7 +1267,10 @@ async def rz_book(call: CallbackQuery, state: FSMContext):
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
     )
-    await call.answer()
+    if same_day_alert:
+        await call.answer(same_day_alert, show_alert=True)
+    else:
+        await call.answer()
 
 
 @router.callback_query(F.data == "rz_name_ok")
