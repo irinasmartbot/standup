@@ -1376,7 +1376,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             f'{_branch_metric("Скрин принят", steps.get("raffle_approved"))}'
             f'{_branch_metric("Есть бронь", kind_created.get(kind))}'
             f'{_branch_metric("Билет получен", kind_confirmed.get(kind))}'
-            f'{_branch_metric("Билет отменен", kind_cancelled.get(kind))}'
+            f'{_branch_metric("Бронь отменена", kind_cancelled.get(kind))}'
             "</div>"
             "</div>"
         )
