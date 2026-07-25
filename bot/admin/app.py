@@ -1136,11 +1136,11 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         f'{_analytics_metric_card("Проверка", by_name.get("branch_proverka"), css_class="tone-proverka")}'
         f'{_analytics_metric_card("BEST", by_name.get("branch_best"), css_class="tone-best")}'
         f'{_analytics_metric_card("Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto")}'
-        f'{_analytics_metric_card("Отправили скрин · розыгрыш", by_name.get("raffle_screenshot"))}'
+        f'{_analytics_metric_card("Help / FAQ", by_name.get("help_open"))}'
         f'{_analytics_metric_card("Брони созданы · проверка", proverka_overview.get("created"))}'
         f'{_analytics_metric_card("Билет получен · проверка", proverka_overview.get("confirmed"))}'
         f'{_analytics_metric_card("Отмены брони · проверка", proverka_overview.get("cancelled"))}'
-        f'{_analytics_metric_card("Help / FAQ", by_name.get("help_open"))}'
+        f'{_analytics_metric_card("Отправили скрин · розыгрыш", by_name.get("raffle_screenshot"))}'
         f'{_analytics_metric_card("Посетили розыгрыш", raffle_overview.get("visited"))}'
         "</div>"
     )
