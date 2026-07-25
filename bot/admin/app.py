@@ -1221,7 +1221,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
 
     all_events_body = "".join(group_blocks)
     all_events_table = (
-        '<section class="card details-card">'
+        '<section class="card details-card analytics-section">'
         "<details>"
         '<summary class="details-summary">'
         "<div>"
@@ -1264,7 +1264,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             "</tr>"
         )
     starts_table = (
-        '<section class="card">'
+        '<section class="card analytics-section">'
         "<h2>Входы в бот по ссылкам</h2>"
         '<p class="muted">Заходы / уникальные люди.</p>'
         '<div class="table-wrap"><table><thead><tr><th>Вход</th><th>Заходы</th><th>Люди</th></tr></thead>'
@@ -1310,7 +1310,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             "</div></div>"
         )
     cards_table = (
-        '<section class="card card-compact">'
+        '<section class="card analytics-section">'
         "<h2>Просмотры карточек шоу</h2>"
         '<p class="muted">Открытия карточек по способу поиска.</p>'
         f'<div class="show-format-grid">{"".join(show_blocks)}</div>'
@@ -1349,10 +1349,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             "</div>"
         )
 
-    raffle = (
-        '<section class="card">'
-        "<h2>Розыгрыш</h2>"
-        '<p class="muted">Воронка от входа до билета. Справа — отвалы.</p>'
+    raffle_body = (
         '<div class="funnel-layout">'
         f'{_funnel_row(_funnel_step("1. Зашли в розыгрыш", by_name.get("raffle_enter")))}'
         f'{_funnel_row(_funnel_step("2. Выбрали ветку", by_name.get("raffle_branch")))}'
@@ -1380,15 +1377,27 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             "</div>"
             "</div>"
         )
-    raffle += (
-        '<div class="branch-grid">'
-        f'{"".join(branch_cards)}'
-        "</div></section>"
+    raffle = (
+        '<section class="card details-card analytics-section">'
+        "<details>"
+        '<summary class="details-summary">'
+        "<div>"
+        "<strong>Розыгрыш</strong>"
+        '<span class="muted">Воронка от входа до билета · справа — отвалы</span>'
+        "</div>"
+        '<span class="details-action"><span class="closed-label">Развернуть</span><span class="open-label">Свернуть</span></span>'
+        "</summary>"
+        '<div class="details-body">'
+        f"{raffle_body}"
+        f'<div class="branch-grid">{"".join(branch_cards)}</div>'
+        "</div>"
+        "</details>"
+        "</section>"
     )
 
     audience = report.get("audience") or {}
     audience_html = (
-        '<section class="card">'
+        '<section class="card analytics-section">'
         "<h2>База для рассылки <span class='muted'>(всего)</span></h2>"
         '<div class="summary analytics-audience">'
         f'<div class="metric"><span>Telegram · всего</span><b>{audience.get("telegram_users", 0)}</b></div>'
@@ -1510,6 +1519,9 @@ def render_admin_html(
     .card-compact {{ padding:16px 18px; }}
     .card-compact h2 {{ font-size:18px; margin-bottom:4px; }}
     .card-compact > .muted {{ margin:0 0 12px; font-size:13px; }}
+    .analytics-section {{ padding:18px 20px; }}
+    .analytics-section > h2 {{ margin:0 0 4px; font-size:18px; font-weight:700; line-height:1.3; }}
+    .analytics-section > .muted {{ margin:0 0 14px; font-size:13px; }}
     .show-format-grid {{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; }}
     .show-format-block {{ margin:0; padding:10px 12px; border-radius:12px; border:1px solid var(--line); }}
     .show-format-title {{ font-size:13px; font-weight:700; margin-bottom:8px; }}
@@ -1540,13 +1552,16 @@ def render_admin_html(
     .details-card {{ padding:0; overflow:hidden; }}
     .details-summary {{ display:flex; justify-content:space-between; align-items:center; gap:16px; padding:18px 20px; cursor:pointer; list-style:none; }}
     .details-summary::-webkit-details-marker {{ display:none; }}
-    .details-summary strong {{ display:block; font-size:18px; }}
-    .details-summary .muted {{ display:block; margin-top:4px; }}
+    .details-summary strong {{ display:block; font-size:18px; font-weight:700; line-height:1.3; }}
+    .details-summary .muted {{ display:block; margin-top:4px; font-size:13px; }}
     .details-action {{ flex-shrink:0; padding:8px 12px; border-radius:999px; background:#111827; color:white; font-size:13px; }}
     .details-action .open-label {{ display:none; }}
     details[open] .details-action .closed-label {{ display:none; }}
     details[open] .details-action .open-label {{ display:inline; }}
     .details-body {{ padding:0 20px 20px; border-top:1px solid var(--line); }}
+    .details-body > .muted {{ margin:14px 0; font-size:13px; }}
+    .details-body > .funnel-layout {{ margin-top:14px; }}
+    .details-body > .branch-grid {{ margin-top:16px; }}
     .events-group-title {{ margin:18px 0 8px; font-size:15px; color:#334155; }}
     .events-group-title:first-child {{ margin-top:8px; }}
     table.analytics-events {{ table-layout:fixed; min-width:640px; }}
@@ -1570,7 +1585,7 @@ def render_admin_html(
     button {{ background:#111827; color:white; cursor:pointer; }}
     .card {{ padding:20px; margin-bottom:18px; }}
     .event-head {{ display:flex; justify-content:space-between; gap:16px; align-items:start; }}
-    h2 {{ margin:0 0 10px; font-size:22px; }}
+    h2 {{ margin:0 0 10px; font-size:18px; font-weight:700; }}
     .event-head p {{ margin:0; color:var(--muted); }}
     .format {{ background:#eef2ff; color:#3730a3; padding:7px 10px; border-radius:999px; font-weight:700; }}
     .capacity-line {{ display:flex; justify-content:space-between; margin-top:16px; font-weight:700; }}
