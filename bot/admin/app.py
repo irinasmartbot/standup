@@ -1144,18 +1144,18 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "bot_start": "Зашли в бот (/start)",
         "help_open": "Открыли Help / FAQ",
         "help_question": "Написали в поддержку",
-        "branch_best": "Ветка BEST",
-        "branch_hitloto": "Ветка Hit Loto",
-        "branch_proverka": "Ветка проверка",
+        "branch_best": "BEST",
+        "branch_hitloto": "Hit Loto",
+        "branch_proverka": "проверка",
         "show_card": "Открыли карточку шоу",
         "buy_click": "Купить (если трекаем)",
-        "raffle_enter": "Розыгрыш · вход",
-        "raffle_branch": "Розыгрыш · выбор ветки",
-        "raffle_screenshot": "Розыгрыш · скрин",
-        "raffle_approved": "Розыгрыш · скрин принят",
-        "raffle_rejected": "Розыгрыш · скрин отклонён",
-        "raffle_subscribed": "Розыгрыш · подписка ок",
-        "raffle_sub_failed": "Розыгрыш · подписка нет",
+        "raffle_enter": "Вход в розыгрыш",
+        "raffle_branch": "Выбор ветки",
+        "raffle_screenshot": "Отправили скрин",
+        "raffle_approved": "Скрин принят",
+        "raffle_rejected": "Скрин отклонён",
+        "raffle_subscribed": "Подписка ок",
+        "raffle_sub_failed": "Подписка нет",
         "booking_created": "Бронь создана",
         "booking_confirmed": "Билет получен",
         "booking_cancelled": "Бронь отменена",
@@ -1163,18 +1163,64 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "bot_blocked": "Заблокировали бота",
         "bot_unblocked": "Разблокировали бота",
     }
-    all_event_rows = []
-    for name, metric in sorted(
-        by_name.items(),
-        key=lambda item: (-item[1].get("events", 0), item[0]),
-    ):
-        all_event_rows.append(
-            "<tr>"
-            f"<td>{_h(event_labels.get(name, name))}</td>"
-            f"<td>{metric.get('events', 0)}</td>"
-            f"<td>{metric.get('uniques', 0)}</td>"
-            "</tr>"
+    event_groups = [
+        ("Вход в бот", ["bot_start"]),
+        ("Ветки", ["branch_proverka", "branch_best", "branch_hitloto"]),
+        ("Карточки шоу", ["show_card", "buy_click"]),
+        ("Помощь", ["help_open", "help_question"]),
+        (
+            "Розыгрыш",
+            [
+                "raffle_enter",
+                "raffle_branch",
+                "raffle_screenshot",
+                "raffle_approved",
+                "raffle_rejected",
+                "raffle_subscribed",
+                "raffle_sub_failed",
+            ],
+        ),
+        (
+            "Брони",
+            [
+                "booking_created",
+                "booking_confirmed",
+                "booking_cancelled",
+                "booking_annulled",
+            ],
+        ),
+        ("Блокировки бота", ["bot_blocked", "bot_unblocked"]),
+    ]
+    grouped_names = {name for _, names in event_groups for name in names}
+    other_names = sorted(name for name in by_name if name not in grouped_names)
+    if other_names:
+        event_groups.append(("Другое", other_names))
+
+    group_blocks = []
+    for group_title, names in event_groups:
+        rows = []
+        for name in names:
+            metric = by_name.get(name) or {"events": 0, "uniques": 0}
+            if name not in by_name and name in grouped_names:
+                # still show zero rows for known funnel steps? optional — skip zeros for cleaner list
+                continue
+            rows.append(
+                "<tr>"
+                f"<td>{_h(event_labels.get(name, name))}</td>"
+                f"<td>{metric.get('events', 0)}</td>"
+                f"<td>{metric.get('uniques', 0)}</td>"
+                "</tr>"
+            )
+        if not rows:
+            continue
+        group_blocks.append(
+            f'<h3 class="events-group-title">{_h(group_title)}</h3>'
+            '<div class="table-wrap"><table><thead><tr>'
+            "<th>Событие</th><th>Нажатий / заходов</th><th>Уникальных людей</th>"
+            "</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table></div>"
         )
+
     all_events_table = (
         '<section class="card details-card">'
         "<details>"
@@ -1186,12 +1232,8 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         '<span class="details-action"><span class="closed-label">Развернуть</span><span class="open-label">Свернуть</span></span>'
         "</summary>"
         '<div class="details-body">'
-        '<p class="muted">Для любого события: сколько раз сработало и сколько уникальных людей.</p>'
-        '<div class="table-wrap"><table><thead><tr>'
-        "<th>Событие</th><th>Нажатий / заходов</th><th>Уникальных людей</th>"
-        "</tr></thead>"
-        f"<tbody>{''.join(all_event_rows) or '<tr><td colspan=\"3\" class=\"muted\">За выбранный период событий нет</td></tr>'}</tbody>"
-        "</table></div>"
+        '<p class="muted">События сгруппированы. Страница аналитики не автообновляется — кат не схлопнется сам.</p>'
+        f'{"".join(group_blocks) or "<p class=\"muted\">За выбранный период событий нет</p>"}'
         "</div>"
         "</details>"
         "</section>"
@@ -1420,7 +1462,7 @@ def render_admin_html(
         <a class="pill" href="/admin?tab={_h(filters.get('tab') or 'date')}">Сбросить</a>
       </form>
     </div>"""
-    refresh_meta = "" if is_db else '<meta http-equiv="refresh" content="30">'
+    refresh_meta = "" if is_db or is_analytics else '<meta http-equiv="refresh" content="30">'
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -1467,6 +1509,8 @@ def render_admin_html(
     details[open] .details-action .closed-label {{ display:none; }}
     details[open] .details-action .open-label {{ display:inline; }}
     .details-body {{ padding:0 20px 20px; border-top:1px solid var(--line); }}
+    .events-group-title {{ margin:18px 0 8px; font-size:15px; color:#334155; }}
+    .events-group-title:first-child {{ margin-top:8px; }}
     .metric, .card, .filters {{ background:var(--card); border:1px solid var(--line); border-radius:18px; box-shadow:0 8px 30px rgba(15,23,42,.05); }}
     .metric {{ padding:18px; }}
     .metric span {{ display:block; color:var(--muted); font-size:14px; }}
