@@ -569,3 +569,26 @@ def fetch_analytics_report(
         logger.exception("fetch_analytics_report failed")
         empty["period_label"] = period_label
         return empty
+
+
+def fetch_user_activity(telegram_id: int, limit: int = 40) -> list[dict]:
+    """Recent analytics events for one Telegram user (admin user card)."""
+    if not _use_postgres() or not telegram_id:
+        return []
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT name, props, created_at, channel
+                    FROM analytics_events
+                    WHERE telegram_id = %(telegram_id)s
+                    ORDER BY created_at DESC
+                    LIMIT %(limit)s
+                    """,
+                    {"telegram_id": telegram_id, "limit": limit},
+                )
+                return [dict(row) for row in cur.fetchall()]
+    except Exception:
+        logger.exception("fetch_user_activity failed for %s", telegram_id)
+        return []

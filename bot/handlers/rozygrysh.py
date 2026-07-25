@@ -654,11 +654,25 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
     clear_raffle_awaiting_screenshot(message.from_user.id)
 
     file_id = photo.file_id
+    file_unique_id = getattr(photo, "file_unique_id", None)
     full_name = _full_name(message.from_user)
     username = message.from_user.username or ""
+    source_at = message.date
+    if source_at and getattr(source_at, "tzinfo", None) is None:
+        from datetime import timezone as _tz
+
+        source_at = source_at.replace(tzinfo=_tz.utc)
     try:
         submission_id = create_raffle_submission(
-            message.from_user.id, username, full_name, kind, file_id
+            message.from_user.id,
+            username,
+            full_name,
+            kind,
+            file_id,
+            photo_file_unique_id=file_unique_id,
+            source_chat_id=message.chat.id,
+            source_message_id=message.message_id,
+            source_message_at=source_at,
         )
     except Exception:
         logger.exception("Failed to create raffle submission")

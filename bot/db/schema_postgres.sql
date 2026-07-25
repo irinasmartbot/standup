@@ -95,6 +95,10 @@ CREATE TABLE IF NOT EXISTS raffle_submissions (
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'approved', 'rejected')),
     photo_file_id TEXT NOT NULL,
+    photo_file_unique_id TEXT,
+    source_chat_id BIGINT,
+    source_message_id BIGINT,
+    source_message_at TIMESTAMPTZ,
     moderation_chat_id BIGINT,
     moderation_message_id BIGINT,
     reject_reason TEXT,

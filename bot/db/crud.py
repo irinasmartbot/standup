@@ -903,6 +903,10 @@ def ensure_raffle_tables():
                     status TEXT NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending', 'approved', 'rejected')),
                     photo_file_id TEXT NOT NULL,
+                    photo_file_unique_id TEXT,
+                    source_chat_id BIGINT,
+                    source_message_id BIGINT,
+                    source_message_at TIMESTAMPTZ,
                     moderation_chat_id BIGINT,
                     moderation_message_id BIGINT,
                     reject_reason TEXT,
@@ -917,6 +921,13 @@ def ensure_raffle_tables():
                 ON raffle_submissions (telegram_id, status)
                 """
             )
+            for ddl in (
+                "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS photo_file_unique_id TEXT",
+                "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS source_chat_id BIGINT",
+                "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS source_message_id BIGINT",
+                "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS source_message_at TIMESTAMPTZ",
+            ):
+                cur.execute(ddl)
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS raffle_nav (
@@ -960,7 +971,18 @@ def get_pending_raffle_submission(telegram_id):
             return _fetchone_tuple(cur)
 
 
-def create_raffle_submission(telegram_id, username, full_name, kind, photo_file_id):
+def create_raffle_submission(
+    telegram_id,
+    username,
+    full_name,
+    kind,
+    photo_file_id,
+    *,
+    photo_file_unique_id=None,
+    source_chat_id=None,
+    source_message_id=None,
+    source_message_at=None,
+):
     if not _use_postgres():
         raise RuntimeError("Raffle submissions require PostgreSQL")
     with _pg_connect() as conn:
@@ -969,15 +991,93 @@ def create_raffle_submission(telegram_id, username, full_name, kind, photo_file_
             cur.execute(
                 """
                 INSERT INTO raffle_submissions
-                    (user_id, telegram_id, username, full_name, kind, status, photo_file_id)
-                VALUES (%s, %s, %s, %s, %s, 'pending', %s)
+                    (user_id, telegram_id, username, full_name, kind, status, photo_file_id,
+                     photo_file_unique_id, source_chat_id, source_message_id, source_message_at)
+                VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (user_id, telegram_id, username, full_name, kind, photo_file_id),
+                (
+                    user_id,
+                    telegram_id,
+                    username,
+                    full_name,
+                    kind,
+                    photo_file_id,
+                    photo_file_unique_id,
+                    source_chat_id,
+                    source_message_id,
+                    source_message_at,
+                ),
             )
             submission_id = cur.fetchone()[0]
         conn.commit()
     return submission_id
+
+
+def get_raffle_submissions_for_telegram(telegram_id: int, limit: int = 20) -> list[dict]:
+    if not _use_postgres() or not telegram_id:
+        return []
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, kind, status, photo_file_id, photo_file_unique_id,
+                    source_chat_id, source_message_id, source_message_at,
+                    moderation_chat_id, moderation_message_id, reject_reason,
+                    created_at, reviewed_at
+                FROM raffle_submissions
+                WHERE telegram_id = %s
+                ORDER BY id DESC
+                LIMIT %s
+                """,
+                (telegram_id, limit),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def get_user_raffle_flags(telegram_id: int = None, user_id: int = None) -> dict:
+    if not _use_postgres() or (not telegram_id and not user_id):
+        return {"rozygrysh_used": False, "is_blocked": False}
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            try:
+                if user_id:
+                    cur.execute(
+                        """
+                        SELECT COALESCE(rozygrysh_used, false), COALESCE(is_blocked, false)
+                        FROM users WHERE id = %s
+                        """,
+                        (user_id,),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT COALESCE(rozygrysh_used, false), COALESCE(is_blocked, false)
+                        FROM users WHERE telegram_id = %s
+                        """,
+                        (telegram_id,),
+                    )
+                row = cur.fetchone()
+            except Exception:
+                if user_id:
+                    cur.execute(
+                        "SELECT COALESCE(rozygrysh_used, false) FROM users WHERE id = %s",
+                        (user_id,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT COALESCE(rozygrysh_used, false) FROM users WHERE telegram_id = %s",
+                        (telegram_id,),
+                    )
+                row = cur.fetchone()
+                if not row:
+                    return {"rozygrysh_used": False, "is_blocked": False}
+                return {"rozygrysh_used": bool(row[0]), "is_blocked": False}
+            if not row:
+                return {"rozygrysh_used": False, "is_blocked": False}
+            return {"rozygrysh_used": bool(row[0]), "is_blocked": bool(row[1])}
 
 
 def save_raffle_moderation_message(submission_id, chat_id, message_id):
