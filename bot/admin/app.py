@@ -1237,7 +1237,7 @@ def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
 def _user_extra_details(title: str, body: str, open_by_default: bool = False) -> str:
     opened = " open" if open_by_default else ""
     return (
-        f'<details class="user-extra-details"{opened}>'
+        f'<details class="user-extra-details" data-persist-key="user:{_h(title)}"{opened}>'
         f'<summary class="user-extra-summary"><strong>{_h(title)}</strong>'
         '<span class="details-action"><span class="closed-label">Развернуть</span>'
         '<span class="open-label">Свернуть</span></span></summary>'
@@ -1562,7 +1562,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     all_events_body = "".join(group_blocks)
     all_events_table = (
         '<section class="card details-card analytics-section">'
-        "<details>"
+        '<details data-persist-key="analytics:all-events">'
         '<summary class="details-summary">'
         "<div>"
         "<strong>Все события за период</strong>"
@@ -1719,7 +1719,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         )
     raffle = (
         '<section class="card details-card analytics-section">'
-        "<details>"
+        '<details data-persist-key="analytics:raffle">'
         '<summary class="details-summary">'
         "<div>"
         "<strong>Розыгрыш</strong>"
@@ -2028,6 +2028,31 @@ def render_admin_html(
     {summary_html}
     {_content(dashboard, filters, db_data, analytics, user_extras)}
   </main>
+  <script>
+    (function () {{
+      var STORAGE_KEY = "admin-details-open";
+      function load() {{
+        try {{ return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || "{{}}"); }}
+        catch (e) {{ return {{}}; }}
+      }}
+      function save(state) {{
+        try {{ sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }}
+        catch (e) {{}}
+      }}
+      var state = load();
+      document.querySelectorAll("details[data-persist-key]").forEach(function (el) {{
+        var key = el.getAttribute("data-persist-key");
+        if (Object.prototype.hasOwnProperty.call(state, key)) {{
+          el.open = !!state[key];
+        }}
+        el.addEventListener("toggle", function () {{
+          var next = load();
+          next[key] = el.open;
+          save(next);
+        }});
+      }});
+    }})();
+  </script>
 </body>
 </html>"""
 
