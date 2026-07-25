@@ -1176,15 +1176,23 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             "</tr>"
         )
     all_events_table = (
-        '<section class="card">'
+        '<section class="card details-card">'
         "<details>"
-        "<summary><h2>Все события за период</h2></summary>"
+        '<summary class="details-summary">'
+        "<div>"
+        "<strong>Все события за период</strong>"
+        '<span class="muted">Полный список метрик · нажмите, чтобы раскрыть</span>'
+        "</div>"
+        '<span class="details-action"><span class="closed-label">Развернуть</span><span class="open-label">Свернуть</span></span>'
+        "</summary>"
+        '<div class="details-body">'
         '<p class="muted">Для любого события: сколько раз сработало и сколько уникальных людей.</p>'
         '<div class="table-wrap"><table><thead><tr>'
         "<th>Событие</th><th>Нажатий / заходов</th><th>Уникальных людей</th>"
         "</tr></thead>"
         f"<tbody>{''.join(all_event_rows) or '<tr><td colspan=\"3\" class=\"muted\">За выбранный период событий нет</td></tr>'}</tbody>"
         "</table></div>"
+        "</div>"
         "</details>"
         "</section>"
     )
@@ -1234,60 +1242,90 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             browse = "date"
         card_matrix[fmt][browse] = (int(row.get("events") or 0), int(row.get("uniques") or 0))
 
-    card_rows = []
+    show_blocks = []
     for fmt, title in (("best", "BEST"), ("hitloto", "Hit Loto"), ("proverka", "проверка")):
-        by_date = card_matrix[fmt]["date"]
-        by_venue = card_matrix[fmt]["venue"]
-        card_rows.append(
-            "<tr>"
-            f"<td>{_h(title)}</td>"
-            f"<td>{_card_cell(*by_date)}</td>"
-            f"<td>{_card_cell(*by_venue)}</td>"
-            "</tr>"
+        by_date_e, by_date_u = card_matrix[fmt]["date"]
+        by_venue_e, by_venue_u = card_matrix[fmt]["venue"]
+        show_blocks.append(
+            '<div class="show-format-block">'
+            f"<h3>{_h(title)}</h3>"
+            '<div class="summary analytics-show-pair">'
+            f'<div class="metric"><span>Зашли по дате</span><b>{by_date_e}</b>'
+            f'<small class="muted">{by_date_u} уникальных</small></div>'
+            f'<div class="metric"><span>Зашли по площадке</span><b>{by_venue_e}</b>'
+            f'<small class="muted">{by_venue_u} уникальных</small></div>'
+            "</div></div>"
         )
     cards_table = (
         '<section class="card">'
         "<h2>Просмотры карточек шоу</h2>"
         '<p class="muted">Сколько раз открыли карточку и сколько уникальных людей — по способу поиска.</p>'
-        '<div class="table-wrap"><table><thead><tr>'
-        "<th>Формат</th><th>Зашли по дате</th><th>Зашли по площадке</th>"
-        "</tr></thead>"
-        f"<tbody>{''.join(card_rows)}</tbody>"
-        "</table></div></section>"
+        f'{"".join(show_blocks)}'
+        "</section>"
     )
 
     raffle_bookings = report.get("raffle_bookings") or {}
+    kind_steps = report.get("raffle_kind_steps") or {}
+
+    def _funnel_step(title: str, metric: dict | None, note: str = "") -> str:
+        metric = metric or {"events": 0, "uniques": 0}
+        note_html = f'<span class="funnel-note">{_h(note)}</span>' if note else ""
+        return (
+            '<div class="funnel-step">'
+            f'<div class="funnel-title">{_h(title)}</div>'
+            f'<div class="funnel-value"><b>{metric.get("events", 0)}</b>'
+            f'<span class="muted">{metric.get("uniques", 0)} чел.</span></div>'
+            f"{note_html}"
+            "</div>"
+        )
+
     raffle = (
         '<section class="card">'
         "<h2>Розыгрыш</h2>"
-        '<div class="mini-metrics">'
-        f'<span>Зашли: {_metric_pair(by_name.get("raffle_enter"))}</span>'
-        f'<span>Скрин: {_metric_pair(by_name.get("raffle_screenshot"))}</span>'
-        f'<span>Принят: {_metric_pair(by_name.get("raffle_approved"))}</span>'
-        f'<span>Отклонён: {_metric_pair(by_name.get("raffle_rejected"))}</span>'
-        f'<span>Подписка ок: {_metric_pair(by_name.get("raffle_subscribed"))}</span>'
-        f'<span>Подписка нет: {_metric_pair(by_name.get("raffle_sub_failed"))}</span>'
-        f'<span>Забронировали: {_metric_pair(raffle_bookings.get("created"))}</span>'
-        f'<span>Получили билет: {_metric_pair(raffle_bookings.get("confirmed"))}</span>'
-        f'<span>Отменили: {_metric_pair(raffle_bookings.get("cancelled"))}</span>'
-        f'<span>Аннулировано: {_metric_pair(raffle_bookings.get("annulled"))}</span>'
+        '<p class="muted">Воронка от входа до билета. Справа — отвалы.</p>'
+        '<div class="funnel-layout">'
+        '<div class="funnel-main">'
+        f'{_funnel_step("1. Зашли в розыгрыш", by_name.get("raffle_enter"))}'
+        f'{_funnel_step("2. Выбрали ветку", by_name.get("raffle_branch"))}'
+        f'{_funnel_step("3. Отправили скрин", by_name.get("raffle_screenshot"))}'
+        f'{_funnel_step("4. Скрин принят", by_name.get("raffle_approved"))}'
+        f'{_funnel_step("5. Подписка ок", by_name.get("raffle_subscribed"))}'
+        f'{_funnel_step("6. Забронировали", raffle_bookings.get("created"))}'
+        f'{_funnel_step("7. Получили билет", raffle_bookings.get("confirmed"))}'
+        "</div>"
+        '<div class="funnel-side">'
+        f'{_funnel_step("Скрин отклонён", by_name.get("raffle_rejected"), "отвал")}'
+        f'{_funnel_step("Подписка нет", by_name.get("raffle_sub_failed"), "отвал")}'
+        f'{_funnel_step("Отменили бронь", raffle_bookings.get("cancelled"), "отвал")}'
+        f'{_funnel_step("Аннулировано", raffle_bookings.get("annulled"), "отвал")}'
+        "</div>"
         "</div>"
     )
-    branch_map = {row["kind"]: row for row in (report.get("raffle_branches") or [])}
-    branch_rows = []
-    for kind, title in (("post", "пост"), ("review", "отзыв")):
-        row = branch_map.get(kind) or {"events": 0, "uniques": 0}
-        branch_rows.append(
-            "<tr>"
-            f"<td>{_h(title)}</td>"
-            f"<td>{row.get('events', 0)}</td>"
-            f"<td>{row.get('uniques', 0)}</td>"
-            "</tr>"
+
+    branch_cards = []
+    for kind, title in (("post", "Билет за пост"), ("review", "Билет за отзыв")):
+        steps = kind_steps.get(kind) or {}
+        entered = steps.get("raffle_branch") or {"events": 0, "uniques": 0}
+        screens = steps.get("raffle_screenshot") or {"events": 0, "uniques": 0}
+        approved = steps.get("raffle_approved") or {"events": 0, "uniques": 0}
+        branch_cards.append(
+            '<div class="branch-card">'
+            f"<h3>{_h(title)}</h3>"
+            '<div class="summary analytics-show-pair">'
+            f'<div class="metric"><span>Зашли в ветку</span><b>{entered.get("events", 0)}</b>'
+            f'<small class="muted">{entered.get("uniques", 0)} уникальных</small></div>'
+            f'<div class="metric"><span>Отправили скрин</span><b>{screens.get("events", 0)}</b>'
+            f'<small class="muted">{screens.get("uniques", 0)} уникальных</small></div>'
+            f'<div class="metric"><span>Скрин принят</span><b>{approved.get("events", 0)}</b>'
+            f'<small class="muted">{approved.get("uniques", 0)} уникальных</small></div>'
+            "</div>"
+            '<p class="muted">Дальше бронь и билет общие по розыгрышу — в воронке выше.</p>'
+            "</div>"
         )
     raffle += (
-        '<div class="table-wrap"><table><thead><tr><th>Ветка</th><th>Выборы</th><th>Люди</th></tr></thead>'
-        f"<tbody>{''.join(branch_rows)}</tbody>"
-        "</table></div></section>"
+        '<div class="branch-grid">'
+        f'{"".join(branch_cards)}'
+        "</div></section>"
     )
 
     audience = report.get("audience") or {}
@@ -1405,6 +1443,30 @@ def render_admin_html(
     .summary {{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:16px; margin-bottom:20px; }}
     .analytics-summary {{ grid-template-columns: repeat(4, minmax(0,1fr)); }}
     .analytics-audience {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
+    .analytics-show-pair {{ grid-template-columns: repeat(2, minmax(0,1fr)); margin:0; }}
+    .branch-card .analytics-show-pair {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
+    .show-format-block {{ margin-top:18px; }}
+    .show-format-block h3, .branch-card h3 {{ margin:0 0 10px; font-size:16px; }}
+    .branch-grid {{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:16px; margin-top:18px; }}
+    .branch-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:16px; padding:16px; }}
+    .funnel-layout {{ display:grid; grid-template-columns: 1.4fr 1fr; gap:16px; margin-top:14px; }}
+    .funnel-main, .funnel-side {{ display:flex; flex-direction:column; gap:10px; }}
+    .funnel-step {{ background:#f8fafc; border:1px solid var(--line); border-radius:14px; padding:12px 14px; }}
+    .funnel-side .funnel-step {{ background:#fff7ed; border-color:#fed7aa; }}
+    .funnel-title {{ font-size:13px; color:#475467; margin-bottom:6px; }}
+    .funnel-value {{ display:flex; gap:10px; align-items:baseline; }}
+    .funnel-value b {{ font-size:24px; }}
+    .funnel-note {{ display:inline-block; margin-top:6px; font-size:12px; color:#c2410c; font-weight:700; }}
+    .details-card {{ padding:0; overflow:hidden; }}
+    .details-summary {{ display:flex; justify-content:space-between; align-items:center; gap:16px; padding:18px 20px; cursor:pointer; list-style:none; }}
+    .details-summary::-webkit-details-marker {{ display:none; }}
+    .details-summary strong {{ display:block; font-size:18px; }}
+    .details-summary .muted {{ display:block; margin-top:4px; }}
+    .details-action {{ flex-shrink:0; padding:8px 12px; border-radius:999px; background:#111827; color:white; font-size:13px; }}
+    .details-action .open-label {{ display:none; }}
+    details[open] .details-action .closed-label {{ display:none; }}
+    details[open] .details-action .open-label {{ display:inline; }}
+    .details-body {{ padding:0 20px 20px; border-top:1px solid var(--line); }}
     .metric, .card, .filters {{ background:var(--card); border:1px solid var(--line); border-radius:18px; box-shadow:0 8px 30px rgba(15,23,42,.05); }}
     .metric {{ padding:18px; }}
     .metric span {{ display:block; color:var(--muted); font-size:14px; }}
@@ -1452,17 +1514,16 @@ def render_admin_html(
     .muted {{ color:var(--muted); }}
     .empty-state {{ text-align:center; padding:36px; color:#475467; }}
     details {{ margin:0; }}
-    details summary {{ cursor:pointer; list-style:none; }}
-    details summary::-webkit-details-marker {{ display:none; }}
-    details summary h2 {{ display:inline; margin:0; }}
-    details summary::before {{ content:"▸ "; color:#94a3b8; }}
-    details[open] summary::before {{ content:"▾ "; }}
-    details .muted, details .table-wrap {{ margin-top:12px; }}
+    @media (max-width: 900px) {{
+      .funnel-layout, .branch-grid, .analytics-show-pair, .branch-card .analytics-show-pair {{ grid-template-columns:1fr; }}
+    }}
     @media (max-width: 780px) {{
       header {{ padding:22px 18px; }}
       main {{ padding:16px; }}
       .summary, .analytics-summary, .analytics-audience {{ grid-template-columns:1fr; }}
       .event-head {{ display:block; }}
+      .details-summary {{ display:block; }}
+      .details-action {{ display:inline-block; margin-top:10px; }}
     }}
   </style>
 </head>

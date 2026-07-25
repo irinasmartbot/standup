@@ -249,6 +249,7 @@ def fetch_analytics_report(
         "starts_by_payload": [],
         "show_cards": [],
         "raffle_branches": [],
+        "raffle_kind_steps": {},
         "raffle_bookings": {},
         "audience": {
             "telegram_users": 0,
@@ -377,6 +378,34 @@ def fetch_analytics_report(
                 )
                 raffle_branches = [dict(row) for row in cur.fetchall()]
 
+                cur.execute(
+                    f"""
+                    SELECT
+                        COALESCE(props->>'kind', 'unknown') AS kind,
+                        name,
+                        COUNT(*)::int AS events,
+                        COUNT(DISTINCT telegram_id)::int AS uniques
+                    FROM analytics_events
+                    WHERE {where_sql}
+                      AND name IN (
+                        'raffle_branch',
+                        'raffle_screenshot',
+                        'raffle_approved',
+                        'raffle_rejected'
+                      )
+                    GROUP BY 1, 2
+                    """,
+                    params,
+                )
+                raffle_kind_steps: dict[str, dict] = {}
+                for row in cur.fetchall():
+                    kind = row["kind"] or "unknown"
+                    bucket = raffle_kind_steps.setdefault(kind, {})
+                    bucket[row["name"]] = {
+                        "events": int(row["events"] or 0),
+                        "uniques": int(row["uniques"] or 0),
+                    }
+
                 # Raffle booking stages from bookings table (format=rozygrysh),
                 # so history and annulments are visible even before analytics existed.
                 booking_where = ["b.format = 'rozygrysh'"]
@@ -445,6 +474,7 @@ def fetch_analytics_report(
             "starts_by_payload": starts_by_payload,
             "show_cards": show_cards,
             "raffle_branches": raffle_branches,
+            "raffle_kind_steps": raffle_kind_steps,
             "raffle_bookings": raffle_bookings,
             "audience": audience,
         }
