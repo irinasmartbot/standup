@@ -1858,14 +1858,18 @@ def render_admin_html(
     hidden_sort = f'<input type="hidden" name="sort" value="{_h(filters.get("sort"))}">' if filters.get("sort") else ""
     hidden_order = f'<input type="hidden" name="order" value="{_h(filters.get("order"))}">' if filters.get("sort") else ""
     summary_html = ""
-    if not is_db and not is_analytics:
-        summary_html = f"""
+    show_booking_chrome = tab in {"date", "bookings", "users"}
+    if show_booking_chrome:
+        summary_block = ""
+        if tab in {"date", "bookings"}:
+            summary_block = f"""
     <div class="summary">
       <div class="metric"><span>Мероприятий</span><b>{totals["events"]}</b></div>
       <div class="metric"><span>Всего броней</span><b>{totals["bookings"]}</b></div>
       <div class="metric"><span>Активные брони, гостей</span><b>{totals["reserved_guests"]}</b></div>
       <div class="metric"><span>Подтвердили билеты</span><b>{totals["confirmed_guests"]}</b></div>
-    </div>
+    </div>"""
+        summary_html = summary_block + f"""
     <div class="filters">
       <div>{_status_filter(filters)}</div>
       <form method="get" action="/admin">
@@ -2323,24 +2327,6 @@ async def admin_page(request: web.Request) -> web.Response:
             fetch_filters["status"] = ""
         rows = await loop.run_in_executor(None, fetch_admin_rows, config, fetch_filters, include_empty_events)
         dashboard = build_dashboard(rows)
-        # Keep header metrics in sync with the status pill on Users, without dropping guests.
-        if filters.get("tab") == "users" and filters.get("status"):
-            status = filters["status"]
-            filtered = [b for b in dashboard["bookings"] if b.get("status") == status]
-            event_ids = {str(b.get("event_id") or "") for b in filtered}
-            dashboard = {
-                **dashboard,
-                "totals": {
-                    "events": len(event_ids),
-                    "bookings": len(filtered),
-                    "reserved_guests": sum(
-                        int(b.get("guests") or 0) for b in filtered if b.get("status") in ACTIVE_STATUSES
-                    ),
-                    "confirmed_guests": sum(
-                        int(b.get("guests") or 0) for b in filtered if b.get("status") == "confirmed"
-                    ),
-                },
-            }
     user_extras = None
     if filters.get("tab") == "users" and filters.get("u"):
         selected = (dashboard.get("users") or {}).get(filters.get("u") or "")
