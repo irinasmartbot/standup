@@ -594,6 +594,12 @@ def fetch_user_activity(telegram_id: int, limit: int = 40) -> list[dict]:
         return []
 
 
+def fetch_user_last_event(telegram_id: int) -> dict | None:
+    """Latest analytics event for one Telegram user, or None."""
+    rows = fetch_user_activity(telegram_id, limit=1)
+    return rows[0] if rows else None
+
+
 def fetch_user_activity_counts(telegram_id: int) -> list[dict]:
     """Per-event counts for one Telegram user (compact admin summary)."""
     if not _use_postgres() or not telegram_id:

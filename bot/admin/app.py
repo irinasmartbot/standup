@@ -3,6 +3,7 @@ import hmac
 import html
 import os
 import sqlite3
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,31 @@ STATUS_COLORS = {
 }
 ADMIN_COOKIE_NAME = "standup_admin_token"
 ADMIN_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
+# Last analytics event for user stage line — refresh at most every 30 minutes.
+_LAST_EVENT_TTL_SEC = 30 * 60
+_LAST_EVENT_CACHE: dict[int, tuple[float, dict | None]] = {}
+ACTIVITY_SHORT_LABELS = {
+    "bot_start": "Вход в бот",
+    "branch_proverka": "Ветка · Проверка",
+    "branch_best": "Ветка · BEST",
+    "branch_hitloto": "Ветка · Hit Loto",
+    "show_card": "Карточка концерта",
+    "raffle_enter": "Розыгрыш · вход",
+    "raffle_branch": "Розыгрыш · выбор ветки",
+    "raffle_screenshot": "Розыгрыш · отправили скрин",
+    "raffle_approved": "Розыгрыш · скрин принят",
+    "raffle_rejected": "Розыгрыш · скрин отклонён",
+    "raffle_subscribed": "Розыгрыш · подписка ок",
+    "raffle_sub_failed": "Розыгрыш · подписка нет",
+    "booking_created": "Бронь создана",
+    "booking_confirmed": "Билет получен",
+    "booking_cancelled": "Бронь отменена",
+    "booking_annulled": "Бронь аннулирована",
+    "help_open": "Help / FAQ",
+    "help_question": "Обращение в поддержку",
+    "bot_blocked": "Заблокировали бота",
+    "bot_unblocked": "Разблокировали бота",
+}
 DB_VIEW_TABLES = (
     "events",
     "users",
@@ -1021,6 +1047,32 @@ def _user_stage(user: dict) -> str:
     return "Нет активного этапа"
 
 
+def _cached_last_event(telegram_id: int | None) -> dict | None:
+    """Last analytics event for stage line; DB at most once per 30 minutes per user."""
+    if not telegram_id:
+        return None
+    tid = int(telegram_id)
+    now = time.time()
+    hit = _LAST_EVENT_CACHE.get(tid)
+    if hit and (now - hit[0]) < _LAST_EVENT_TTL_SEC:
+        return hit[1]
+    from bot.db.analytics import fetch_user_last_event
+
+    row = fetch_user_last_event(tid)
+    _LAST_EVENT_CACHE[tid] = (now, row)
+    return row
+
+
+def _user_stage_line(user: dict, last_event: dict | None = None) -> str:
+    stage = _user_stage(user)
+    if not last_event:
+        return stage
+    name = last_event.get("name") or ""
+    label = ACTIVITY_SHORT_LABELS.get(name, name or "событие")
+    when = _fmt_msk(last_event.get("created_at"))
+    return f"{stage} · последнее: {label} ({when})"
+
+
 def _fmt_msk(dt) -> str:
     if not dt:
         return "—"
@@ -1119,28 +1171,7 @@ def _user_activity_html(activity_counts: list[dict]) -> str:
         "bot_blocked",
         "bot_unblocked",
     ]
-    short_labels = {
-        "bot_start": "Вход в бот",
-        "branch_proverka": "Ветка · Проверка",
-        "branch_best": "Ветка · BEST",
-        "branch_hitloto": "Ветка · Hit Loto",
-        "show_card": "Карточка концерта",
-        "raffle_enter": "Розыгрыш · вход",
-        "raffle_branch": "Розыгрыш · выбор ветки",
-        "raffle_screenshot": "Розыгрыш · отправили скрин",
-        "raffle_approved": "Розыгрыш · скрин принят",
-        "raffle_rejected": "Розыгрыш · скрин отклонён",
-        "raffle_subscribed": "Розыгрыш · подписка ок",
-        "raffle_sub_failed": "Розыгрыш · подписка нет",
-        "booking_created": "Бронь создана",
-        "booking_confirmed": "Билет получен",
-        "booking_cancelled": "Бронь отменена",
-        "booking_annulled": "Бронь аннулирована",
-        "help_open": "Help / FAQ",
-        "help_question": "Обращение в поддержку",
-        "bot_blocked": "Заблокировали бота",
-        "bot_unblocked": "Разблокировали бота",
-    }
+    short_labels = ACTIVITY_SHORT_LABELS
     counts = {
         row.get("name"): int(row.get("events") or 0)
         for row in activity_counts
@@ -1153,7 +1184,7 @@ def _user_activity_html(activity_counts: list[dict]) -> str:
             continue
         seen.add(name)
         n = counts[name]
-        word = "заход" if n == 1 else "захода" if 2 <= n <= 4 else "заходов"
+        word = "раз" if n == 1 else "раза" if 2 <= n <= 4 else "раз"
         rows.append(
             "<tr>"
             f"<td>{_h(short_labels.get(name, name))}</td>"
@@ -1163,7 +1194,7 @@ def _user_activity_html(activity_counts: list[dict]) -> str:
     for name, n in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
         if name in seen:
             continue
-        word = "заход" if n == 1 else "захода" if 2 <= n <= 4 else "заходов"
+        word = "раз" if n == 1 else "раза" if 2 <= n <= 4 else "раз"
         rows.append(
             "<tr>"
             f"<td>{_h(short_labels.get(name, name))}</td>"
@@ -1192,36 +1223,45 @@ def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
         "approved": "принят",
         "rejected": "отклонён",
     }
-    status_colors = {
-        "pending": "#f59e0b",
-        "approved": "#22c55e",
-        "rejected": "#ef4444",
-    }
     cards = []
     total = len(submissions)
     for idx, row in enumerate(submissions):
         kind = kind_labels.get(row.get("kind"), row.get("kind") or "—")
         status = row.get("status") or ""
         status_l = status_labels.get(status, status or "—")
-        color = status_colors.get(status, "#64748b")
+        status_mod = status if status in {"pending", "approved", "rejected"} else "other"
         created = _fmt_msk(row.get("created_at"))
         reviewed = _fmt_msk(row.get("reviewed_at")) if row.get("reviewed_at") else ""
-        bits = [f"Создана {created}"]
+        facts = [f"<div><dt>Создана</dt><dd>{_h(created)}</dd></div>"]
         if reviewed:
-            bits.append(f"Решение {reviewed}")
-        if row.get("reject_reason"):
-            bits.append(f"Причина: {row.get('reject_reason')}")
+            facts.append(f"<div><dt>Решение</dt><dd>{_h(reviewed)}</dd></div>")
         if row.get("source_message_id"):
-            bits.append(f"Сообщение в чате #{row.get('source_message_id')}")
+            facts.append(
+                f"<div><dt>В чате</dt><dd>#{_h(str(row.get('source_message_id')))}</dd></div>"
+            )
+        reject_html = ""
+        if status == "rejected" or row.get("reject_reason"):
+            reason = (row.get("reject_reason") or "").strip() or "не указана"
+            reject_html = (
+                f'<p class="screen-card-reject"><b>Причина отклонения:</b> {_h(reason)}</p>'
+            )
+        file_html = ""
         if row.get("photo_file_id"):
-            bits.append(f"file_id: {row.get('photo_file_id')}")
+            file_html = (
+                '<details class="screen-file-id">'
+                "<summary>file_id</summary>"
+                f"<code>{_h(row.get('photo_file_id'))}</code>"
+                "</details>"
+            )
         cards.append(
-            f'<article class="screen-card" data-idx="{idx}">'
+            f'<article class="screen-card screen-card--{status_mod}" data-idx="{idx}">'
             f'<div class="screen-card-top">'
-            f'<span class="screen-card-title">Скрин #{_h(str(row.get("id")))} · {_h(kind)}</span>'
-            f'<span class="badge" style="background:{color}">{_h(status_l)}</span>'
+            f'<span class="screen-card-title">#{_h(str(row.get("id")))} · {_h(kind)}</span>'
+            f'<span class="badge screen-status screen-status--{status_mod}">{_h(status_l)}</span>'
             f"</div>"
-            f'<p class="muted screen-card-meta">{_h(" · ".join(bits))}</p>'
+            f'<dl class="screen-card-facts">{"".join(facts)}</dl>'
+            f"{reject_html}"
+            f"{file_html}"
             f'<div class="screen-card-nav muted">{idx + 1} / {total}</div>'
             "</article>"
         )
@@ -1234,10 +1274,17 @@ def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
     )
 
 
-def _user_extra_details(title: str, body: str, open_by_default: bool = False) -> str:
+def _user_extra_details(
+    title: str,
+    body: str,
+    *,
+    tone: str = "",
+    open_by_default: bool = False,
+) -> str:
     opened = " open" if open_by_default else ""
+    tone_cls = f" user-extra-{tone}" if tone else ""
     return (
-        f'<details class="user-extra-details" data-persist-key="user:{_h(title)}"{opened}>'
+        f'<details class="user-extra-details{tone_cls}" data-persist-key="user:{_h(title)}"{opened}>'
         f'<summary class="user-extra-summary"><strong>{_h(title)}</strong>'
         '<span class="details-action"><span class="closed-label">Развернуть</span>'
         '<span class="open-label">Свернуть</span></span></summary>'
@@ -1297,6 +1344,8 @@ def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) 
                 f'<p class="muted">У этого гостя нет броней со статусом '
                 f'«{_h(STATUS_LABELS.get(status, status))}».</p>'
             )
+        extras = user_extras or {}
+        stage_text = _user_stage_line(user, extras.get("last_event"))
         detail = (
             '<section class="card user-detail">'
             f'<h2>{_h(user["name"] or "Без имени")}</h2>'
@@ -1310,17 +1359,14 @@ def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) 
             f'<span>Напоминание за сутки: <b>{reminders_24h}</b></span>'
             f'<span>Напоминание в день: <b>{reminders_day}</b></span>'
             '</div>'
-            f'<p><b>Текущий этап:</b> {_h(_user_stage(user))}</p>'
+            f'<p class="user-stage"><b>Текущий этап:</b> {_h(stage_text)}</p>'
             f"{empty_note}"
-            f'{_booking_table(bookings, show_format=True)}'
-        )
-        extras = user_extras or {}
-        detail += (
             '<div class="user-extra-stack">'
-            f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or []))}'
-            f'{_user_extra_details("Розыгрыш", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}))}'
-            f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]))}'
+            f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or []), tone="activity")}'
+            f'{_user_extra_details("Розыгрыш", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}), tone="raffle")}'
+            f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]), tone="reminders")}'
             "</div>"
+            f'{_booking_table(bookings, show_format=True)}'
             "</section>"
         )
     return detail + f'<section class="card"><h2>Users</h2>{table}</section>'
@@ -1889,13 +1935,20 @@ def render_admin_html(
     .metric.tone-best, .metric.tone-hitloto, .metric.tone-proverka {{ border-width:1px; }}
     .branch-grid {{ display:grid; grid-template-columns: 1fr; gap:14px; margin-top:18px; }}
     .branch-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:16px; padding:16px; }}
-    .user-extra-stack {{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; margin-top:18px; align-items:start; }}
+    .user-extra-stack {{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; margin:12px 0 18px; align-items:start; }}
     .user-extra-details {{ background:#f8fafc; border:1px solid var(--line); border-radius:14px; overflow:hidden; }}
+    .user-extra-activity {{ background:#eff6ff; border-color:#93c5fd; }}
+    .user-extra-activity .user-extra-summary strong {{ color:#1d4ed8; }}
+    .user-extra-raffle {{ background:#fff7ed; border-color:#fdba74; }}
+    .user-extra-raffle .user-extra-summary strong {{ color:#c2410c; }}
+    .user-extra-reminders {{ background:#f0fdf4; border-color:#86efac; }}
+    .user-extra-reminders .user-extra-summary strong {{ color:#15803d; }}
     .user-extra-summary {{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:14px 16px; cursor:pointer; list-style:none; }}
     .user-extra-summary::-webkit-details-marker {{ display:none; }}
     .user-extra-summary strong {{ font-size:15px; }}
-    .user-extra-body {{ padding:0 16px 16px; border-top:1px solid var(--line); }}
+    .user-extra-body {{ padding:0 16px 16px; border-top:1px solid rgba(15,23,42,.08); background:rgba(255,255,255,.55); }}
     .user-extra-details[open] {{ grid-column: 1 / -1; }}
+    .user-stage {{ margin:10px 0 4px; padding:10px 12px; border-radius:12px; background:#f8fafc; border:1px solid var(--line); }}
     .user-block-item {{ margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }}
     .user-block-item:first-of-type {{ margin-top:8px; padding-top:0; border-top:none; }}
     .user-block-item ul {{ margin:8px 0 0; padding-left:18px; }}
@@ -1903,17 +1956,43 @@ def render_admin_html(
     table.user-extra {{ table-layout:fixed; min-width:420px; }}
     table.user-activity-summary th:nth-child(2), table.user-activity-summary td:nth-child(2) {{ width:34%; text-align:right; }}
     .screen-carousel {{
-      display:flex; gap:12px; overflow-x:auto; scroll-snap-type:x mandatory;
-      -webkit-overflow-scrolling:touch; padding:4px 2px 10px; margin-top:8px;
+      display:flex; gap:10px; overflow-x:auto; scroll-snap-type:x mandatory;
+      -webkit-overflow-scrolling:touch; padding:4px 2px 8px; margin-top:6px;
     }}
     .screen-card {{
-      flex:0 0 min(320px, 85%); scroll-snap-align:start;
-      background:white; border:1px solid var(--line); border-radius:14px; padding:14px;
+      flex:0 0 min(260px, 82%); scroll-snap-align:start;
+      background:white; border:1px solid var(--line); border-left-width:4px;
+      border-radius:12px; padding:10px 12px;
     }}
-    .screen-card-top {{ display:flex; justify-content:space-between; gap:10px; align-items:center; }}
-    .screen-card-title {{ font-weight:700; font-size:14px; }}
-    .screen-card-meta {{ margin:10px 0 0; font-size:13px; line-height:1.45; }}
-    .screen-card-nav {{ margin-top:12px; font-size:12px; }}
+    .screen-card--approved {{ border-left-color:#22c55e; }}
+    .screen-card--rejected {{ border-left-color:#ef4444; }}
+    .screen-card--pending {{ border-left-color:#f59e0b; }}
+    .screen-card--other {{ border-left-color:#94a3b8; }}
+    .screen-card-top {{ display:flex; justify-content:space-between; gap:8px; align-items:center; }}
+    .screen-card-title {{ font-weight:700; font-size:13px; }}
+    .screen-status--approved {{ background:#22c55e; }}
+    .screen-status--rejected {{ background:#ef4444; }}
+    .screen-status--pending {{ background:#f59e0b; }}
+    .screen-status--other {{ background:#64748b; }}
+    .screen-card-facts {{ margin:8px 0 0; display:grid; gap:3px; font-size:12px; }}
+    .screen-card-facts div {{ display:grid; grid-template-columns:64px 1fr; gap:6px; }}
+    .screen-card-facts dt {{ color:var(--muted); }}
+    .screen-card-facts dd {{ margin:0; }}
+    .screen-card-reject {{
+      margin:8px 0 0; padding:8px 10px; border-radius:10px;
+      background:#fef2f2; color:#b91c1c; font-size:12px; line-height:1.4;
+    }}
+    .screen-file-id {{ margin-top:6px; font-size:11px; }}
+    .screen-file-id summary {{ cursor:pointer; color:var(--muted); list-style:none; }}
+    .screen-file-id summary::-webkit-details-marker {{ display:none; }}
+    .screen-file-id summary::before {{ content:"▸ "; }}
+    .screen-file-id[open] summary::before {{ content:"▾ "; }}
+    .screen-file-id code {{
+      display:block; margin-top:4px; padding:6px 8px; background:#f8fafc;
+      border:1px solid var(--line); border-radius:8px; word-break:break-all;
+      white-space:pre-wrap; font-size:10px; line-height:1.35; color:#334155;
+    }}
+    .screen-card-nav {{ margin-top:8px; font-size:11px; }}
     .screen-carousel-hint {{ margin:0; font-size:12px; }}
     .funnel-layout {{ display:flex; flex-direction:column; gap:10px; margin-top:14px; }}
     .funnel-row {{ display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:stretch; }}
@@ -2279,6 +2358,7 @@ async def admin_page(request: web.Request) -> web.Response:
                     "activity_counts": fetch_user_activity_counts(tid) if tid else [],
                     "submissions": get_raffle_submissions_for_telegram(tid) if tid else [],
                     "flags": get_user_raffle_flags(telegram_id=tid, user_id=uid),
+                    "last_event": _cached_last_event(tid),
                 }
 
             user_extras = await loop.run_in_executor(None, _load_user_extras)
