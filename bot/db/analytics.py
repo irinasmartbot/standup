@@ -250,6 +250,7 @@ def fetch_analytics_report(
         "show_cards": [],
         "raffle_branches": [],
         "raffle_kind_steps": {},
+        "raffle_kind_bookings": {},
         "raffle_bookings": {},
         "audience": {
             "telegram_users": 0,
@@ -447,6 +448,51 @@ def fetch_analytics_report(
                     "annulled": _raffle_booking_metric("annulled_at"),
                 }
 
+                # Per-branch booking/ticket: attribute via latest approved submission
+                # of that user before the booking was created.
+                def _raffle_kind_booking_metric(time_column: str) -> dict[str, dict]:
+                    time_filter = ""
+                    if "start" in booking_params and "end" in booking_params:
+                        time_filter = (
+                            f" AND b.{time_column} >= %(start)s AND b.{time_column} < %(end)s"
+                        )
+                    cur.execute(
+                        f"""
+                        SELECT
+                            attributed.kind,
+                            COUNT(*)::int AS events,
+                            COUNT(DISTINCT b.user_id)::int AS uniques
+                        FROM bookings b
+                        JOIN users u ON u.id = b.user_id
+                        JOIN LATERAL (
+                            SELECT rs.kind
+                            FROM raffle_submissions rs
+                            WHERE rs.telegram_id = u.telegram_id
+                              AND rs.status = 'approved'
+                              AND COALESCE(rs.reviewed_at, rs.created_at) <= b.created_at
+                            ORDER BY COALESCE(rs.reviewed_at, rs.created_at) DESC, rs.id DESC
+                            LIMIT 1
+                        ) attributed ON true
+                        WHERE {booking_where_sql}
+                          AND b.{time_column} IS NOT NULL
+                          {time_filter}
+                        GROUP BY attributed.kind
+                        """,
+                        booking_params,
+                    )
+                    out: dict[str, dict] = {}
+                    for row in cur.fetchall():
+                        out[row["kind"]] = {
+                            "events": int(row["events"] or 0),
+                            "uniques": int(row["uniques"] or 0),
+                        }
+                    return out
+
+                raffle_kind_bookings = {
+                    "created": _raffle_kind_booking_metric("created_at"),
+                    "confirmed": _raffle_kind_booking_metric("confirmed_at"),
+                }
+
                 # Audience is a snapshot (not period-bound), except blocked_at if we want — keep snapshot.
                 cur.execute(
                     """
@@ -475,6 +521,7 @@ def fetch_analytics_report(
             "show_cards": show_cards,
             "raffle_branches": raffle_branches,
             "raffle_kind_steps": raffle_kind_steps,
+            "raffle_kind_bookings": raffle_kind_bookings,
             "raffle_bookings": raffle_bookings,
             "audience": audience,
         }

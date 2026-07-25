@@ -1313,6 +1313,9 @@ def _analytics_tab(report: dict, filters: dict) -> str:
 
     raffle_bookings = report.get("raffle_bookings") or {}
     kind_steps = report.get("raffle_kind_steps") or {}
+    kind_bookings = report.get("raffle_kind_bookings") or {}
+    kind_created = kind_bookings.get("created") or {}
+    kind_confirmed = kind_bookings.get("confirmed") or {}
 
     def _funnel_step(title: str, metric: dict | None, note: str = "") -> str:
         metric = metric or {"events": 0, "uniques": 0}
@@ -1323,6 +1326,15 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             f'<div class="funnel-value"><b>{metric.get("events", 0)}</b>'
             f'<span class="muted">{metric.get("uniques", 0)} чел.</span></div>'
             f"{note_html}"
+            "</div>"
+        )
+
+    def _branch_metric(title: str, metric: dict | None) -> str:
+        metric = metric or {"events": 0, "uniques": 0}
+        return (
+            '<div class="metric branch-metric">'
+            f'<span>{_h(title)}</span><b>{metric.get("events", 0)}</b>'
+            f'<small class="muted">{metric.get("uniques", 0)} уникальных</small>'
             "</div>"
         )
 
@@ -1352,21 +1364,16 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     branch_cards = []
     for kind, title in (("post", "Билет за пост"), ("review", "Билет за отзыв")):
         steps = kind_steps.get(kind) or {}
-        entered = steps.get("raffle_branch") or {"events": 0, "uniques": 0}
-        screens = steps.get("raffle_screenshot") or {"events": 0, "uniques": 0}
-        approved = steps.get("raffle_approved") or {"events": 0, "uniques": 0}
         branch_cards.append(
             '<div class="branch-card">'
             f"<h3>{_h(title)}</h3>"
-            '<div class="summary analytics-show-pair">'
-            f'<div class="metric"><span>Зашли в ветку</span><b>{entered.get("events", 0)}</b>'
-            f'<small class="muted">{entered.get("uniques", 0)} уникальных</small></div>'
-            f'<div class="metric"><span>Отправили скрин</span><b>{screens.get("events", 0)}</b>'
-            f'<small class="muted">{screens.get("uniques", 0)} уникальных</small></div>'
-            f'<div class="metric"><span>Скрин принят</span><b>{approved.get("events", 0)}</b>'
-            f'<small class="muted">{approved.get("uniques", 0)} уникальных</small></div>'
+            '<div class="summary branch-metrics">'
+            f'{_branch_metric("Зашли в ветку", steps.get("raffle_branch"))}'
+            f'{_branch_metric("Отправили скрин", steps.get("raffle_screenshot"))}'
+            f'{_branch_metric("Скрин принят", steps.get("raffle_approved"))}'
+            f'{_branch_metric("Есть бронь", kind_created.get(kind))}'
+            f'{_branch_metric("Билет получен", kind_confirmed.get(kind))}'
             "</div>"
-            '<p class="muted">Дальше бронь и билет общие по розыгрышу — в воронке выше.</p>'
             "</div>"
         )
     raffle += (
@@ -1491,7 +1498,11 @@ def render_admin_html(
     .analytics-summary {{ grid-template-columns: repeat(4, minmax(0,1fr)); }}
     .analytics-audience {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
     .analytics-show-pair {{ grid-template-columns: repeat(2, minmax(0,1fr)); margin:0; }}
-    .branch-card .analytics-show-pair {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
+    .branch-metrics {{ grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; margin:0; }}
+    .branch-metric {{ padding:12px; border-radius:12px; box-shadow:none; }}
+    .branch-metric span {{ font-size:12px; }}
+    .branch-metric b {{ margin-top:4px; font-size:20px; }}
+    .branch-metric small {{ margin-top:4px; font-size:11px; }}
     .show-format-block {{ margin-top:18px; padding:14px; border-radius:16px; border:1px solid var(--line); }}
     .show-format-block h3, .branch-card h3 {{ margin:0 0 10px; font-size:16px; }}
     .tone-best {{ background:#eff6ff; border-color:#bfdbfe; }}
@@ -1571,7 +1582,8 @@ def render_admin_html(
     .empty-state {{ text-align:center; padding:36px; color:#475467; }}
     details {{ margin:0; }}
     @media (max-width: 900px) {{
-      .funnel-layout, .branch-grid, .analytics-show-pair, .branch-card .analytics-show-pair {{ grid-template-columns:1fr; }}
+      .funnel-layout, .branch-grid, .analytics-show-pair {{ grid-template-columns:1fr; }}
+      .branch-metrics {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
     }}
     @media (max-width: 780px) {{
       header {{ padding:22px 18px; }}
