@@ -1213,6 +1213,8 @@ def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
             bits.append(f"Причина: {row.get('reject_reason')}")
         if row.get("source_message_id"):
             bits.append(f"Сообщение в чате #{row.get('source_message_id')}")
+        if row.get("photo_file_id"):
+            bits.append(f"file_id: {row.get('photo_file_id')}")
         cards.append(
             f'<article class="screen-card" data-idx="{idx}">'
             f'<div class="screen-card-top">'
