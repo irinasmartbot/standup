@@ -1034,53 +1034,6 @@ def _fmt_msk(dt) -> str:
     return dt.strftime("%d.%m.%Y %H:%M")
 
 
-def _activity_label(name: str, props: dict | None) -> str:
-    props = props or {}
-    labels = {
-        "bot_start": "Вход в бот (/start)",
-        "help_open": "Help / FAQ",
-        "help_question": "Написали в поддержку",
-        "branch_proverka": "Раздел · Проверка",
-        "branch_best": "Раздел · BEST",
-        "branch_hitloto": "Раздел · Hit Loto",
-        "show_card": "Карточка концерта",
-        "raffle_enter": "Розыгрыш · вход",
-        "raffle_branch": "Розыгрыш · выбор ветки",
-        "raffle_screenshot": "Розыгрыш · отправили скрин",
-        "raffle_approved": "Розыгрыш · скрин принят",
-        "raffle_rejected": "Розыгрыш · скрин отклонён",
-        "raffle_subscribed": "Розыгрыш · подписка ок",
-        "raffle_sub_failed": "Розыгрыш · подписка нет",
-        "booking_created": "Бронь создана",
-        "booking_confirmed": "Билет получен",
-        "booking_cancelled": "Бронь отменена",
-        "booking_annulled": "Бронь аннулирована",
-        "bot_blocked": "Заблокировали бота",
-        "bot_unblocked": "Разблокировали бота",
-    }
-    base = labels.get(name, name)
-    extras = []
-    if name == "raffle_branch" and props.get("kind"):
-        kind = "пост" if props.get("kind") == "post" else "отзыв" if props.get("kind") == "review" else props.get("kind")
-        extras.append(str(kind))
-    if name == "show_card":
-        fmt = props.get("format") or ""
-        browse = props.get("browse") or ""
-        fmt_l = {"best": "BEST", "hitloto": "Hit Loto", "proverka": "Проверка"}.get(fmt, fmt)
-        browse_l = {"date": "по дате", "venue": "по площадке"}.get(browse, browse)
-        if fmt_l:
-            extras.append(fmt_l)
-        if browse_l:
-            extras.append(browse_l)
-        if props.get("date"):
-            extras.append(str(props.get("date")))
-    if name == "bot_start" and props.get("payload"):
-        extras.append(str(props.get("payload")))
-    if name == "booking_created" and props.get("format"):
-        extras.append(_format_label(props.get("format")))
-    return base + (f" · {' · '.join(extras)}" if extras else "")
-
-
 def _user_reminders_html(bookings: list[dict]) -> str:
     from bot.utils.reminder_schedule import plan_booking_reminders
     from bot.utils.ticket import parse_created_at, parse_event_datetime
