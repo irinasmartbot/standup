@@ -1301,19 +1301,19 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         by_venue_e, by_venue_u = card_matrix[fmt]["venue"]
         show_blocks.append(
             f'<div class="show-format-block {tone}">'
-            f"<h3>{_h(title)}</h3>"
-            '<div class="summary analytics-show-pair">'
-            f'<div class="metric {tone}"><span>Зашли по дате</span><b>{by_date_e}</b>'
-            f'<small class="muted">{by_date_u} уникальных</small></div>'
-            f'<div class="metric {tone}"><span>Зашли по площадке</span><b>{by_venue_e}</b>'
-            f'<small class="muted">{by_venue_u} уникальных</small></div>'
+            f'<div class="show-format-title">{_h(title)}</div>'
+            '<div class="show-format-stats">'
+            f'<div><span>По дате</span><b>{by_date_e}</b>'
+            f'<small class="muted">{by_date_u} уник.</small></div>'
+            f'<div><span>По площадке</span><b>{by_venue_e}</b>'
+            f'<small class="muted">{by_venue_u} уник.</small></div>'
             "</div></div>"
         )
     cards_table = (
-        '<section class="card">'
+        '<section class="card card-compact">'
         "<h2>Просмотры карточек шоу</h2>"
-        '<p class="muted">Сколько раз открыли карточку и сколько уникальных людей — по способу поиска.</p>'
-        f'{"".join(show_blocks)}'
+        '<p class="muted">Открытия карточек по способу поиска.</p>'
+        f'<div class="show-format-grid">{"".join(show_blocks)}</div>'
         "</section>"
     )
 
@@ -1507,14 +1507,24 @@ def render_admin_html(
     .branch-metric span {{ font-size:12px; }}
     .branch-metric b {{ margin-top:4px; font-size:20px; }}
     .branch-metric small {{ margin-top:4px; font-size:11px; }}
-    .show-format-block {{ margin-top:18px; padding:14px; border-radius:16px; border:1px solid var(--line); }}
+    .card-compact {{ padding:16px 18px; }}
+    .card-compact h2 {{ font-size:18px; margin-bottom:4px; }}
+    .card-compact > .muted {{ margin:0 0 12px; font-size:13px; }}
+    .show-format-grid {{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; }}
+    .show-format-block {{ margin:0; padding:10px 12px; border-radius:12px; border:1px solid var(--line); }}
+    .show-format-title {{ font-size:13px; font-weight:700; margin-bottom:8px; }}
+    .show-format-stats {{ display:grid; grid-template-columns: 1fr 1fr; gap:8px; }}
+    .show-format-stats > div {{ background:rgba(255,255,255,.72); border:1px solid rgba(15,23,42,.06); border-radius:10px; padding:8px 10px; }}
+    .show-format-stats span {{ display:block; font-size:11px; color:var(--muted); }}
+    .show-format-stats b {{ display:block; margin-top:2px; font-size:18px; line-height:1.2; }}
+    .show-format-stats small {{ display:block; margin-top:2px; font-size:11px; }}
     .show-format-block h3, .branch-card h3 {{ margin:0 0 10px; font-size:16px; }}
     .tone-best {{ background:#eff6ff; border-color:#bfdbfe; }}
-    .tone-best h3, .metric.tone-best span {{ color:#1d4ed8; }}
+    .tone-best h3, .tone-best .show-format-title, .metric.tone-best span {{ color:#1d4ed8; }}
     .tone-hitloto {{ background:#fff7ed; border-color:#fed7aa; }}
-    .tone-hitloto h3, .metric.tone-hitloto span {{ color:#c2410c; }}
+    .tone-hitloto h3, .tone-hitloto .show-format-title, .metric.tone-hitloto span {{ color:#c2410c; }}
     .tone-proverka {{ background:#f0fdf4; border-color:#bbf7d0; }}
-    .tone-proverka h3, .metric.tone-proverka span {{ color:#15803d; }}
+    .tone-proverka h3, .tone-proverka .show-format-title, .metric.tone-proverka span {{ color:#15803d; }}
     .metric.tone-best, .metric.tone-hitloto, .metric.tone-proverka {{ border-width:1px; }}
     .branch-grid {{ display:grid; grid-template-columns: 1fr; gap:14px; margin-top:18px; }}
     .branch-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:16px; padding:16px; }}
@@ -1596,7 +1606,7 @@ def render_admin_html(
     .empty-state {{ text-align:center; padding:36px; color:#475467; }}
     details {{ margin:0; }}
     @media (max-width: 900px) {{
-      .funnel-row, .analytics-show-pair {{ grid-template-columns:1fr; }}
+      .funnel-row, .analytics-show-pair, .show-format-grid {{ grid-template-columns:1fr; }}
       .funnel-step.funnel-spacer {{ display:none; }}
       .branch-metrics {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
     }}
