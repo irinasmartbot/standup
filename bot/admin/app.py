@@ -1156,6 +1156,10 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "raffle_rejected": "Скрин отклонён",
         "raffle_subscribed": "Подписка ок",
         "raffle_sub_failed": "Подписка нет",
+        "raffle_booked": "Забронировали",
+        "raffle_ticket": "Получили билет",
+        "raffle_booking_cancelled": "Отменили бронь",
+        "raffle_annulled": "Аннулировано",
         "booking_created": "Бронь создана",
         "booking_confirmed": "Билет получен",
         "booking_cancelled": "Бронь отменена",
@@ -1180,6 +1184,10 @@ def _analytics_tab(report: dict, filters: dict) -> str:
                 "raffle_rejected",
                 "raffle_subscribed",
                 "raffle_sub_failed",
+                "raffle_booked",
+                "raffle_ticket",
+                "raffle_booking_cancelled",
+                "raffle_annulled",
             ],
         ),
         (
@@ -1193,6 +1201,16 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         ),
         ("Блокировки бота", ["bot_blocked", "bot_unblocked"]),
     ]
+    # Raffle booking stages come from bookings table (format=rozygrysh), same as funnel.
+    raffle_bookings_preview = report.get("raffle_bookings") or {}
+    by_name = dict(by_name)
+    by_name["raffle_booked"] = raffle_bookings_preview.get("created") or {"events": 0, "uniques": 0}
+    by_name["raffle_ticket"] = raffle_bookings_preview.get("confirmed") or {"events": 0, "uniques": 0}
+    by_name["raffle_booking_cancelled"] = raffle_bookings_preview.get("cancelled") or {
+        "events": 0,
+        "uniques": 0,
+    }
+    by_name["raffle_annulled"] = raffle_bookings_preview.get("annulled") or {"events": 0, "uniques": 0}
     grouped_names = {name for _, names in event_groups for name in names}
     grouped_names.add("show_card")
     other_names = sorted(
