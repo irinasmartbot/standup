@@ -1133,9 +1133,9 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     overview = (
         '<div class="summary analytics-summary">'
         f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"))}'
-        f'{_analytics_metric_card("Проверка", by_name.get("branch_proverka"), css_class="tone-proverka")}'
-        f'{_analytics_metric_card("BEST", by_name.get("branch_best"), css_class="tone-best")}'
-        f'{_analytics_metric_card("Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto")}'
+        f'{_analytics_metric_card("Зашли · Проверка", by_name.get("branch_proverka"), css_class="tone-proverka")}'
+        f'{_analytics_metric_card("Зашли · BEST", by_name.get("branch_best"), css_class="tone-best")}'
+        f'{_analytics_metric_card("Зашли · Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto")}'
         f'{_analytics_metric_card("Help / FAQ · обращение", by_name.get("help_open"))}'
         f'{_analytics_metric_card("Брони созданы · проверка", proverka_overview.get("created"))}'
         f'{_analytics_metric_card("Билет получен · проверка", proverka_overview.get("confirmed"))}'
