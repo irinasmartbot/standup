@@ -1322,6 +1322,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     kind_bookings = report.get("raffle_kind_bookings") or {}
     kind_created = kind_bookings.get("created") or {}
     kind_confirmed = kind_bookings.get("confirmed") or {}
+    kind_cancelled = kind_bookings.get("cancelled") or {}
 
     def _funnel_step(title: str, metric: dict | None, note: str = "", tone: str = "main") -> str:
         metric = metric or {"events": 0, "uniques": 0}
@@ -1375,6 +1376,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             f'{_branch_metric("Скрин принят", steps.get("raffle_approved"))}'
             f'{_branch_metric("Есть бронь", kind_created.get(kind))}'
             f'{_branch_metric("Билет получен", kind_confirmed.get(kind))}'
+            f'{_branch_metric("Билет отменен", kind_cancelled.get(kind))}'
             "</div>"
             "</div>"
         )
@@ -1500,7 +1502,7 @@ def render_admin_html(
     .analytics-summary {{ grid-template-columns: repeat(4, minmax(0,1fr)); }}
     .analytics-audience {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
     .analytics-show-pair {{ grid-template-columns: repeat(2, minmax(0,1fr)); margin:0; }}
-    .branch-metrics {{ grid-template-columns: repeat(5, minmax(0,1fr)); gap:10px; margin:0; }}
+    .branch-metrics {{ grid-template-columns: repeat(6, minmax(0,1fr)); gap:10px; margin:0; }}
     .branch-metric {{ padding:12px; border-radius:12px; box-shadow:none; }}
     .branch-metric span {{ font-size:12px; }}
     .branch-metric b {{ margin-top:4px; font-size:20px; }}
@@ -1599,7 +1601,7 @@ def render_admin_html(
       .branch-metrics {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
     }}
     @media (max-width: 1100px) and (min-width: 901px) {{
-      .branch-metrics {{ grid-template-columns: repeat(5, minmax(0,1fr)); }}
+      .branch-metrics {{ grid-template-columns: repeat(6, minmax(0,1fr)); }}
       .branch-metric {{ padding:10px; }}
       .branch-metric b {{ font-size:18px; }}
     }}

@@ -491,6 +491,7 @@ def fetch_analytics_report(
                 raffle_kind_bookings = {
                     "created": _raffle_kind_booking_metric("created_at"),
                     "confirmed": _raffle_kind_booking_metric("confirmed_at"),
+                    "cancelled": _raffle_kind_booking_metric("cancelled_at"),
                 }
 
                 # Audience is a snapshot (not period-bound), except blocked_at if we want — keep snapshot.
