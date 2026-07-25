@@ -1086,18 +1086,40 @@ def _user_reminders_html(bookings: list[dict]) -> str:
     from bot.utils.ticket import parse_created_at, parse_event_datetime
 
     now = datetime.now(MSK).replace(tzinfo=None)
+    # Show active + confirmed (ticket taken) so raffle/shows with immediate ticket are visible.
+    relevant = [
+        b
+        for b in bookings
+        if b.get("status") in {"booked", "confirmed"}
+    ]
+    if not relevant:
+        return '<p class="muted">Нет броней для напоминаний.</p>'
+
+    # Newest event date first
+    relevant = sorted(
+        relevant,
+        key=lambda b: (b.get("event_date") or "", b.get("event_time") or ""),
+        reverse=True,
+    )
     lines = []
-    for booking in bookings:
-        if booking.get("status") != "booked":
+    for booking in relevant:
+        fmt = _format_label(booking.get("format") or "")
+        date_label = booking.get("event_date") or "—"
+        title = f"{date_label} {booking.get('event_time') or ''} · {fmt}".strip()
+        status = booking.get("status")
+
+        if status == "confirmed":
+            lines.append(
+                f"<div class='user-block-item'><b>{_h(title)}</b>"
+                f"<p class='muted'>Билет получен — запланированных напоминаний по событию нет.</p></div>"
+            )
             continue
+
         event_dt = parse_event_datetime(booking.get("event_date") or "", booking.get("event_time") or "")
         if not event_dt:
             continue
         created_at = parse_created_at(booking.get("created_at_raw") or booking.get("created_at"))
         plan = plan_booking_reminders(created_at, event_dt)
-        fmt = _format_label(booking.get("format") or "")
-        date_label = booking.get("event_date") or "—"
-        title = f"{date_label} {booking.get('event_time') or ''} · {fmt}".strip()
 
         def _line(label: str, when, sent: bool) -> str:
             if when is None:
@@ -1112,37 +1134,95 @@ def _user_reminders_html(bookings: list[dict]) -> str:
             f"<div class='user-block-item'><b>{_h(title)}</b><ul>"
             f"{_line('Напоминание за сутки (в 14:00 накануне)', plan['reminder_24h_at'], bool(booking.get('reminder_24h_sent')))}"
             f"{_line('Напоминание в день шоу (если билет не забран)', plan['reminder_day_at'], bool(booking.get('reminder_day_sent')))}"
-            f"{_line('Аннулирование, если билет так и не получен', plan['annul_at'], booking.get('status') == 'annulled')}"
+            f"{_line('Аннулирование, если билет так и не получен', plan['annul_at'], False)}"
             "</ul></div>"
         )
-    if not lines:
-        return '<p class="muted">Нет активных броней — напоминания не планируются.</p>'
-    return "".join(lines)
+    return "".join(lines) if lines else '<p class="muted">Нет броней для напоминаний.</p>'
 
 
 def _user_activity_html(activity: list[dict]) -> str:
     if not activity:
         return '<p class="muted">Пока нет событий аналитики по этому гостю.</p>'
-    rows = []
-    for item in activity:
-        props = item.get("props") or {}
-        if isinstance(props, str):
-            try:
-                import json as _json
 
-                props = _json.loads(props)
-            except Exception:
-                props = {}
+    # Aggregate like analytics "Все события": label → count
+    order = [
+        "bot_start",
+        "branch_proverka",
+        "branch_best",
+        "branch_hitloto",
+        "show_card",
+        "raffle_enter",
+        "raffle_branch",
+        "raffle_screenshot",
+        "raffle_approved",
+        "raffle_rejected",
+        "raffle_subscribed",
+        "raffle_sub_failed",
+        "booking_created",
+        "booking_confirmed",
+        "booking_cancelled",
+        "booking_annulled",
+        "help_open",
+        "help_question",
+        "bot_blocked",
+        "bot_unblocked",
+    ]
+    short_labels = {
+        "bot_start": "Вход в бот",
+        "branch_proverka": "Ветка · Проверка",
+        "branch_best": "Ветка · BEST",
+        "branch_hitloto": "Ветка · Hit Loto",
+        "show_card": "Карточка концерта",
+        "raffle_enter": "Розыгрыш · вход",
+        "raffle_branch": "Розыгрыш · выбор ветки",
+        "raffle_screenshot": "Розыгрыш · отправили скрин",
+        "raffle_approved": "Розыгрыш · скрин принят",
+        "raffle_rejected": "Розыгрыш · скрин отклонён",
+        "raffle_subscribed": "Розыгрыш · подписка ок",
+        "raffle_sub_failed": "Розыгрыш · подписка нет",
+        "booking_created": "Бронь создана",
+        "booking_confirmed": "Билет получен",
+        "booking_cancelled": "Бронь отменена",
+        "booking_annulled": "Бронь аннулирована",
+        "help_open": "Help / FAQ",
+        "help_question": "Обращение в поддержку",
+        "bot_blocked": "Заблокировали бота",
+        "bot_unblocked": "Разблокировали бота",
+    }
+    counts: Counter = Counter()
+    for item in activity:
+        name = item.get("name") or ""
+        if not name:
+            continue
+        counts[name] += 1
+
+    rows = []
+    seen = set()
+    for name in order:
+        if name not in counts:
+            continue
+        seen.add(name)
+        n = counts[name]
+        word = "заход" if n == 1 else "захода" if 2 <= n <= 4 else "заходов"
         rows.append(
             "<tr>"
-            f"<td>{_h(_fmt_msk(item.get('created_at')))}</td>"
-            f"<td>{_h(_activity_label(item.get('name') or '', props))}</td>"
-            f"<td class='muted'>{_h(item.get('channel') or '—')}</td>"
+            f"<td>{_h(short_labels.get(name, name))}</td>"
+            f"<td><b>{n}</b> <span class='muted'>{word}</span></td>"
+            "</tr>"
+        )
+    for name, n in counts.most_common():
+        if name in seen:
+            continue
+        word = "заход" if n == 1 else "захода" if 2 <= n <= 4 else "заходов"
+        rows.append(
+            "<tr>"
+            f"<td>{_h(short_labels.get(name, name))}</td>"
+            f"<td><b>{n}</b> <span class='muted'>{word}</span></td>"
             "</tr>"
         )
     return (
-        '<div class="table-wrap"><table class="user-extra">'
-        "<thead><tr><th>Когда</th><th>Раздел / действие</th><th>Канал</th></tr></thead>"
+        '<div class="table-wrap"><table class="user-extra user-activity-summary">'
+        "<thead><tr><th>Событие</th><th>Сколько раз</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
 
@@ -1150,9 +1230,9 @@ def _user_activity_html(activity: list[dict]) -> str:
 def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
     used = bool(flags.get("rozygrysh_used"))
     used_html = (
-        '<p><b>Розыгрыш:</b> <span class="badge" style="background:#64748b">уже использован</span></p>'
+        '<p><span class="badge" style="background:#64748b">розыгрыш использован</span></p>'
         if used
-        else '<p><b>Розыгрыш:</b> <span class="badge" style="background:#22c55e">ещё не использован</span></p>'
+        else '<p><span class="badge" style="background:#22c55e">розыгрыш ещё не использован</span></p>'
     )
     if not submissions:
         return used_html + '<p class="muted">Заявок со скринами пока нет.</p>'
@@ -1162,46 +1242,56 @@ def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
         "approved": "принят",
         "rejected": "отклонён",
     }
+    status_colors = {
+        "pending": "#f59e0b",
+        "approved": "#22c55e",
+        "rejected": "#ef4444",
+    }
     cards = []
-    for row in submissions:
+    total = len(submissions)
+    for idx, row in enumerate(submissions):
         kind = kind_labels.get(row.get("kind"), row.get("kind") or "—")
-        status = status_labels.get(row.get("status"), row.get("status") or "—")
-        meta = [
-            f"заявка #{row.get('id')}",
-            f"ветка: {kind}",
-            f"статус: {status}",
-            f"создана: {_fmt_msk(row.get('created_at'))}",
-        ]
-        if row.get("reviewed_at"):
-            meta.append(f"решение: {_fmt_msk(row.get('reviewed_at'))}")
+        status = row.get("status") or ""
+        status_l = status_labels.get(status, status or "—")
+        color = status_colors.get(status, "#64748b")
+        created = _fmt_msk(row.get("created_at"))
+        reviewed = _fmt_msk(row.get("reviewed_at")) if row.get("reviewed_at") else ""
+        bits = [f"Создана {created}"]
+        if reviewed:
+            bits.append(f"Решение {reviewed}")
         if row.get("reject_reason"):
-            meta.append(f"причина: {row.get('reject_reason')}")
-        screen = [
-            f"file_id: {row.get('photo_file_id') or '—'}",
-        ]
-        if row.get("photo_file_unique_id"):
-            screen.append(f"unique_id: {row.get('photo_file_unique_id')}")
-        if row.get("source_chat_id") or row.get("source_message_id"):
-            screen.append(
-                f"из чата: chat={row.get('source_chat_id') or '—'}, "
-                f"msg={row.get('source_message_id') or '—'}, "
-                f"время={_fmt_msk(row.get('source_message_at'))}"
-            )
-        else:
-            screen.append("метаданные чата: нет (заявка до обновления)")
-        if row.get("moderation_chat_id") or row.get("moderation_message_id"):
-            screen.append(
-                f"в модерации: chat={row.get('moderation_chat_id') or '—'}, "
-                f"msg={row.get('moderation_message_id') or '—'}"
-            )
+            bits.append(f"Причина: {row.get('reject_reason')}")
+        if row.get("source_message_id"):
+            bits.append(f"Сообщение в чате #{row.get('source_message_id')}")
         cards.append(
-            "<div class='user-block-item'>"
-            f"<b>Скрин · {_h(kind)}</b>"
-            f"<div class='muted'>{_h(' · '.join(meta))}</div>"
-            f"<div class='muted'>{_h(' · '.join(screen))}</div>"
-            "</div>"
+            f'<article class="screen-card" data-idx="{idx}">'
+            f'<div class="screen-card-top">'
+            f'<span class="screen-card-title">Скрин #{_h(str(row.get("id")))} · {_h(kind)}</span>'
+            f'<span class="badge" style="background:{color}">{_h(status_l)}</span>'
+            f"</div>"
+            f'<p class="muted screen-card-meta">{_h(" · ".join(bits))}</p>'
+            f'<div class="screen-card-nav muted">{idx + 1} / {total}</div>'
+            "</article>"
         )
-    return used_html + "".join(cards)
+    return (
+        used_html
+        + '<div class="screen-carousel" tabindex="0">'
+        + "".join(cards)
+        + "</div>"
+        + '<p class="muted screen-carousel-hint">Листайте карточки скринов вбок</p>'
+    )
+
+
+def _user_extra_details(title: str, body: str, open_by_default: bool = False) -> str:
+    opened = " open" if open_by_default else ""
+    return (
+        f'<details class="user-extra-details"{opened}>'
+        f'<summary class="user-extra-summary"><strong>{_h(title)}</strong>'
+        '<span class="details-action"><span class="closed-label">Развернуть</span>'
+        '<span class="open-label">Свернуть</span></span></summary>'
+        f'<div class="user-extra-body">{body}</div>'
+        "</details>"
+    )
 
 
 def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) -> str:
@@ -1274,19 +1364,10 @@ def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) 
         )
         extras = user_extras or {}
         detail += (
-            '<div class="user-extra-grid">'
-            '<section class="user-extra-card">'
-            "<h3>Куда заходил</h3>"
-            f"{_user_activity_html(extras.get('activity') or [])}"
-            "</section>"
-            '<section class="user-extra-card">'
-            "<h3>Розыгрыш</h3>"
-            f"{_user_raffle_html(extras.get('submissions') or [], extras.get('flags') or {})}"
-            "</section>"
-            '<section class="user-extra-card">'
-            "<h3>Напоминания</h3>"
-            f"{_user_reminders_html(user['bookings'])}"
-            "</section>"
+            '<div class="user-extra-stack">'
+            f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity") or []))}'
+            f'{_user_extra_details("Розыгрыш", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}))}'
+            f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]))}'
             "</div>"
             "</section>"
         )
@@ -1856,16 +1937,32 @@ def render_admin_html(
     .metric.tone-best, .metric.tone-hitloto, .metric.tone-proverka {{ border-width:1px; }}
     .branch-grid {{ display:grid; grid-template-columns: 1fr; gap:14px; margin-top:18px; }}
     .branch-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:16px; padding:16px; }}
-    .user-extra-grid {{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:14px; margin-top:18px; }}
-    .user-extra-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:14px; padding:14px; }}
-    .user-extra-card h3 {{ margin:0 0 10px; font-size:15px; }}
+    .user-extra-stack {{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; margin-top:18px; align-items:start; }}
+    .user-extra-details {{ background:#f8fafc; border:1px solid var(--line); border-radius:14px; overflow:hidden; }}
+    .user-extra-summary {{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:14px 16px; cursor:pointer; list-style:none; }}
+    .user-extra-summary::-webkit-details-marker {{ display:none; }}
+    .user-extra-summary strong {{ font-size:15px; }}
+    .user-extra-body {{ padding:0 16px 16px; border-top:1px solid var(--line); }}
+    .user-extra-details[open] {{ grid-column: 1 / -1; }}
     .user-block-item {{ margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }}
-    .user-block-item:first-of-type {{ margin-top:0; padding-top:0; border-top:none; }}
+    .user-block-item:first-of-type {{ margin-top:8px; padding-top:0; border-top:none; }}
     .user-block-item ul {{ margin:8px 0 0; padding-left:18px; }}
     .user-block-item li {{ margin:4px 0; }}
-    table.user-extra {{ table-layout:fixed; min-width:480px; }}
-    table.user-extra th:nth-child(1), table.user-extra td:nth-child(1) {{ width:28%; }}
-    table.user-extra th:nth-child(3), table.user-extra td:nth-child(3) {{ width:16%; }}
+    table.user-extra {{ table-layout:fixed; min-width:420px; }}
+    table.user-activity-summary th:nth-child(2), table.user-activity-summary td:nth-child(2) {{ width:34%; text-align:right; }}
+    .screen-carousel {{
+      display:flex; gap:12px; overflow-x:auto; scroll-snap-type:x mandatory;
+      -webkit-overflow-scrolling:touch; padding:4px 2px 10px; margin-top:8px;
+    }}
+    .screen-card {{
+      flex:0 0 min(320px, 85%); scroll-snap-align:start;
+      background:white; border:1px solid var(--line); border-radius:14px; padding:14px;
+    }}
+    .screen-card-top {{ display:flex; justify-content:space-between; gap:10px; align-items:center; }}
+    .screen-card-title {{ font-weight:700; font-size:14px; }}
+    .screen-card-meta {{ margin:10px 0 0; font-size:13px; line-height:1.45; }}
+    .screen-card-nav {{ margin-top:12px; font-size:12px; }}
+    .screen-carousel-hint {{ margin:0; font-size:12px; }}
     .funnel-layout {{ display:flex; flex-direction:column; gap:10px; margin-top:14px; }}
     .funnel-row {{ display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:stretch; }}
     .funnel-step {{ background:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; padding:12px 14px; min-height:78px; }}
@@ -1949,7 +2046,8 @@ def render_admin_html(
     .empty-state {{ text-align:center; padding:36px; color:#475467; }}
     details {{ margin:0; }}
     @media (max-width: 900px) {{
-      .funnel-row, .analytics-show-pair, .show-format-grid, .user-extra-grid {{ grid-template-columns:1fr; }}
+      .funnel-row, .analytics-show-pair, .show-format-grid, .user-extra-stack {{ grid-template-columns:1fr; }}
+      .user-extra-details[open] {{ grid-column:auto; }}
       .funnel-step.funnel-spacer {{ display:none; }}
       .branch-metrics {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
     }}
