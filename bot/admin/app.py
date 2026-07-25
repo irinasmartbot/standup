@@ -1022,13 +1022,22 @@ def _user_stage(user: dict) -> str:
 
 
 def _users_tab(dashboard: dict, filters: dict) -> str:
+    status = filters.get("status") or ""
     users = sorted(
         dashboard["users"].values(),
         key=lambda u: (_parse_int(u.get("user_id")), u["name"] or "", u["phone"] or ""),
     )
     selected_key = filters.get("u", "")
+    list_users = users
+    if status:
+        list_users = [user for user in users if user["status_counts"].get(status, 0) > 0]
+        # Keep the opened guest in the list even if they have 0 bookings of this status.
+        if selected_key and selected_key in dashboard["users"]:
+            selected = dashboard["users"][selected_key]
+            if all(user["key"] != selected_key for user in list_users):
+                list_users = [selected] + list_users
     rows = []
-    for user in users:
+    for user in list_users:
         rows.append(
             "<tr>"
             f"<td>{_h(user.get('user_id') or '—')}</td>"
@@ -1052,8 +1061,17 @@ def _users_tab(dashboard: dict, filters: dict) -> str:
     detail = ""
     if selected_key and selected_key in dashboard["users"]:
         user = dashboard["users"][selected_key]
+        bookings = user["bookings"]
+        if status:
+            bookings = [booking for booking in bookings if booking.get("status") == status]
         reminders_24h = sum(1 for b in user["bookings"] if b["reminder_24h_sent"])
         reminders_day = sum(1 for b in user["bookings"] if b["reminder_day_sent"])
+        empty_note = ""
+        if status and not bookings:
+            empty_note = (
+                f'<p class="muted">У этого гостя нет броней со статусом '
+                f'«{_h(STATUS_LABELS.get(status, status))}».</p>'
+            )
         detail = (
             '<section class="card user-detail">'
             f'<h2>{_h(user["name"] or "Без имени")}</h2>'
@@ -1068,7 +1086,8 @@ def _users_tab(dashboard: dict, filters: dict) -> str:
             f'<span>Напоминание в день: <b>{reminders_day}</b></span>'
             '</div>'
             f'<p><b>Текущий этап:</b> {_h(_user_stage(user))}</p>'
-            f'{_booking_table(user["bookings"], show_format=True)}'
+            f"{empty_note}"
+            f'{_booking_table(bookings, show_format=True)}'
             '</section>'
         )
     return detail + f'<section class="card"><h2>Users</h2>{table}</section>'
@@ -1927,8 +1946,30 @@ async def admin_page(request: web.Request) -> web.Response:
     else:
         # With a date selected, load all shows that day (even empty) so the show picker is complete.
         include_empty_events = bool(filters.get("date")) and filters.get("tab") in {"date", "bookings"}
-        rows = await loop.run_in_executor(None, fetch_admin_rows, config, filters, include_empty_events)
+        # Users tab needs every booking to keep the selected guest visible when status filter changes.
+        fetch_filters = dict(filters)
+        if filters.get("tab") == "users":
+            fetch_filters["status"] = ""
+        rows = await loop.run_in_executor(None, fetch_admin_rows, config, fetch_filters, include_empty_events)
         dashboard = build_dashboard(rows)
+        # Keep header metrics in sync with the status pill on Users, without dropping guests.
+        if filters.get("tab") == "users" and filters.get("status"):
+            status = filters["status"]
+            filtered = [b for b in dashboard["bookings"] if b.get("status") == status]
+            event_ids = {str(b.get("event_id") or "") for b in filtered}
+            dashboard = {
+                **dashboard,
+                "totals": {
+                    "events": len(event_ids),
+                    "bookings": len(filtered),
+                    "reserved_guests": sum(
+                        int(b.get("guests") or 0) for b in filtered if b.get("status") in ACTIVE_STATUSES
+                    ),
+                    "confirmed_guests": sum(
+                        int(b.get("guests") or 0) for b in filtered if b.get("status") == "confirmed"
+                    ),
+                },
+            }
     return web.Response(
         text=render_admin_html(dashboard, filters, source_label, db_data, can_view_db, analytics),
         content_type="text/html",
