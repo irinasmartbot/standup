@@ -592,3 +592,26 @@ def fetch_user_activity(telegram_id: int, limit: int = 40) -> list[dict]:
     except Exception:
         logger.exception("fetch_user_activity failed for %s", telegram_id)
         return []
+
+
+def fetch_user_activity_counts(telegram_id: int) -> list[dict]:
+    """Per-event counts for one Telegram user (compact admin summary)."""
+    if not _use_postgres() or not telegram_id:
+        return []
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT name, COUNT(*)::int AS events
+                    FROM analytics_events
+                    WHERE telegram_id = %(telegram_id)s
+                    GROUP BY name
+                    ORDER BY events DESC, name
+                    """,
+                    {"telegram_id": telegram_id},
+                )
+                return [dict(row) for row in cur.fetchall()]
+    except Exception:
+        logger.exception("fetch_user_activity_counts failed for %s", telegram_id)
+        return []

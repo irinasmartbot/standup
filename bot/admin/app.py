@@ -1140,11 +1140,10 @@ def _user_reminders_html(bookings: list[dict]) -> str:
     return "".join(lines) if lines else '<p class="muted">Нет броней для напоминаний.</p>'
 
 
-def _user_activity_html(activity: list[dict]) -> str:
-    if not activity:
+def _user_activity_html(activity_counts: list[dict]) -> str:
+    if not activity_counts:
         return '<p class="muted">Пока нет событий аналитики по этому гостю.</p>'
 
-    # Aggregate like analytics "Все события": label → count
     order = [
         "bot_start",
         "branch_proverka",
@@ -1189,13 +1188,11 @@ def _user_activity_html(activity: list[dict]) -> str:
         "bot_blocked": "Заблокировали бота",
         "bot_unblocked": "Разблокировали бота",
     }
-    counts: Counter = Counter()
-    for item in activity:
-        name = item.get("name") or ""
-        if not name:
-            continue
-        counts[name] += 1
-
+    counts = {
+        row.get("name"): int(row.get("events") or 0)
+        for row in activity_counts
+        if row.get("name")
+    }
     rows = []
     seen = set()
     for name in order:
@@ -1210,7 +1207,7 @@ def _user_activity_html(activity: list[dict]) -> str:
             f"<td><b>{n}</b> <span class='muted'>{word}</span></td>"
             "</tr>"
         )
-    for name, n in counts.most_common():
+    for name, n in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
         if name in seen:
             continue
         word = "заход" if n == 1 else "захода" if 2 <= n <= 4 else "заходов"
@@ -1365,7 +1362,7 @@ def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) 
         extras = user_extras or {}
         detail += (
             '<div class="user-extra-stack">'
-            f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity") or []))}'
+            f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or []))}'
             f'{_user_extra_details("Розыгрыш", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}))}'
             f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]))}'
             "</div>"
@@ -2293,13 +2290,13 @@ async def admin_page(request: web.Request) -> web.Response:
             user_id = selected.get("user_id")
 
             def _load_user_extras():
-                from bot.db.analytics import fetch_user_activity
+                from bot.db.analytics import fetch_user_activity_counts
                 from bot.db.crud import get_raffle_submissions_for_telegram, get_user_raffle_flags
 
                 tid = int(telegram_id) if telegram_id else None
                 uid = int(user_id) if user_id else None
                 return {
-                    "activity": fetch_user_activity(tid) if tid else [],
+                    "activity_counts": fetch_user_activity_counts(tid) if tid else [],
                     "submissions": get_raffle_submissions_for_telegram(tid) if tid else [],
                     "flags": get_user_raffle_flags(telegram_id=tid, user_id=uid),
                 }
