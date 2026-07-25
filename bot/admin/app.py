@@ -1148,8 +1148,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "branch_best": "BEST",
         "branch_hitloto": "Hit Loto",
         "branch_proverka": "Проверка",
-        "show_card": "Открыли карточку шоу",
-        "buy_click": "Купить (если трекаем)",
+        "buy_click": "Нажали «Купить»",
         "raffle_enter": "Вход в розыгрыш",
         "raffle_branch": "Выбор ветки",
         "raffle_screenshot": "Отправили скрин",
@@ -1164,10 +1163,12 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "bot_blocked": "Заблокировали бота",
         "bot_unblocked": "Разблокировали бота",
     }
+    # Always list every known step in these groups (even if 0).
+    always_show_groups = {"Розыгрыш", "Ветки", "Брони"}
     event_groups = [
         ("Вход в бот", ["bot_start"]),
         ("Ветки", ["branch_proverka", "branch_best", "branch_hitloto"]),
-        ("Карточки шоу", ["show_card", "buy_click"]),
+        ("Карточки концертов", []),  # filled from show_cards breakdown below
         ("Помощь", ["help_open", "help_question"]),
         (
             "Розыгрыш",
@@ -1193,17 +1194,62 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         ("Блокировки бота", ["bot_blocked", "bot_unblocked"]),
     ]
     grouped_names = {name for _, names in event_groups for name in names}
-    other_names = sorted(name for name in by_name if name not in grouped_names)
+    grouped_names.add("show_card")
+    other_names = sorted(
+        name for name in by_name if name not in grouped_names and name != "show_card"
+    )
     if other_names:
         event_groups.append(("Другое", other_names))
 
+    show_card_rows = []
+    format_titles = {"best": "BEST", "hitloto": "Hit Loto", "proverka": "Проверка"}
+    browse_titles = {"date": "поиск по дате", "venue": "поиск по площадке"}
+    for row in report.get("show_cards") or []:
+        fmt = row.get("format") or ""
+        browse = row.get("browse") or ""
+        fmt_title = format_titles.get(fmt, fmt or "формат")
+        browse_title = browse_titles.get(browse, browse or "карточка")
+        show_card_rows.append(
+            "<tr>"
+            f"<td>{_h(f'{fmt_title} — открыли карточку концерта ({browse_title})')}</td>"
+            f"<td>{int(row.get('events') or 0)}</td>"
+            f"<td>{int(row.get('uniques') or 0)}</td>"
+            "</tr>"
+        )
+    if not show_card_rows and by_name.get("show_card"):
+        metric = by_name["show_card"]
+        show_card_rows.append(
+            "<tr>"
+            "<td>Открыли карточку конкретного концерта</td>"
+            f"<td>{metric.get('events', 0)}</td>"
+            f"<td>{metric.get('uniques', 0)}</td>"
+            "</tr>"
+        )
+    if by_name.get("buy_click"):
+        metric = by_name["buy_click"]
+        show_card_rows.append(
+            "<tr>"
+            f"<td>{_h(event_labels['buy_click'])}</td>"
+            f"<td>{metric.get('events', 0)}</td>"
+            f"<td>{metric.get('uniques', 0)}</td>"
+            "</tr>"
+        )
+
     group_blocks = []
     for group_title, names in event_groups:
+        if group_title == "Карточки концертов":
+            if not show_card_rows:
+                continue
+            group_blocks.append(
+                f'<tr class="events-group-row"><td colspan="3">{_h(group_title)}</td></tr>'
+                + "".join(show_card_rows)
+            )
+            continue
         rows = []
+        show_zeros = group_title in always_show_groups
         for name in names:
             metric = by_name.get(name) or {"events": 0, "uniques": 0}
-            if name not in by_name and name in grouped_names:
-                # still show zero rows for known funnel steps? optional — skip zeros for cleaner list
+            if name not in by_name and name in grouped_names and not show_zeros:
                 continue
             rows.append(
                 "<tr>"
@@ -1231,7 +1277,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         '<span class="details-action"><span class="closed-label">Развернуть</span><span class="open-label">Свернуть</span></span>'
         "</summary>"
         '<div class="details-body">'
-        '<p class="muted">События сгруппированы. Страница аналитики не автообновляется — кат не схлопнется сам.</p>'
+        '<p class="muted">События сгруппированы. «Карточки концертов» — сколько раз открыли конкретный концерт после поиска по дате или площадке. Страница не автообновляется.</p>'
         + (
             '<div class="table-wrap"><table class="analytics-events">'
             "<thead><tr>"
