@@ -1522,6 +1522,8 @@ def render_admin_html(
     .analytics-section {{ padding:18px 20px; }}
     .analytics-section > h2 {{ margin:0 0 4px; font-size:18px; font-weight:700; line-height:1.3; }}
     .analytics-section > .muted {{ margin:0 0 14px; font-size:13px; }}
+    .card.details-card,
+    .card.details-card.analytics-section {{ padding:0; }}
     .show-format-grid {{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; }}
     .show-format-block {{ margin:0; padding:10px 12px; border-radius:12px; border:1px solid var(--line); }}
     .show-format-title {{ font-size:13px; font-weight:700; margin-bottom:8px; }}
@@ -1584,6 +1586,8 @@ def render_admin_html(
     input, select, button {{ border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:white; font:inherit; }}
     button {{ background:#111827; color:white; cursor:pointer; }}
     .card {{ padding:20px; margin-bottom:18px; }}
+    .card.analytics-section {{ padding:18px 20px; }}
+    .card.details-card {{ padding:0; }}
     .event-head {{ display:flex; justify-content:space-between; gap:16px; align-items:start; }}
     h2 {{ margin:0 0 10px; font-size:18px; font-weight:700; }}
     .event-head p {{ margin:0; color:var(--muted); }}
