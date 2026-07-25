@@ -1128,16 +1128,20 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             f'<a class="pill {active}" href="{_query_link(filters, tab="analytics", channel=key)}">{label}</a>'
         )
 
+    proverka_overview = report.get("proverka_bookings") or {}
+    raffle_overview = report.get("raffle_bookings") or {}
     overview = (
         '<div class="summary analytics-summary">'
         f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"))}'
         f'{_analytics_metric_card("Проверка", by_name.get("branch_proverka"), css_class="tone-proverka")}'
         f'{_analytics_metric_card("BEST", by_name.get("branch_best"), css_class="tone-best")}'
         f'{_analytics_metric_card("Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto")}'
-        f'{_analytics_metric_card("Брони созданы", by_name.get("booking_created"))}'
-        f'{_analytics_metric_card("Билет получен", by_name.get("booking_confirmed"))}'
-        f'{_analytics_metric_card("Отмены брони", by_name.get("booking_cancelled"))}'
+        f'{_analytics_metric_card("Брони созданы", proverka_overview.get("created"), note="только проверка")}'
+        f'{_analytics_metric_card("Билет получен", proverka_overview.get("confirmed"), note="только проверка")}'
+        f'{_analytics_metric_card("Отмены брони", proverka_overview.get("cancelled"), note="только проверка")}'
         f'{_analytics_metric_card("Help / FAQ", by_name.get("help_open"))}'
+        f'{_analytics_metric_card("Отправили скрин · розыгрыш", by_name.get("raffle_screenshot"))}'
+        f'{_analytics_metric_card("Посетили розыгрыш", raffle_overview.get("visited"), note="билет получен и не отменён")}'
         "</div>"
     )
 

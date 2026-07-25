@@ -454,6 +454,33 @@ def fetch_analytics_report(
                 raffle_bookings = _format_bookings("rozygrysh")
                 proverka_bookings = _format_bookings("proverka")
 
+                # Visited raffle: got a ticket and still have it (not cancelled/annulled).
+                visited_time_filter = ""
+                if "start" in booking_params and "end" in booking_params:
+                    visited_time_filter = (
+                        " AND b.confirmed_at >= %(start)s AND b.confirmed_at < %(end)s"
+                    )
+                visited_where = ["b.format = 'rozygrysh'", "b.status = 'confirmed'"]
+                if "channel" in booking_params:
+                    visited_where.append("b.source = %(channel)s")
+                cur.execute(
+                    f"""
+                    SELECT
+                        COUNT(*)::int AS events,
+                        COUNT(DISTINCT b.user_id)::int AS uniques
+                    FROM bookings b
+                    WHERE {" AND ".join(visited_where)}
+                      AND b.confirmed_at IS NOT NULL
+                      {visited_time_filter}
+                    """,
+                    booking_params,
+                )
+                visited_row = cur.fetchone() or {}
+                raffle_bookings["visited"] = {
+                    "events": int(visited_row.get("events") or 0),
+                    "uniques": int(visited_row.get("uniques") or 0),
+                }
+
                 # Per-branch booking/ticket: attribute via latest approved submission
                 # of that user before the booking was created.
                 booking_where = ["b.format = 'rozygrysh'"]
