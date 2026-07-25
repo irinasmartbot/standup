@@ -1505,12 +1505,12 @@ def render_admin_html(
     .branch-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:16px; padding:16px; }}
     .funnel-layout {{ display:grid; grid-template-columns: 1.4fr 1fr; gap:16px; margin-top:14px; }}
     .funnel-main, .funnel-side {{ display:flex; flex-direction:column; gap:10px; }}
-    .funnel-step {{ background:#f8fafc; border:1px solid var(--line); border-radius:14px; padding:12px 14px; }}
-    .funnel-side .funnel-step {{ background:#fff7ed; border-color:#fed7aa; }}
+    .funnel-step {{ background:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; padding:12px 14px; }}
+    .funnel-side .funnel-step {{ background:#fff1f2; border-color:#fecdd3; }}
     .funnel-title {{ font-size:13px; color:#475467; margin-bottom:6px; }}
     .funnel-value {{ display:flex; gap:10px; align-items:baseline; }}
     .funnel-value b {{ font-size:24px; }}
-    .funnel-note {{ display:inline-block; margin-top:6px; font-size:12px; color:#c2410c; font-weight:700; }}
+    .funnel-note {{ display:inline-block; margin-top:6px; font-size:12px; color:#be123c; font-weight:700; }}
     .details-card {{ padding:0; overflow:hidden; }}
     .details-summary {{ display:flex; justify-content:space-between; align-items:center; gap:16px; padding:18px 20px; cursor:pointer; list-style:none; }}
     .details-summary::-webkit-details-marker {{ display:none; }}
