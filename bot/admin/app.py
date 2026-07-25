@@ -1079,11 +1079,12 @@ def _metric_pair(metric: dict | None) -> str:
     return f'<b>{metric.get("events", 0)}</b><span class="muted"> · {metric.get("uniques", 0)} чел.</span>'
 
 
-def _analytics_metric_card(title: str, metric: dict | None, note: str = "") -> str:
+def _analytics_metric_card(title: str, metric: dict | None, note: str = "", css_class: str = "") -> str:
     metric = metric or {"events": 0, "uniques": 0}
     note_html = f'<span class="muted">{_h(note)}</span>' if note else ""
+    cls = f"metric {css_class}".strip()
     return (
-        '<div class="metric">'
+        f'<div class="{cls}">'
         f"<span>{_h(title)}</span>"
         f'<b>{metric.get("events", 0)}</b>'
         f'<small class="muted">{metric.get("uniques", 0)} уникальных</small>'
@@ -1130,9 +1131,9 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     overview = (
         '<div class="summary analytics-summary">'
         f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"))}'
-        f'{_analytics_metric_card("Проверка", by_name.get("branch_proverka"))}'
-        f'{_analytics_metric_card("BEST", by_name.get("branch_best"))}'
-        f'{_analytics_metric_card("Hit Loto", by_name.get("branch_hitloto"))}'
+        f'{_analytics_metric_card("Проверка", by_name.get("branch_proverka"), css_class="tone-proverka")}'
+        f'{_analytics_metric_card("BEST", by_name.get("branch_best"), css_class="tone-best")}'
+        f'{_analytics_metric_card("Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto")}'
         f'{_analytics_metric_card("Брони созданы", by_name.get("booking_created"))}'
         f'{_analytics_metric_card("Билет получен", by_name.get("booking_confirmed"))}'
         f'{_analytics_metric_card("Отмены брони", by_name.get("booking_cancelled"))}'
@@ -1146,7 +1147,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "help_question": "Написали в поддержку",
         "branch_best": "BEST",
         "branch_hitloto": "Hit Loto",
-        "branch_proverka": "проверка",
+        "branch_proverka": "Проверка",
         "show_card": "Открыли карточку шоу",
         "buy_click": "Купить (если трекаем)",
         "raffle_enter": "Вход в розыгрыш",
@@ -1285,16 +1286,20 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         card_matrix[fmt][browse] = (int(row.get("events") or 0), int(row.get("uniques") or 0))
 
     show_blocks = []
-    for fmt, title in (("best", "BEST"), ("hitloto", "Hit Loto"), ("proverka", "проверка")):
+    for fmt, title, tone in (
+        ("best", "BEST", "tone-best"),
+        ("hitloto", "Hit Loto", "tone-hitloto"),
+        ("proverka", "Проверка", "tone-proverka"),
+    ):
         by_date_e, by_date_u = card_matrix[fmt]["date"]
         by_venue_e, by_venue_u = card_matrix[fmt]["venue"]
         show_blocks.append(
-            '<div class="show-format-block">'
+            f'<div class="show-format-block {tone}">'
             f"<h3>{_h(title)}</h3>"
             '<div class="summary analytics-show-pair">'
-            f'<div class="metric"><span>Зашли по дате</span><b>{by_date_e}</b>'
+            f'<div class="metric {tone}"><span>Зашли по дате</span><b>{by_date_e}</b>'
             f'<small class="muted">{by_date_u} уникальных</small></div>'
-            f'<div class="metric"><span>Зашли по площадке</span><b>{by_venue_e}</b>'
+            f'<div class="metric {tone}"><span>Зашли по площадке</span><b>{by_venue_e}</b>'
             f'<small class="muted">{by_venue_u} уникальных</small></div>'
             "</div></div>"
         )
@@ -1487,8 +1492,15 @@ def render_admin_html(
     .analytics-audience {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
     .analytics-show-pair {{ grid-template-columns: repeat(2, minmax(0,1fr)); margin:0; }}
     .branch-card .analytics-show-pair {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
-    .show-format-block {{ margin-top:18px; }}
+    .show-format-block {{ margin-top:18px; padding:14px; border-radius:16px; border:1px solid var(--line); }}
     .show-format-block h3, .branch-card h3 {{ margin:0 0 10px; font-size:16px; }}
+    .tone-best {{ background:#eff6ff; border-color:#bfdbfe; }}
+    .tone-best h3, .metric.tone-best span {{ color:#1d4ed8; }}
+    .tone-hitloto {{ background:#fff7ed; border-color:#fed7aa; }}
+    .tone-hitloto h3, .metric.tone-hitloto span {{ color:#c2410c; }}
+    .tone-proverka {{ background:#f0fdf4; border-color:#bbf7d0; }}
+    .tone-proverka h3, .metric.tone-proverka span {{ color:#15803d; }}
+    .metric.tone-best, .metric.tone-hitloto, .metric.tone-proverka {{ border-width:1px; }}
     .branch-grid {{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:16px; margin-top:18px; }}
     .branch-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:16px; padding:16px; }}
     .funnel-layout {{ display:grid; grid-template-columns: 1.4fr 1fr; gap:16px; margin-top:14px; }}
