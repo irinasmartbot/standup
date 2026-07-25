@@ -1160,15 +1160,15 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "raffle_ticket": "Получили билет",
         "raffle_booking_cancelled": "Отменили бронь",
         "raffle_annulled": "Аннулировано",
-        "booking_created": "Бронь создана",
-        "booking_confirmed": "Билет получен",
-        "booking_cancelled": "Бронь отменена",
-        "booking_annulled": "Бронь аннулирована",
+        "proverka_booked": "Бронь создана",
+        "proverka_ticket": "Билет получен",
+        "proverka_booking_cancelled": "Бронь отменена",
+        "proverka_annulled": "Бронь аннулирована",
         "bot_blocked": "Заблокировали бота",
         "bot_unblocked": "Разблокировали бота",
     }
     # Always list every known step in these groups (even if 0).
-    always_show_groups = {"Розыгрыш", "Ветки", "Брони"}
+    always_show_groups = {"Розыгрыш", "Ветки", "Брони · Проверка"}
     event_groups = [
         ("Вход в бот", ["bot_start"]),
         ("Ветки", ["branch_proverka", "branch_best", "branch_hitloto"]),
@@ -1191,18 +1191,19 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             ],
         ),
         (
-            "Брони",
+            "Брони · Проверка",
             [
-                "booking_created",
-                "booking_confirmed",
-                "booking_cancelled",
-                "booking_annulled",
+                "proverka_booked",
+                "proverka_ticket",
+                "proverka_booking_cancelled",
+                "proverka_annulled",
             ],
         ),
         ("Блокировки бота", ["bot_blocked", "bot_unblocked"]),
     ]
-    # Raffle booking stages come from bookings table (format=rozygrysh), same as funnel.
+    # Booking stages from bookings table by format (same source as funnel).
     raffle_bookings_preview = report.get("raffle_bookings") or {}
+    proverka_bookings_preview = report.get("proverka_bookings") or {}
     by_name = dict(by_name)
     by_name["raffle_booked"] = raffle_bookings_preview.get("created") or {"events": 0, "uniques": 0}
     by_name["raffle_ticket"] = raffle_bookings_preview.get("confirmed") or {"events": 0, "uniques": 0}
@@ -1211,8 +1212,27 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "uniques": 0,
     }
     by_name["raffle_annulled"] = raffle_bookings_preview.get("annulled") or {"events": 0, "uniques": 0}
+    by_name["proverka_booked"] = proverka_bookings_preview.get("created") or {"events": 0, "uniques": 0}
+    by_name["proverka_ticket"] = proverka_bookings_preview.get("confirmed") or {"events": 0, "uniques": 0}
+    by_name["proverka_booking_cancelled"] = proverka_bookings_preview.get("cancelled") or {
+        "events": 0,
+        "uniques": 0,
+    }
+    by_name["proverka_annulled"] = proverka_bookings_preview.get("annulled") or {
+        "events": 0,
+        "uniques": 0,
+    }
     grouped_names = {name for _, names in event_groups for name in names}
-    grouped_names.add("show_card")
+    grouped_names.update(
+        {
+            "show_card",
+            "buy_click",
+            "booking_created",
+            "booking_confirmed",
+            "booking_cancelled",
+            "booking_annulled",
+        }
+    )
     other_names = sorted(
         name for name in by_name if name not in grouped_names and name != "show_card"
     )

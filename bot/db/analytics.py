@@ -252,6 +252,7 @@ def fetch_analytics_report(
         "raffle_kind_steps": {},
         "raffle_kind_bookings": {},
         "raffle_bookings": {},
+        "proverka_bookings": {},
         "audience": {
             "telegram_users": 0,
             "telegram_blocked": 0,
@@ -407,19 +408,20 @@ def fetch_analytics_report(
                         "uniques": int(row["uniques"] or 0),
                     }
 
-                # Raffle booking stages from bookings table (format=rozygrysh),
+                # Booking stages from bookings table by format,
                 # so history and annulments are visible even before analytics existed.
-                booking_where = ["b.format = 'rozygrysh'"]
                 booking_params: dict[str, Any] = {}
                 if day_from and day_to:
                     booking_params["start"] = params["start"]
                     booking_params["end"] = params["end"]
                 if channel in ("telegram", "vkontakte"):
-                    booking_where.append("b.source = %(channel)s")
                     booking_params["channel"] = channel
-                booking_where_sql = " AND ".join(booking_where)
 
-                def _raffle_booking_metric(time_column: str) -> dict:
+                def _format_booking_metric(booking_format: str, time_column: str) -> dict:
+                    where = [f"b.format = '{booking_format}'"]
+                    if "channel" in booking_params:
+                        where.append("b.source = %(channel)s")
+                    where_sql = " AND ".join(where)
                     time_filter = ""
                     if "start" in booking_params and "end" in booking_params:
                         time_filter = f" AND b.{time_column} >= %(start)s AND b.{time_column} < %(end)s"
@@ -429,7 +431,7 @@ def fetch_analytics_report(
                             COUNT(*)::int AS events,
                             COUNT(DISTINCT b.user_id)::int AS uniques
                         FROM bookings b
-                        WHERE {booking_where_sql}
+                        WHERE {where_sql}
                           AND b.{time_column} IS NOT NULL
                           {time_filter}
                         """,
@@ -441,15 +443,24 @@ def fetch_analytics_report(
                         "uniques": int(row.get("uniques") or 0),
                     }
 
-                raffle_bookings = {
-                    "created": _raffle_booking_metric("created_at"),
-                    "confirmed": _raffle_booking_metric("confirmed_at"),
-                    "cancelled": _raffle_booking_metric("cancelled_at"),
-                    "annulled": _raffle_booking_metric("annulled_at"),
-                }
+                def _format_bookings(booking_format: str) -> dict:
+                    return {
+                        "created": _format_booking_metric(booking_format, "created_at"),
+                        "confirmed": _format_booking_metric(booking_format, "confirmed_at"),
+                        "cancelled": _format_booking_metric(booking_format, "cancelled_at"),
+                        "annulled": _format_booking_metric(booking_format, "annulled_at"),
+                    }
+
+                raffle_bookings = _format_bookings("rozygrysh")
+                proverka_bookings = _format_bookings("proverka")
 
                 # Per-branch booking/ticket: attribute via latest approved submission
                 # of that user before the booking was created.
+                booking_where = ["b.format = 'rozygrysh'"]
+                if "channel" in booking_params:
+                    booking_where.append("b.source = %(channel)s")
+                booking_where_sql = " AND ".join(booking_where)
+
                 def _raffle_kind_booking_metric(time_column: str) -> dict[str, dict]:
                     time_filter = ""
                     if "start" in booking_params and "end" in booking_params:
@@ -524,6 +535,7 @@ def fetch_analytics_report(
             "raffle_kind_steps": raffle_kind_steps,
             "raffle_kind_bookings": raffle_kind_bookings,
             "raffle_bookings": raffle_bookings,
+            "proverka_bookings": proverka_bookings,
             "audience": audience,
         }
     except Exception:
