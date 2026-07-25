@@ -1323,17 +1323,21 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     kind_created = kind_bookings.get("created") or {}
     kind_confirmed = kind_bookings.get("confirmed") or {}
 
-    def _funnel_step(title: str, metric: dict | None, note: str = "") -> str:
+    def _funnel_step(title: str, metric: dict | None, note: str = "", tone: str = "main") -> str:
         metric = metric or {"events": 0, "uniques": 0}
         note_html = f'<span class="funnel-note">{_h(note)}</span>' if note else ""
         return (
-            '<div class="funnel-step">'
+            f'<div class="funnel-step funnel-{tone}">'
             f'<div class="funnel-title">{_h(title)}</div>'
             f'<div class="funnel-value"><b>{metric.get("events", 0)}</b>'
             f'<span class="muted">{metric.get("uniques", 0)} чел.</span></div>'
             f"{note_html}"
             "</div>"
         )
+
+    def _funnel_row(main_html: str, side_html: str = "") -> str:
+        side = side_html or '<div class="funnel-step funnel-spacer" aria-hidden="true"></div>'
+        return f'<div class="funnel-row">{main_html}{side}</div>'
 
     def _branch_metric(title: str, metric: dict | None) -> str:
         metric = metric or {"events": 0, "uniques": 0}
@@ -1349,21 +1353,13 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "<h2>Розыгрыш</h2>"
         '<p class="muted">Воронка от входа до билета. Справа — отвалы.</p>'
         '<div class="funnel-layout">'
-        '<div class="funnel-main">'
-        f'{_funnel_step("1. Зашли в розыгрыш", by_name.get("raffle_enter"))}'
-        f'{_funnel_step("2. Выбрали ветку", by_name.get("raffle_branch"))}'
-        f'{_funnel_step("3. Отправили скрин", by_name.get("raffle_screenshot"))}'
-        f'{_funnel_step("4. Скрин принят", by_name.get("raffle_approved"))}'
-        f'{_funnel_step("5. Подписка ок", by_name.get("raffle_subscribed"))}'
-        f'{_funnel_step("6. Забронировали", raffle_bookings.get("created"))}'
-        f'{_funnel_step("7. Получили билет", raffle_bookings.get("confirmed"))}'
-        "</div>"
-        '<div class="funnel-side">'
-        f'{_funnel_step("Скрин отклонён", by_name.get("raffle_rejected"), "отвал")}'
-        f'{_funnel_step("Подписка нет", by_name.get("raffle_sub_failed"), "отвал")}'
-        f'{_funnel_step("Отменили бронь", raffle_bookings.get("cancelled"), "отвал")}'
-        f'{_funnel_step("Аннулировано", raffle_bookings.get("annulled"), "отвал")}'
-        "</div>"
+        f'{_funnel_row(_funnel_step("1. Зашли в розыгрыш", by_name.get("raffle_enter")))}'
+        f'{_funnel_row(_funnel_step("2. Выбрали ветку", by_name.get("raffle_branch")))}'
+        f'{_funnel_row(_funnel_step("3. Отправили скрин", by_name.get("raffle_screenshot")))}'
+        f'{_funnel_row(_funnel_step("4. Скрин принят", by_name.get("raffle_approved")), _funnel_step("Скрин отклонён", by_name.get("raffle_rejected"), "отвал", "side"))}'
+        f'{_funnel_row(_funnel_step("5. Подписка ок", by_name.get("raffle_subscribed")), _funnel_step("Подписка нет", by_name.get("raffle_sub_failed"), "отвал", "side"))}'
+        f'{_funnel_row(_funnel_step("6. Забронировали", raffle_bookings.get("created")), _funnel_step("Отменили бронь", raffle_bookings.get("cancelled"), "отвал", "side"))}'
+        f'{_funnel_row(_funnel_step("7. Получили билет", raffle_bookings.get("confirmed")), _funnel_step("Аннулировано", raffle_bookings.get("annulled"), "отвал", "side"))}'
         "</div>"
     )
 
@@ -1520,10 +1516,11 @@ def render_admin_html(
     .metric.tone-best, .metric.tone-hitloto, .metric.tone-proverka {{ border-width:1px; }}
     .branch-grid {{ display:grid; grid-template-columns: 1fr; gap:14px; margin-top:18px; }}
     .branch-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:16px; padding:16px; }}
-    .funnel-layout {{ display:grid; grid-template-columns: 1.4fr 1fr; gap:16px; margin-top:14px; }}
-    .funnel-main, .funnel-side {{ display:flex; flex-direction:column; gap:10px; }}
-    .funnel-step {{ background:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; padding:12px 14px; }}
-    .funnel-side .funnel-step {{ background:#fff1f2; border-color:#fecdd3; }}
+    .funnel-layout {{ display:flex; flex-direction:column; gap:10px; margin-top:14px; }}
+    .funnel-row {{ display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:stretch; }}
+    .funnel-step {{ background:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; padding:12px 14px; min-height:78px; }}
+    .funnel-step.funnel-side {{ background:#fff1f2; border-color:#fecdd3; }}
+    .funnel-step.funnel-spacer {{ visibility:hidden; pointer-events:none; border-color:transparent; background:transparent; }}
     .funnel-title {{ font-size:13px; color:#475467; margin-bottom:6px; }}
     .funnel-value {{ display:flex; gap:10px; align-items:baseline; }}
     .funnel-value b {{ font-size:24px; }}
@@ -1597,7 +1594,8 @@ def render_admin_html(
     .empty-state {{ text-align:center; padding:36px; color:#475467; }}
     details {{ margin:0; }}
     @media (max-width: 900px) {{
-      .funnel-layout, .analytics-show-pair {{ grid-template-columns:1fr; }}
+      .funnel-row, .analytics-show-pair {{ grid-template-columns:1fr; }}
+      .funnel-step.funnel-spacer {{ display:none; }}
       .branch-metrics {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
     }}
     @media (max-width: 1100px) and (min-width: 901px) {{
