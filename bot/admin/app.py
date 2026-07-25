@@ -1215,13 +1215,11 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         if not rows:
             continue
         group_blocks.append(
-            f'<h3 class="events-group-title">{_h(group_title)}</h3>'
-            '<div class="table-wrap"><table><thead><tr>'
-            "<th>Событие</th><th>Нажатий / заходов</th><th>Уникальных людей</th>"
-            "</tr></thead>"
-            f"<tbody>{''.join(rows)}</tbody></table></div>"
+            f'<tr class="events-group-row"><td colspan="3">{_h(group_title)}</td></tr>'
+            + "".join(rows)
         )
 
+    all_events_body = "".join(group_blocks)
     all_events_table = (
         '<section class="card details-card">'
         "<details>"
@@ -1234,8 +1232,16 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "</summary>"
         '<div class="details-body">'
         '<p class="muted">События сгруппированы. Страница аналитики не автообновляется — кат не схлопнется сам.</p>'
-        f'{"".join(group_blocks) or "<p class=\"muted\">За выбранный период событий нет</p>"}'
-        "</div>"
+        + (
+            '<div class="table-wrap"><table class="analytics-events">'
+            "<thead><tr>"
+            "<th>Событие</th><th>Нажатий / заходов</th><th>Уникальных людей</th>"
+            "</tr></thead>"
+            f"<tbody>{all_events_body}</tbody></table></div>"
+            if all_events_body
+            else '<p class="muted">За выбранный период событий нет</p>'
+        )
+        + "</div>"
         "</details>"
         "</section>"
     )
@@ -1534,6 +1540,15 @@ def render_admin_html(
     .details-body {{ padding:0 20px 20px; border-top:1px solid var(--line); }}
     .events-group-title {{ margin:18px 0 8px; font-size:15px; color:#334155; }}
     .events-group-title:first-child {{ margin-top:8px; }}
+    table.analytics-events {{ table-layout:fixed; min-width:640px; }}
+    table.analytics-events th:nth-child(1), table.analytics-events td:nth-child(1) {{ width:46%; }}
+    table.analytics-events th:nth-child(2), table.analytics-events td:nth-child(2),
+    table.analytics-events th:nth-child(3), table.analytics-events td:nth-child(3) {{ width:27%; text-align:right; }}
+    table.analytics-events tr.events-group-row td {{
+      padding-top:18px; padding-bottom:8px; border-bottom:none;
+      font-size:15px; font-weight:700; color:#334155; text-align:left; background:transparent;
+    }}
+    table.analytics-events tr.events-group-row:first-child td {{ padding-top:8px; }}
     .metric, .card, .filters {{ background:var(--card); border:1px solid var(--line); border-radius:18px; box-shadow:0 8px 30px rgba(15,23,42,.05); }}
     .metric {{ padding:18px; }}
     .metric span {{ display:block; color:var(--muted); font-size:14px; }}
