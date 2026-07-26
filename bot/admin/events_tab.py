@@ -377,8 +377,12 @@ def render_events_tab(
         "Убраны из бота · отметьте и нажмите «Вернуть»",
     )
 
-    update_btn = (
-        '<button type="submit" form="events-save-form" class="events-update-btn">Обновить</button>'
+    toolbar = (
+        f'<div class="events-toolbar">'
+        f'<button type="submit" form="events-save-form" class="events-update-btn">Обновить</button>'
+        f'<a class="pill" href="{_events_link(fmt)}">Отменить правки</a>'
+        f'<span class="muted">Актуальных: <b>{len(bundle.get("active") or [])}</b></span>'
+        f"</div>"
     )
 
     return f"""
@@ -390,18 +394,16 @@ def render_events_tab(
     <section class="card analytics-section">
       <h2>Афиша · {_h(AFISHA_FORMAT_LABELS.get(fmt, fmt))}</h2>
       {note}
-      <div class="events-toolbar">
-        {update_btn}
-        <a class="pill" href="{_events_link(fmt)}">Отменить правки</a>
-        <span class="muted">Актуальных: <b>{len(bundle.get("active") or [])}</b></span>
-      </div>
+      {toolbar}
       <form method="post" action="/admin/events/save" class="events-form" id="events-save-form">
         <input type="hidden" name="ef" value="{_h(fmt)}">
         {_table(bundle.get("active") or [], paid=paid, blank_rows=5, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)}
-        <div class="events-toolbar events-toolbar-bottom">
-          <button type="submit" class="events-update-btn">Обновить</button>
-        </div>
       </form>
+      <div class="events-toolbar events-toolbar-bottom">
+        <button type="submit" form="events-save-form" class="events-update-btn">Обновить</button>
+        <a class="pill" href="{_events_link(fmt)}">Отменить правки</a>
+        <span class="muted">Актуальных: <b>{len(bundle.get("active") or [])}</b></span>
+      </div>
     </section>
     {hidden_block}
     {past_block}
