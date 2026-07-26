@@ -133,14 +133,15 @@ def _row_html(
         tickets_link = ""
         if show_tickets:
             tickets_link = (
-                f'<br><a class="pill events-tickets-link" '
+                f'<a class="pill events-tickets-link" '
                 f'href="{_events_link(fmt, tickets=eid)}">билеты</a>'
             )
         delete_cell = (
             f'<td class="events-del">'
-            f'<label><input type="checkbox" name="e_delete" value="{_h(eid)}"> скрыть</label><br>'
+            f"{tickets_link}"
+            f'<label><input type="checkbox" name="e_delete" value="{_h(eid)}"> скрыть</label>'
             f'<label class="events-purge"><input type="checkbox" name="e_purge" value="{_h(eid)}"> удалить</label>'
-            f"{tickets_link}</td>"
+            f"</td>"
         )
     else:
         delete_cell = '<td class="muted">новая</td>'

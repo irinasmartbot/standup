@@ -2394,9 +2394,13 @@ def render_admin_html(
       .bar-funnel-pct {{ grid-column: 1 / -1; text-align:left; }}
     }}
     .events-weekday {{ font-size:11px; margin-top:4px; }}
-    .events-del {{ white-space:nowrap; font-size:12px; }}
+    .events-del {{
+      white-space:nowrap; font-size:12px;
+      display:flex; flex-direction:column; align-items:flex-start; gap:4px;
+    }}
+    .events-del label {{ display:flex; align-items:center; gap:4px; margin:0; }}
     .events-past {{ margin-top:16px; }}
-    .events-tickets-link {{ display:inline-block; margin-top:6px; padding:4px 8px; font-size:12px; }}
+    .events-tickets-link {{ display:inline-block; margin:0; padding:3px 8px; font-size:12px; line-height:1.2; }}
     .events-tickets-panel {{ margin-bottom:16px; border:1px solid #c4b5fd; }}
     .inline-form {{ display:inline; }}
     .ticket-resend-form {{ margin-top:10px; }}
