@@ -2299,18 +2299,44 @@ def render_admin_html(
         try {{ sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }}
         catch (e) {{}}
       }}
+      function asOpen(entry) {{
+        if (entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "open")) {{
+          return !!entry.open;
+        }}
+        return !!entry;
+      }}
+      // Meta-refresh / F5 = reload → keep user sections. Tab clicks = navigate → collapse.
+      var nav = performance.getEntriesByType && performance.getEntriesByType("navigation")[0];
+      var isReload = !!(nav && nav.type === "reload");
       var state = load();
+      var dirty = false;
       document.querySelectorAll("details[data-persist-key]").forEach(function (el) {{
         var key = el.getAttribute("data-persist-key");
-        if (Object.prototype.hasOwnProperty.call(state, key)) {{
-          el.open = !!state[key];
+        var isUser = key.indexOf("user:") === 0;
+        if (isUser) {{
+          if (isReload && Object.prototype.hasOwnProperty.call(state, key)) {{
+            el.open = asOpen(state[key]);
+          }} else {{
+            el.open = false;
+            if (Object.prototype.hasOwnProperty.call(state, key)) {{
+              delete state[key];
+              dirty = true;
+            }}
+          }}
+        }} else if (Object.prototype.hasOwnProperty.call(state, key)) {{
+          el.open = asOpen(state[key]);
         }}
         el.addEventListener("toggle", function () {{
           var next = load();
-          next[key] = el.open;
+          if (el.open) {{
+            next[key] = {{ open: true }};
+          }} else {{
+            delete next[key];
+          }}
           save(next);
         }});
       }});
+      if (dirty) save(state);
     }})();
   </script>
 </body>
