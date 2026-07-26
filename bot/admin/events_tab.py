@@ -172,19 +172,26 @@ def render_events_tab(
 
     note = (
         '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
-        "Пустые нижние строки — для быстрого добавления. "
-        "«Скрыть» убирает шоу из бота (не удаляет из БД).</p>"
+        "Пустые нижние строки — для быстрого добавления.<br>"
+        "<b>Смена времени или площадки:</b> правьте ту же строку и сохраните — брони "
+        "остаются на этом шоу и подтянут новые данные. "
+        "Уже отправленные в Telegram билеты сами не перерисуются.<br>"
+        "«Скрыть» убирает из бота; вернуть можно из блока «Скрытые» ниже.</p>"
         if fmt == "best"
-        else '<p class="muted">Пустые нижние строки — чтобы быстро добавить шоу. '
-        "Галочка «скрыть» убирает из бота.</p>"
+        else '<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
+        "<b>Смена времени или площадки:</b> правьте ту же строку и сохраните — брони "
+        "остаются привязаны к этому шоу. "
+        "Уже отправленные билеты в чате сами не обновятся.<br>"
+        "«Скрыть» → убрать из бота; вернуть — в блоке «Скрытые».</p>"
     )
 
-    past = bundle.get("past") or []
-    past_block = ""
-    if past:
-        past_rows = "".join(
+    def _archive_block(title: str, items: list[dict], persist_key: str, hint: str) -> str:
+        if not items:
+            return ""
+        rows_html = "".join(
             "<tr>"
-            f"<td>{_h(e.get('id'))}</td>"
+            f'<td><label><input type="checkbox" name="e_restore" value="{_h(e.get("id"))}"> '
+            f'{_h(e.get("id"))}</label></td>'
             f"<td>{_h(e.get('date_display'))}</td>"
             f"<td>{_h(e.get('time'))}</td>"
             f"<td>{_h(e.get('location'))}</td>"
@@ -192,25 +199,42 @@ def render_events_tab(
             f"<td>{_h(e.get('max_seats'))}</td>"
             f"<td>{_h(e.get('price'))}</td>"
             "</tr>"
-            for e in past
+            for e in items
         )
-        past_block = (
-            '<section class="card details-card analytics-section events-past">'
-            '<details data-persist-key="events:past">'
+        return (
+            f'<section class="card details-card analytics-section events-past">'
+            f'<details data-persist-key="{_h(persist_key)}">'
             '<summary class="details-summary"><div>'
-            f"<strong>Прошедшие ({len(past)})</strong>"
-            '<span class="muted">Свёрнуты · дата уже прошла</span>'
+            f"<strong>{_h(title)} ({len(items)})</strong>"
+            f'<span class="muted">{_h(hint)}</span>'
             "</div>"
             '<span class="details-action"><span class="closed-label">Развернуть</span>'
             '<span class="open-label">Свернуть</span></span></summary>'
             '<div class="details-body">'
+            f'<form method="post" action="/admin/events/restore">'
+            f'<input type="hidden" name="ef" value="{_h(fmt)}">'
+            '<div class="events-toolbar">'
+            '<button type="submit">Вернуть выбранные в афишу</button>'
+            "</div>"
             '<div class="table-wrap"><table><thead><tr>'
-            "<th>ID</th><th>Дата</th><th>Время</th><th>Площадка</th><th>Адрес</th><th>Мест</th><th>Цена</th>"
-            f"</tr></thead><tbody>{past_rows}</tbody></table></div>"
-            '<p class="muted">Чтобы вернуть шоу в афишу — поставьте будущую дату в актуальных '
-            "(добавьте заново) или напишите разработчику.</p>"
-            "</div></details></section>"
+            "<th>Вернуть · ID</th><th>Дата</th><th>Время</th><th>Площадка</th>"
+            "<th>Адрес</th><th>Мест</th><th>Цена</th>"
+            f"</tr></thead><tbody>{rows_html}</tbody></table></div>"
+            "</form></div></details></section>"
         )
+
+    past_block = _archive_block(
+        "Прошедшие",
+        bundle.get("past") or [],
+        f"events:past:{fmt}",
+        "Дата уже прошла · можно вернуть, если поправите дату в актуальных после возврата",
+    )
+    hidden_block = _archive_block(
+        "Скрытые",
+        bundle.get("hidden") or [],
+        f"events:hidden:{fmt}",
+        "Убраны из бота · отметьте и нажмите «Вернуть»",
+    )
 
     return f"""
     <div class="filters events-filters">
@@ -233,5 +257,6 @@ def render_events_tab(
         </div>
       </form>
     </section>
+    {hidden_block}
     {past_block}
     """

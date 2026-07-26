@@ -2569,7 +2569,7 @@ async def admin_page(request: web.Request) -> web.Response:
         dashboard = empty_dashboard
         if events_flash == "1":
             events_flash = "Сохранено. Афиша в боте обновится сразу."
-        elif events_flash:
+        else:
             events_flash = ""
     else:
         # With a date selected, load all shows that day (even empty) so the show picker is complete.
@@ -2680,6 +2680,26 @@ async def events_save_page(request: web.Request) -> web.Response:
     raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}&saved=1")
 
 
+async def events_restore_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        return web.Response(text=render_login_html(), status=401, content_type="text/html")
+    from bot.db.events_admin import restore_events
+    from urllib.parse import quote
+
+    post = await request.post()
+    event_format = (post.get("ef") or "best").strip()
+    if event_format not in {"best", "proverka", "hitloto"}:
+        event_format = "best"
+    ids = post.getall("e_restore") if hasattr(post, "getall") else []
+    result = await asyncio.get_running_loop().run_in_executor(
+        None, restore_events, event_format, list(ids or [])
+    )
+    if result.get("errors") and not result.get("restored"):
+        raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}&saved=0")
+    raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}&saved=1")
+
+
 async def login_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     data = await request.post()
@@ -2707,6 +2727,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_get("/", index_page)
     app.router.add_get("/admin", admin_page)
     app.router.add_post("/admin/events/save", events_save_page)
+    app.router.add_post("/admin/events/restore", events_restore_page)
     app.router.add_post("/admin/login", login_page)
     app.router.add_get("/admin/logout", logout_page)
     return app

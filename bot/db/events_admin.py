@@ -78,8 +78,8 @@ def mark_past_events() -> int:
 
 
 def list_events_for_admin(event_format: str) -> dict[str, list[dict]]:
-    """Return {active: [...], past: [...]} for one format (hidden excluded)."""
-    empty = {"active": [], "past": []}
+    """Return {active, past, hidden} for one format."""
+    empty = {"active": [], "past": [], "hidden": []}
     if not _use_postgres() or event_format not in AFISHA_FORMATS:
         return empty
     mark_past_events()
@@ -94,7 +94,7 @@ def list_events_for_admin(event_format: str) -> dict[str, list[dict]]:
                         price, payment_url, host, max_seats, status
                     FROM events
                     WHERE format = %(format)s
-                      AND status IN ('active', 'past')
+                      AND status IN ('active', 'past', 'hidden')
                     ORDER BY event_date DESC, event_time DESC, location
                     """,
                     {"format": event_format},
@@ -104,16 +104,18 @@ def list_events_for_admin(event_format: str) -> dict[str, list[dict]]:
         logger.exception("list_events_for_admin failed for %s", event_format)
         return empty
 
-    active, past = [], []
+    active, past, hidden = [], [], []
     for row in rows:
         item = _serialize_event(row)
-        if row.get("status") == "past":
+        status = row.get("status")
+        if status == "past":
             past.append(item)
+        elif status == "hidden":
+            hidden.append(item)
         else:
             active.append(item)
-    # Active: soonest first for managers
     active.sort(key=lambda e: (e.get("date_iso") or "", e.get("time") or "", e.get("location") or ""))
-    return {"active": active, "past": past}
+    return {"active": active, "past": past, "hidden": hidden}
 
 
 def _serialize_event(row: dict) -> dict:
@@ -311,3 +313,63 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
         ),
     )
     result["saved"] += 1
+
+
+def restore_events(event_format: str, event_ids: list[int]) -> dict:
+    """Bring hidden (or past) events back to afisha."""
+    result = {"restored": 0, "errors": []}
+    if not _use_postgres():
+        result["errors"].append("Мероприятия правятся только в PostgreSQL.")
+        return result
+    if event_format not in AFISHA_FORMATS:
+        result["errors"].append("Неизвестный формат.")
+        return result
+    ids = []
+    for i in event_ids:
+        try:
+            ids.append(int(i))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return result
+    try:
+        from bot.utils.ticket import now_msk
+
+        today = now_msk().date()
+    except Exception:
+        today = datetime.now().date()
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                for event_id in ids:
+                    cur.execute(
+                        """
+                        SELECT event_date, status
+                        FROM events
+                        WHERE id = %s AND format = %s
+                        """,
+                        (event_id, event_format),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        result["errors"].append(f"#{event_id} не найдено")
+                        continue
+                    event_date, status = row[0], row[1]
+                    if status not in {"hidden", "past"}:
+                        continue
+                    new_status = "past" if event_date < today else "active"
+                    cur.execute(
+                        """
+                        UPDATE events
+                        SET status = %s, updated_at = now(), source_sheet = 'admin'
+                        WHERE id = %s AND format = %s
+                        """,
+                        (new_status, event_id, event_format),
+                    )
+                    if cur.rowcount:
+                        result["restored"] += 1
+            conn.commit()
+    except Exception as exc:
+        logger.exception("restore_events failed")
+        result["errors"].append(str(exc))
+    return result
