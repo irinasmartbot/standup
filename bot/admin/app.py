@@ -2176,10 +2176,14 @@ def render_admin_html(
     table.events-edit .events-col-url input {{ min-width:180px; }}
     table.events-edit .events-col-wide input {{ min-width:140px; }}
     .events-time-cell, .events-loc-cell {{ vertical-align:top; }}
-    .events-tpls {{ display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }}
+    .events-tpls {{
+      display:flex; flex-wrap:nowrap; gap:4px; margin-top:6px;
+      align-items:center; overflow-x:auto; max-width:100%;
+    }}
     .events-tpl {{
       border:1px solid #cbd5e1; background:#f8fafc; color:#334155;
       border-radius:999px; padding:2px 8px; font-size:11px; cursor:pointer;
+      white-space:nowrap; flex:0 0 auto;
     }}
     .events-tpl:hover {{ background:#e2e8f0; }}
     .events-purge {{ color:#b91c1c; }}
