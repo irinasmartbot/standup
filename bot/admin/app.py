@@ -2187,8 +2187,11 @@ def render_admin_html(
     }}
     .events-tpl:hover {{ background:#e2e8f0; }}
     .events-purge {{ color:#b91c1c; }}
-    .events-update-btn {{ background:#1d4ed8; color:#fff !important; border-color:#1d4ed8; }}
-    .events-update-btn:hover {{ background:#1e40af; }}
+    .events-update-btn {{
+      background:#1d4ed8; color:#fff; border:1px solid #1d4ed8;
+      border-radius:10px; padding:10px 16px; font:inherit; cursor:pointer;
+    }}
+    .events-update-btn:hover {{ background:#1e40af; border-color:#1e40af; }}
     .events-raffle-badge {{
       display:inline-block; margin-left:6px; padding:2px 7px; border-radius:999px;
       background:#fef3c7; color:#92400e; font-size:11px; font-weight:600;

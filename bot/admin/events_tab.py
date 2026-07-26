@@ -245,13 +245,13 @@ def render_events_tab(
         )
 
     save_hint = (
-        "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить» или «Обновить» — "
-        "изменения запишутся в базу (афиша в боте подтянется сразу). Билеты гостям не уходят. "
-        "Переотправка билетов — только через «билеты» у строки."
+        "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Обновить» — "
+        "изменения запишутся в базу и не пропадут после перезагрузки. "
+        "Билеты гостям не уходят; переотправка — только через «билеты» у строки."
         if can_resend_tickets
         else (
-            "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить» или «Обновить» — "
-            "изменения запишутся в базу."
+            "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Обновить» — "
+            "изменения запишутся в базу и не пропадут после перезагрузки."
         )
     )
     hide_hint = (
@@ -398,7 +398,6 @@ def render_events_tab(
       <h2>Афиша · {_h(AFISHA_FORMAT_LABELS.get(fmt, fmt))}</h2>
       {note}
       <div class="events-toolbar">
-        <button type="submit" form="events-save-form">Сохранить</button>
         {update_btn}
         <a class="pill" href="{_events_link(fmt)}">Отменить правки</a>
         <span class="muted">Актуальных: <b>{len(bundle.get("active") or [])}</b></span>
@@ -407,7 +406,7 @@ def render_events_tab(
         <input type="hidden" name="ef" value="{_h(fmt)}">
         {_table(bundle.get("active") or [], paid=paid, blank_rows=3, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)}
         <div class="events-toolbar events-toolbar-bottom">
-          <button type="submit">Сохранить</button>
+          <button type="submit" class="events-update-btn">Обновить</button>
         </div>
       </form>
     </section>
