@@ -2163,7 +2163,15 @@ def render_admin_html(
     .events-filters {{ margin-bottom:16px; }}
     .events-toolbar {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:12px 0; }}
     .events-toolbar-bottom {{ margin-top:16px; }}
-    .events-flash {{ background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; border-radius:12px; padding:10px 14px; }}
+    .events-must-update {{
+      margin:10px 0 0; padding:10px 12px; border-radius:10px;
+      background:#fff7ed; border:1px solid #fdba74; color:#9a3412; font-size:14px;
+    }}
+    .events-edit-hint {{
+      margin:12px 0; padding:12px 14px; border-radius:12px;
+      background:#fef3c7; border:1px solid #f59e0b; color:#92400e; font-size:14px;
+    }}
+    .events-edit-hint[hidden] {{ display:none; }}
     .events-errors {{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; border-radius:12px; padding:10px 14px; margin-bottom:12px; }}
     .events-errors ul {{ margin:8px 0 0; padding-left:18px; }}
     table.events-edit {{ table-layout:auto; min-width:1400px; }}

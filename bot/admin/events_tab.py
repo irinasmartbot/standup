@@ -244,6 +244,11 @@ def render_events_tab(
             + "</ul></div>"
         )
 
+    always_update = (
+        '<p class="events-must-update">'
+        "<b>Важно:</b> всегда нажимайте «Обновить», чтобы отправить применённые изменения в бот."
+        "</p>"
+    )
     if fmt == "best":
         note = (
             "<p class=\"muted\">BEST — платные шоу; даты отсюда же использует розыгрыш. "
@@ -252,6 +257,7 @@ def render_events_tab(
             "изменения появятся в боте.<br>"
             "«Скрыть» убирает из бота; «удалить» — насовсем (только если нет броней). "
             "Вернуть скрытые — в блоке «Скрытые».</p>"
+            f"{always_update}"
         )
     else:
         note = (
@@ -260,6 +266,7 @@ def render_events_tab(
             "изменения появятся в боте.<br>"
             "«Скрыть» убирает из бота; «удалить» — насовсем (только если нет броней). "
             "Вернуть скрытые — в блоке «Скрытые».</p>"
+            f"{always_update}"
         )
 
     holders = ticket_holders or []
@@ -394,6 +401,9 @@ def render_events_tab(
     <section class="card analytics-section">
       <h2>Афиша · {_h(AFISHA_FORMAT_LABELS.get(fmt, fmt))}</h2>
       {note}
+      <p class="events-edit-hint" id="events-edit-hint" hidden>
+        <b>Вы начали редактирование.</b> Чтобы изменения появились в боте, нажмите синюю кнопку «Обновить».
+      </p>
       {toolbar}
       <form method="post" action="/admin/events/save" class="events-form" id="events-save-form">
         <input type="hidden" name="ef" value="{_h(fmt)}">
@@ -417,6 +427,10 @@ def render_events_tab(
         e_image: 130
       }};
       var EXPAND_MAX = 520;
+      var editHint = document.getElementById("events-edit-hint");
+      function showEditHint() {{
+        if (editHint) editHint.hidden = false;
+      }}
       function measure(el) {{
         var style = window.getComputedStyle(el);
         var canvas = measure._c || (measure._c = document.createElement("canvas"));
@@ -440,18 +454,26 @@ def render_events_tab(
           fitGrow(el, false);
         }});
         form.addEventListener("focusin", function (ev) {{
-          if (ev.target && ev.target.classList.contains("events-grow")) fitGrow(ev.target, true);
+          var t = ev.target;
+          if (!t) return;
+          if (t.classList && t.classList.contains("events-grow")) fitGrow(t, true);
+          if (t.matches && t.matches("input, textarea, select")) showEditHint();
         }});
         form.addEventListener("focusout", function (ev) {{
           if (ev.target && ev.target.classList.contains("events-grow")) fitGrow(ev.target, false);
         }});
         form.addEventListener("input", function (ev) {{
+          showEditHint();
           if (ev.target && ev.target.classList.contains("events-grow")) fitGrow(ev.target, true);
+        }});
+        form.addEventListener("change", function () {{
+          showEditHint();
         }});
         form.addEventListener("click", function (ev) {{
           var btn = ev.target.closest("[data-events-tpl]");
           if (!btn || !form.contains(btn)) return;
           ev.preventDefault();
+          showEditHint();
           var cell = btn.closest("td");
           if (!cell) return;
           var kind = btn.getAttribute("data-events-tpl");
