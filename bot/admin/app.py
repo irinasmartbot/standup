@@ -141,11 +141,11 @@ def load_config() -> AdminConfig:
         db_path=os.getenv("DB_PATH", "bookings.db"),
         bookings_source=os.getenv("BOOKINGS_SOURCE", "postgres" if database_url else "sqlite"),
         # Manager: only «Мероприятия»
-        admin_token=os.getenv("ADMIN_TOKEN", ""),
+        admin_token=os.getenv("ADMIN_TOKEN", "").strip(),
         # Client: bookings/users/analytics/events (no DB, no ticket resend)
-        client_token=os.getenv("ADMIN_CLIENT_TOKEN", ""),
+        client_token=os.getenv("ADMIN_CLIENT_TOKEN", "").strip(),
         # Owner: full admin + DB + ticket resend
-        owner_token=os.getenv("ADMIN_OWNER_TOKEN", ""),
+        owner_token=os.getenv("ADMIN_OWNER_TOKEN", "").strip(),
     )
 
 
@@ -2490,16 +2490,23 @@ def _tokens_configured(config: AdminConfig) -> bool:
     return bool(config.admin_token or config.client_token or config.owner_token)
 
 
+def _token_eq(candidate: str, expected: str) -> bool:
+    """Constant-time compare; encode to bytes so non-ASCII env values cannot crash auth."""
+    if not candidate or not expected:
+        return False
+    return hmac.compare_digest(candidate.encode("utf-8"), expected.encode("utf-8"))
+
+
 def _is_manager_token(candidate: str, config: AdminConfig) -> bool:
-    return bool(candidate and config.admin_token and hmac.compare_digest(candidate, config.admin_token))
+    return _token_eq(candidate, config.admin_token)
 
 
 def _is_client_token(candidate: str, config: AdminConfig) -> bool:
-    return bool(candidate and config.client_token and hmac.compare_digest(candidate, config.client_token))
+    return _token_eq(candidate, config.client_token)
 
 
 def _is_owner_token(candidate: str, config: AdminConfig) -> bool:
-    return bool(candidate and config.owner_token and hmac.compare_digest(candidate, config.owner_token))
+    return _token_eq(candidate, config.owner_token)
 
 
 def _token_matches(candidate: str, config: AdminConfig) -> bool:
