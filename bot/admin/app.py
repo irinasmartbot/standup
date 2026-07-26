@@ -1463,9 +1463,9 @@ def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) 
             f"{empty_note}"
             '<div class="user-extra-stack">'
             f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or []), tone="activity")}'
-            f'{_user_extra_details("Розыгрыш", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}), tone="raffle")}'
-            f'{_user_extra_details("Билеты", _user_tickets_html(user["bookings"]), tone="tickets")}'
             f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]), tone="reminders")}'
+            f'{_user_extra_details("Билеты", _user_tickets_html(user["bookings"]), tone="tickets")}'
+            f'{_user_extra_details("Розыгрыш", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}), tone="raffle")}'
             "</div>"
             f'{_booking_table(bookings, show_format=True)}'
             "</section>"
