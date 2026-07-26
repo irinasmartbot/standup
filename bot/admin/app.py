@@ -1738,6 +1738,33 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "</section>"
     )
 
+    command_blocks = []
+    for name, cmd, title, tone in (
+        ("cmd_my_bookings", "/my_bookings", "Мои брони", "tone-cmd-bookings"),
+        ("cmd_main_menu", "/main_menu", "Главное меню", "tone-cmd-menu"),
+        ("cmd_buy_ticket", "/buy_ticket", "Купить билет", "tone-cmd-buy"),
+        ("cmd_help", "/help", "Задать вопрос", "tone-cmd-help"),
+        ("cmd_channel", "/channel", "Канал анонсов", "tone-cmd-channel"),
+    ):
+        metric = by_name.get(name) or {"events": 0, "uniques": 0}
+        events = int(metric.get("events") or 0)
+        uniques = int(metric.get("uniques") or 0)
+        command_blocks.append(
+            f'<div class="command-block {tone}">'
+            f'<div class="command-block-cmd">{_h(cmd)}</div>'
+            f'<div class="command-block-title">{_h(title)}</div>'
+            f'<b>{events}</b>'
+            f'<small class="muted">{uniques} уник.</small>'
+            "</div>"
+        )
+    commands_table = (
+        '<section class="card analytics-section">'
+        "<h2>Команды меню</h2>"
+        '<p class="muted">Переходы по командам из меню Telegram · заходы и уникальные люди.</p>'
+        f'<div class="command-grid">{"".join(command_blocks)}</div>'
+        "</section>"
+    )
+
     raffle_bookings = report.get("raffle_bookings") or {}
     kind_steps = report.get("raffle_kind_steps") or {}
     kind_bookings = report.get("raffle_kind_bookings") or {}
@@ -1849,7 +1876,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     В карточках: число = заходы, ниже — уникальные люди.</p>
     """
 
-    return filters_bar + overview + all_events_table + starts_table + cards_table + raffle + audience_html
+    return filters_bar + overview + all_events_table + starts_table + commands_table + cards_table + raffle + audience_html
 
 
 def _content(
@@ -1962,6 +1989,25 @@ def render_admin_html(
     .show-format-stats {{ display:grid; grid-template-columns: 1fr 1fr; gap:8px; }}
     .show-format-stats > div {{ background:rgba(255,255,255,.72); border:1px solid rgba(15,23,42,.06); border-radius:10px; padding:8px 10px; }}
     .show-format-stats span {{ display:block; font-size:11px; color:var(--muted); }}
+    .command-grid {{ display:grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap:10px; }}
+    .command-block {{
+      margin:0; padding:12px 14px; border-radius:12px; border:1px solid var(--line);
+      background:#f8fafc; min-height:108px;
+    }}
+    .command-block-cmd {{ font-size:12px; font-weight:700; font-family:ui-monospace,Consolas,monospace; }}
+    .command-block-title {{ margin:4px 0 10px; font-size:13px; color:#475467; }}
+    .command-block b {{ display:block; font-size:24px; line-height:1.1; }}
+    .command-block small {{ display:block; margin-top:4px; font-size:12px; }}
+    .tone-cmd-bookings {{ background:#eff6ff; border-color:#bfdbfe; }}
+    .tone-cmd-bookings .command-block-cmd {{ color:#1d4ed8; }}
+    .tone-cmd-menu {{ background:#f8fafc; border-color:#cbd5e1; }}
+    .tone-cmd-menu .command-block-cmd {{ color:#334155; }}
+    .tone-cmd-buy {{ background:#fff7ed; border-color:#fed7aa; }}
+    .tone-cmd-buy .command-block-cmd {{ color:#c2410c; }}
+    .tone-cmd-help {{ background:#fdf4ff; border-color:#e9d5ff; }}
+    .tone-cmd-help .command-block-cmd {{ color:#7e22ce; }}
+    .tone-cmd-channel {{ background:#f0fdf4; border-color:#bbf7d0; }}
+    .tone-cmd-channel .command-block-cmd {{ color:#15803d; }}
     .show-format-stats b {{ display:block; margin-top:2px; font-size:18px; line-height:1.2; }}
     .show-format-stats small {{ display:block; margin-top:2px; font-size:11px; }}
     .show-format-block h3, .branch-card h3 {{ margin:0 0 10px; font-size:16px; }}
@@ -2116,12 +2162,13 @@ def render_admin_html(
     .empty-state {{ text-align:center; padding:36px; color:#475467; }}
     details {{ margin:0; }}
     @media (max-width: 900px) {{
-      .funnel-row, .analytics-show-pair, .show-format-grid, .user-extra-stack {{ grid-template-columns:1fr; }}
+      .funnel-row, .analytics-show-pair, .show-format-grid, .user-extra-stack, .command-grid {{ grid-template-columns:1fr; }}
       .user-extra-details[open] {{ grid-column:auto; }}
       .funnel-step.funnel-spacer {{ display:none; }}
       .branch-metrics {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
     }}
     @media (max-width: 1100px) and (min-width: 901px) {{
+      .command-grid {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
       .branch-metrics {{ grid-template-columns: repeat(6, minmax(0,1fr)); }}
       .branch-metric {{ padding:10px; }}
       .branch-metric b {{ font-size:18px; }}
