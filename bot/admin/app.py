@@ -1929,9 +1929,11 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         steps: list[tuple[str, dict | None]],
         *,
         drops: list[tuple[str, dict | None]] | None = None,
+        drop_base: dict | None = None,
     ) -> str:
         base = _metric_events(steps[0][1]) if steps else 0
         prev = base
+        book_base = _metric_events(drop_base) if drop_base is not None else 0
         rows = []
         for idx, (title, metric) in enumerate(steps):
             events = _metric_events(metric)
@@ -1960,8 +1962,13 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         for title, metric in drops or []:
             events = _metric_events(metric)
             uniques = _metric_uniques(metric)
-            width = round(100 * events / base) if base else (2 if events else 0)
-            width = max(min(width, 100), 2 if events else 0)
+            ref = book_base if drop_base is not None else base
+            pct = round(100 * events / ref) if ref else 0
+            if drop_base is not None:
+                pct_note = f"{pct}% от брони" if ref else "—"
+            else:
+                pct_note = f"{pct}% от начала" if ref else "—"
+            width = max(min(pct, 100), 2 if events else 0)
             rows.append(
                 '<div class="bar-funnel-row drop">'
                 f'<div class="bar-funnel-label">{_h(title)}</div>'
@@ -1969,7 +1976,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
                 '<div class="bar-funnel-track">'
                 f'<div class="bar-funnel-fill" style="width:{width}%"></div>'
                 "</div>"
-                f'<div class="bar-funnel-pct">отвал · {_h(str(uniques))} уник.</div>'
+                f'<div class="bar-funnel-pct">{_h(pct_note)}</div>'
                 "</div>"
             )
         return '<div class="bar-funnel">' + "".join(rows) + "</div>"
@@ -1996,8 +2003,6 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         '<span class="open-label">Свернуть</span></span>'
         "</summary>"
         '<div class="details-body">'
-        '<p class="muted">Шаг 1 — сумма открытий карточек по дате и по площадке '
-        "(уники по двум путям могут пересекаться). Шаг 2 — вход в раздел «Проверка».</p>"
         + _bar_funnel_html(
             [
                 ("1. Зашли в бесплатное бронирование (по дате / локации)", proverka_browse),
@@ -2009,6 +2014,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
                 ("5. Отменили бронирование", proverka_bookings.get("cancelled")),
                 ("6. Бронь аннулирована / не подтвердили", proverka_bookings.get("annulled")),
             ],
+            drop_base=proverka_bookings.get("created"),
         )
         + "</div></details></section>"
     )
@@ -2027,6 +2033,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             ("8. Отменили бронирование", raffle_bookings.get("cancelled")),
             ("9. Бронь аннулирована / не подтвердили", raffle_bookings.get("annulled")),
         ],
+        drop_base=raffle_bookings.get("created"),
     )
 
     def _branch_metric(title: str, metric: dict | None) -> str:
@@ -2060,7 +2067,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         '<summary class="details-summary">'
         "<div>"
         "<strong>Розыгрыш</strong>"
-        '<span class="muted">Воронка от входа до билета · компактно</span>'
+        '<span class="muted">Воронка от входа до билета</span>'
         "</div>"
         '<span class="details-action"><span class="closed-label">Развернуть</span><span class="open-label">Свернуть</span></span>'
         "</summary>"
@@ -2375,23 +2382,27 @@ def render_admin_html(
     }}
     .bar-funnel {{ display:flex; flex-direction:column; gap:8px; margin-top:10px; }}
     .bar-funnel-row {{
-      display:grid; grid-template-columns: minmax(140px, 1.1fr) 70px minmax(120px, 1.4fr) minmax(110px, 0.9fr);
+      display:grid; grid-template-columns: minmax(180px, 1.2fr) 96px minmax(120px, 1.4fr) minmax(150px, 0.95fr);
       gap:10px; align-items:center; padding:8px 10px; border-radius:12px; background:#f8fafc;
       border:1px solid #e2e8f0;
     }}
     .bar-funnel-row.drop {{ background:#fff1f2; border-color:#fecdd3; }}
     .bar-funnel-label {{ font-size:13px; color:#334155; font-weight:600; line-height:1.25; }}
-    .bar-funnel-nums b {{ font-size:18px; }}
-    .bar-funnel-nums span {{ color:#64748b; font-size:12px; margin-left:4px; }}
+    .bar-funnel-nums {{
+      display:grid; grid-template-columns: 36px 1fr; gap:4px; align-items:baseline;
+      font-variant-numeric: tabular-nums;
+    }}
+    .bar-funnel-nums b {{ font-size:18px; text-align:right; line-height:1.1; }}
+    .bar-funnel-nums span {{ color:#64748b; font-size:12px; white-space:nowrap; }}
     .bar-funnel-track {{ height:10px; background:#e2e8f0; border-radius:999px; overflow:hidden; }}
     .bar-funnel-row.drop .bar-funnel-track {{ background:#fecdd3; }}
     .bar-funnel-fill {{ height:100%; background:linear-gradient(90deg, #60a5fa, #2563eb); border-radius:999px; }}
     .bar-funnel-row.drop .bar-funnel-fill {{ background:linear-gradient(90deg, #fb7185, #e11d48); }}
     .bar-funnel-pct {{ font-size:12px; color:#64748b; text-align:right; line-height:1.3; }}
     @media (max-width: 900px) {{
-      .bar-funnel-row {{ grid-template-columns: 1fr 1fr; }}
-      .bar-funnel-track {{ grid-column: 1 / -1; }}
-      .bar-funnel-pct {{ grid-column: 1 / -1; text-align:left; }}
+      .bar-funnel-row {{ grid-template-columns: 1fr 96px; }}
+      .bar-funnel-track, .bar-funnel-pct {{ grid-column: 1 / -1; }}
+      .bar-funnel-pct {{ text-align:left; }}
     }}
     .events-weekday {{ font-size:11px; margin-top:4px; }}
     .events-del {{
