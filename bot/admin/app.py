@@ -1568,6 +1568,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     proverka_overview = report.get("proverka_bookings") or {}
     raffle_overview = report.get("raffle_bookings") or {}
     overview = (
+        '<h3 class="analytics-section-title">Основные события за период</h3>'
         '<div class="summary analytics-summary">'
         f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"), css_class="tone-bot-start")}'
         f'{_analytics_metric_card("Зашли · Проверка", by_name.get("branch_proverka"), css_class="tone-proverka")}'
@@ -1806,8 +1807,10 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     starts_table = (
         '<section class="card analytics-section">'
         "<h2>Входы в бот по ссылкам</h2>"
-        '<p class="muted">Заходы / уникальные люди.</p>'
-        '<div class="table-wrap"><table><thead><tr><th>Вход</th><th>Заходы</th><th>Люди</th></tr></thead>'
+        '<p class="muted">Все заходы и уникальные люди.</p>'
+        '<div class="table-wrap"><table><thead><tr>'
+        "<th>Вход</th><th>Все заходы</th><th>Уникальные люди</th>"
+        "</tr></thead>"
         f"<tbody>{''.join(payload_rows) or '<tr><td colspan=\"3\" class=\"muted\">Пока нет данных</td></tr>'}</tbody>"
         "</table></div></section>"
     )
@@ -1891,21 +1894,115 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     kind_confirmed = kind_bookings.get("confirmed") or {}
     kind_cancelled = kind_bookings.get("cancelled") or {}
 
-    def _funnel_step(title: str, metric: dict | None, note: str = "", tone: str = "main") -> str:
-        metric = metric or {"events": 0, "uniques": 0}
-        note_html = f'<span class="funnel-note">{_h(note)}</span>' if note else ""
-        return (
-            f'<div class="funnel-step funnel-{tone}">'
-            f'<div class="funnel-title">{_h(title)}</div>'
-            f'<div class="funnel-value"><b>{metric.get("events", 0)}</b>'
-            f'<span class="muted">{metric.get("uniques", 0)} чел.</span></div>'
-            f"{note_html}"
-            "</div>"
-        )
+    def _metric_events(metric: dict | None) -> int:
+        return int((metric or {}).get("events") or 0)
 
-    def _funnel_row(main_html: str, side_html: str = "") -> str:
-        side = side_html or '<div class="funnel-step funnel-spacer" aria-hidden="true"></div>'
-        return f'<div class="funnel-row">{main_html}{side}</div>'
+    def _metric_uniques(metric: dict | None) -> int:
+        return int((metric or {}).get("uniques") or 0)
+
+    def _bar_funnel_html(
+        steps: list[tuple[str, dict | None]],
+        *,
+        drops: list[tuple[str, dict | None]] | None = None,
+    ) -> str:
+        base = _metric_events(steps[0][1]) if steps else 0
+        prev = base
+        rows = []
+        for idx, (title, metric) in enumerate(steps):
+            events = _metric_events(metric)
+            uniques = _metric_uniques(metric)
+            pct_base = round(100 * events / base) if base else (100 if idx == 0 and events else 0)
+            if idx == 0:
+                pct_note = "100% · начало воронки"
+            elif prev:
+                pct_prev = round(100 * events / prev)
+                lost = max(prev - events, 0)
+                pct_note = f"{pct_prev}% от прошлого шага · не перешли: {lost}"
+            else:
+                pct_note = "—"
+            width = max(pct_base, 2 if events else 0)
+            rows.append(
+                '<div class="bar-funnel-row">'
+                f'<div class="bar-funnel-label">{_h(title)}</div>'
+                f'<div class="bar-funnel-nums"><b>{events}</b><span>{uniques} чел.</span></div>'
+                '<div class="bar-funnel-track">'
+                f'<div class="bar-funnel-fill" style="width:{width}%"></div>'
+                "</div>"
+                f'<div class="bar-funnel-pct">{_h(pct_note)}</div>'
+                "</div>"
+            )
+            prev = events
+        for title, metric in drops or []:
+            events = _metric_events(metric)
+            uniques = _metric_uniques(metric)
+            width = round(100 * events / base) if base else (2 if events else 0)
+            width = max(min(width, 100), 2 if events else 0)
+            rows.append(
+                '<div class="bar-funnel-row drop">'
+                f'<div class="bar-funnel-label">{_h(title)}</div>'
+                f'<div class="bar-funnel-nums"><b>{events}</b><span>{uniques} чел.</span></div>'
+                '<div class="bar-funnel-track">'
+                f'<div class="bar-funnel-fill" style="width:{width}%"></div>'
+                "</div>"
+                f'<div class="bar-funnel-pct">отвал · {_h(str(uniques))} уник.</div>'
+                "</div>"
+            )
+        return '<div class="bar-funnel">' + "".join(rows) + "</div>"
+
+    # Проверка: карточки по дате+локации суммарно (заходы); уники — сумма с возможным пересечением.
+    proverka_card_events = 0
+    proverka_card_uniques = 0
+    for row in report.get("show_cards") or []:
+        if (row.get("format") or "") != "proverka":
+            continue
+        proverka_card_events += int(row.get("events") or 0)
+        proverka_card_uniques += int(row.get("uniques") or 0)
+    proverka_browse = {"events": proverka_card_events, "uniques": proverka_card_uniques}
+    proverka_bookings = report.get("proverka_bookings") or {}
+    proverka_funnel = (
+        '<section class="card details-card analytics-section">'
+        '<details data-persist-key="analytics:proverka-funnel">'
+        '<summary class="details-summary">'
+        "<div>"
+        "<strong>Воронка · Проверка</strong>"
+        '<span class="muted">Бесплатное бронирование · от входа до билета</span>'
+        "</div>"
+        '<span class="details-action"><span class="closed-label">Развернуть</span>'
+        '<span class="open-label">Свернуть</span></span>'
+        "</summary>"
+        '<div class="details-body">'
+        '<p class="muted">Шаг 1 — сумма открытий карточек по дате и по площадке '
+        "(уники по двум путям могут пересекаться). Шаг 2 — вход в раздел «Проверка».</p>"
+        + _bar_funnel_html(
+            [
+                ("1. Зашли в бесплатное бронирование (по дате / локации)", proverka_browse),
+                ("2. Выбрали дату / начали бронирование", by_name.get("branch_proverka")),
+                ("3. Бронь есть", proverka_bookings.get("created")),
+                ("4. Получили билет / подтвердили бронь", proverka_bookings.get("confirmed")),
+            ],
+            drops=[
+                ("5. Отменили бронирование", proverka_bookings.get("cancelled")),
+                ("6. Бронь аннулирована / не подтвердили", proverka_bookings.get("annulled")),
+            ],
+        )
+        + "</div></details></section>"
+    )
+
+    raffle_body = _bar_funnel_html(
+        [
+            ("1. Зашли в розыгрыш", by_name.get("raffle_enter")),
+            ("2. Выбрали путь (отзыв / скрин)", by_name.get("raffle_branch")),
+            ("3. Отправили скрин", by_name.get("raffle_screenshot")),
+            ("4. Скрин принят", by_name.get("raffle_approved")),
+            ("5. Подтвердили подписку", by_name.get("raffle_subscribed")),
+            ("6. Забронировали бесплатный билет", raffle_bookings.get("created")),
+            ("7. Получили билет / подтвердили бронь", raffle_bookings.get("confirmed")),
+        ],
+        drops=[
+            ("8. Отменили бронирование", raffle_bookings.get("cancelled")),
+            ("9. Бронь аннулирована / не подтвердили", raffle_bookings.get("annulled")),
+        ],
+    )
 
     def _branch_metric(title: str, metric: dict | None) -> str:
         metric = metric or {"events": 0, "uniques": 0}
@@ -1915,18 +2012,6 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             f'<small class="muted">{metric.get("uniques", 0)} уникальных</small>'
             "</div>"
         )
-
-    raffle_body = (
-        '<div class="funnel-layout">'
-        f'{_funnel_row(_funnel_step("1. Зашли в розыгрыш", by_name.get("raffle_enter")))}'
-        f'{_funnel_row(_funnel_step("2. Выбрали ветку", by_name.get("raffle_branch")))}'
-        f'{_funnel_row(_funnel_step("3. Отправили скрин", by_name.get("raffle_screenshot")))}'
-        f'{_funnel_row(_funnel_step("4. Скрин принят", by_name.get("raffle_approved")), _funnel_step("Скрин отклонён", by_name.get("raffle_rejected"), "отвал", "side"))}'
-        f'{_funnel_row(_funnel_step("5. Подписка ок", by_name.get("raffle_subscribed")), _funnel_step("Подписка нет", by_name.get("raffle_sub_failed"), "отвал", "side"))}'
-        f'{_funnel_row(_funnel_step("6. Забронировали", raffle_bookings.get("created")), _funnel_step("Отменили бронь", raffle_bookings.get("cancelled"), "отвал", "side"))}'
-        f'{_funnel_row(_funnel_step("7. Получили билет", raffle_bookings.get("confirmed")), _funnel_step("Аннулировано", raffle_bookings.get("annulled"), "отвал", "side"))}'
-        "</div>"
-    )
 
     branch_cards = []
     for kind, title in (("post", "Билет за пост"), ("review", "Билет за отзыв")):
@@ -1950,7 +2035,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         '<summary class="details-summary">'
         "<div>"
         "<strong>Розыгрыш</strong>"
-        '<span class="muted">Воронка от входа до билета · справа — отвалы</span>'
+        '<span class="muted">Воронка от входа до билета · компактно</span>'
         "</div>"
         '<span class="details-action"><span class="closed-label">Развернуть</span><span class="open-label">Свернуть</span></span>'
         "</summary>"
@@ -1995,7 +2080,17 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     В карточках: число = заходы, ниже — уникальные люди.</p>
     """
 
-    return filters_bar + overview + all_events_table + starts_table + commands_table + cards_table + raffle + audience_html
+    return (
+        filters_bar
+        + overview
+        + all_events_table
+        + proverka_funnel
+        + starts_table
+        + commands_table
+        + cards_table
+        + raffle
+        + audience_html
+    )
 
 
 def _content(
@@ -2216,11 +2311,34 @@ def render_admin_html(
       background:#fef3c7; color:#92400e; font-size:11px; font-weight:600;
     }}
     .metric.tone-bot-start {{
-      background:linear-gradient(180deg, #111827 0%, #1f2937 100%);
-      border-color:#111827; color:#f8fafc; box-shadow:0 10px 24px rgba(15,23,42,.18);
+      background:#eef2ff; border-color:#c7d2fe; color:#312e81;
+      box-shadow:none;
     }}
-    .metric.tone-bot-start span, .metric.tone-bot-start small {{ color:#cbd5e1; }}
-    .metric.tone-bot-start b {{ color:#fff; font-size:34px; }}
+    .metric.tone-bot-start span, .metric.tone-bot-start small {{ color:#6366f1; }}
+    .metric.tone-bot-start b {{ color:#312e81; font-size:34px; }}
+    .analytics-section-title {{
+      margin:18px 0 10px; font-size:18px; font-weight:700; color:#0f172a;
+    }}
+    .bar-funnel {{ display:flex; flex-direction:column; gap:8px; margin-top:10px; }}
+    .bar-funnel-row {{
+      display:grid; grid-template-columns: minmax(140px, 1.1fr) 70px minmax(120px, 1.4fr) minmax(110px, 0.9fr);
+      gap:10px; align-items:center; padding:8px 10px; border-radius:12px; background:#f8fafc;
+      border:1px solid #e2e8f0;
+    }}
+    .bar-funnel-row.drop {{ background:#fff1f2; border-color:#fecdd3; }}
+    .bar-funnel-label {{ font-size:13px; color:#334155; font-weight:600; line-height:1.25; }}
+    .bar-funnel-nums b {{ font-size:18px; }}
+    .bar-funnel-nums span {{ color:#64748b; font-size:12px; margin-left:4px; }}
+    .bar-funnel-track {{ height:10px; background:#e2e8f0; border-radius:999px; overflow:hidden; }}
+    .bar-funnel-row.drop .bar-funnel-track {{ background:#fecdd3; }}
+    .bar-funnel-fill {{ height:100%; background:linear-gradient(90deg, #60a5fa, #2563eb); border-radius:999px; }}
+    .bar-funnel-row.drop .bar-funnel-fill {{ background:linear-gradient(90deg, #fb7185, #e11d48); }}
+    .bar-funnel-pct {{ font-size:12px; color:#64748b; text-align:right; line-height:1.3; }}
+    @media (max-width: 900px) {{
+      .bar-funnel-row {{ grid-template-columns: 1fr 1fr; }}
+      .bar-funnel-track {{ grid-column: 1 / -1; }}
+      .bar-funnel-pct {{ grid-column: 1 / -1; text-align:left; }}
+    }}
     .events-weekday {{ font-size:11px; margin-top:4px; }}
     .events-del {{ white-space:nowrap; font-size:12px; }}
     .events-past {{ margin-top:16px; }}
