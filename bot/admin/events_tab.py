@@ -136,11 +136,12 @@ def _row_html(
                 f'<a class="pill events-tickets-link" '
                 f'href="{_events_link(fmt, tickets=eid)}">билеты</a>'
             )
+        del_class = "events-del" + (" events-del-with-tickets" if show_tickets else "")
         delete_cell = (
-            f'<td class="events-del">'
-            f"{tickets_link}"
+            f'<td class="{del_class}">'
             f'<label><input type="checkbox" name="e_delete" value="{_h(eid)}"> скрыть</label>'
             f'<label class="events-purge"><input type="checkbox" name="e_purge" value="{_h(eid)}"> удалить</label>'
+            f"{tickets_link}"
             f"</td>"
         )
     else:

@@ -2324,7 +2324,14 @@ def render_admin_html(
     table.events-edit .events-col-host {{ width:150px; }}
     table.events-edit .events-col-desc {{ width:140px; }}
     table.events-edit .events-col-url {{ width:150px; }}
-    table.events-edit .events-del {{ width:108px; }}
+    table.events-edit .events-del {{ width:100px; }}
+    table.events-edit th.events-col-addr,
+    table.events-edit th.events-col-price,
+    table.events-edit th.events-col-url,
+    table.events-edit th.events-col-host,
+    table.events-edit th.events-col-desc {{
+      padding-left:18px;
+    }}
     table.events-edit input[type="date"] {{
       width:132px; max-width:100%;
     }}
@@ -2407,11 +2414,15 @@ def render_admin_html(
     .events-weekday {{ font-size:11px; margin-top:4px; }}
     .events-del {{
       white-space:nowrap; font-size:12px;
-      display:flex; flex-direction:column; align-items:flex-start; gap:4px;
+      display:flex; flex-direction:column; align-items:flex-start; gap:3px;
+      vertical-align:top;
     }}
-    .events-del label {{ display:flex; align-items:center; gap:4px; margin:0; }}
+    .events-del label {{ display:flex; align-items:center; gap:5px; margin:0; line-height:1.25; }}
+    .events-del input[type="checkbox"] {{ margin:0; flex:0 0 auto; }}
     .events-past {{ margin-top:16px; }}
-    .events-tickets-link {{ display:inline-block; margin:0; padding:3px 8px; font-size:12px; line-height:1.2; }}
+    .events-tickets-link {{
+      display:inline-block; margin:2px 0 0; padding:2px 8px; font-size:11px; line-height:1.2;
+    }}
     .events-tickets-panel {{ margin-bottom:16px; border:1px solid #c4b5fd; }}
     .inline-form {{ display:inline; }}
     .ticket-resend-form {{ margin-top:10px; }}
