@@ -555,6 +555,9 @@ def _booking_from_row(row: dict, event: dict | None = None) -> dict:
         "changed_at": _short_dt(changed_at),
         "created_at_raw": row.get("created_at") or "",
         "changed_at_raw": changed_at or "",
+        "confirmed_at_raw": row.get("confirmed_at") or "",
+        "cancelled_at_raw": row.get("cancelled_at") or "",
+        "annulled_at_raw": row.get("annulled_at") or "",
         "event_date": row.get("event_date") or "",
         "event_time": row.get("event_time") or "",
         "location": row.get("location") or "",
@@ -1294,6 +1297,83 @@ def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
     )
 
 
+def _user_tickets_html(bookings: list[dict]) -> str:
+    """Cards for tickets the guest actually received (confirmed_at), including later cancels."""
+    tickets = [
+        b
+        for b in bookings
+        if b.get("status") == "confirmed" or b.get("confirmed_at_raw")
+    ]
+    if not tickets:
+        return '<p class="muted">Полученных билетов пока нет.</p>'
+
+    def _sort_key(b: dict):
+        return (
+            b.get("event_date") or "",
+            b.get("event_time") or "",
+            str(b.get("id") or ""),
+        )
+
+    tickets = sorted(tickets, key=_sort_key, reverse=True)
+    status_labels = {
+        "confirmed": "получен",
+        "cancelled": "отменён",
+        "annulled": "аннулирован",
+        "booked": "бронь",
+    }
+    cards = []
+    total = len(tickets)
+    for idx, row in enumerate(tickets):
+        status = row.get("status") or ""
+        status_mod = status if status in {"confirmed", "cancelled", "annulled"} else "other"
+        status_l = status_labels.get(status, row.get("status_label") or status or "—")
+        fmt = FORMAT_LABELS.get(row.get("format"), row.get("format") or "—")
+        loc = row.get("location") or "—"
+        if row.get("address"):
+            loc = f"{loc}, {row.get('address')}"
+        facts = [
+            f"<div><dt>Тип</dt><dd>{_h(fmt)}</dd></div>",
+            f"<div><dt>Дата</dt><dd>{_h(row.get('event_date') or '—')}</dd></div>",
+            f"<div><dt>Время</dt><dd>{_h(row.get('event_time') or '—')}</dd></div>",
+            f"<div><dt>Гости</dt><dd>{_h(str(row.get('guests') or 0))}</dd></div>",
+            f"<div><dt>Локация</dt><dd class='ticket-loc'>{_h(loc)}</dd></div>",
+        ]
+        if row.get("confirmed_at_raw"):
+            facts.append(
+                f"<div><dt>Выдан</dt><dd>{_h(_fmt_msk(row.get('confirmed_at_raw')))}</dd></div>"
+            )
+        note = ""
+        if status == "cancelled":
+            when = _fmt_msk(row.get("cancelled_at_raw")) if row.get("cancelled_at_raw") else ""
+            note = (
+                f'<p class="ticket-card-note ticket-card-note--cancelled">'
+                f"<b>Билет отменён</b>{' · ' + _h(when) if when and when != '—' else ''}</p>"
+            )
+        elif status == "annulled":
+            when = _fmt_msk(row.get("annulled_at_raw")) if row.get("annulled_at_raw") else ""
+            note = (
+                f'<p class="ticket-card-note ticket-card-note--annul">'
+                f"<b>Билет аннулирован</b>{' · ' + _h(when) if when and when != '—' else ''}</p>"
+            )
+        cards.append(
+            f'<article class="screen-card ticket-card ticket-card--{status_mod}" data-idx="{idx}">'
+            f'<div class="screen-card-top">'
+            f'<span class="screen-card-title">Билет #{_h(str(row.get("id")))}</span>'
+            f'<span class="badge screen-status screen-status--{status_mod}">{_h(status_l)}</span>'
+            f"</div>"
+            f'<dl class="screen-card-facts">{"".join(facts)}</dl>'
+            f"{note}"
+            f'<div class="screen-card-nav muted">{idx + 1} / {total}</div>'
+            "</article>"
+        )
+    return (
+        '<div class="screen-carousel" tabindex="0">'
+        + "".join(cards)
+        + "</div>"
+        + '<p class="muted screen-carousel-hint">Листайте карточки билетов вбок</p>'
+    )
+
+
 def _user_extra_details(
     title: str,
     body: str,
@@ -1384,6 +1464,7 @@ def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) 
             '<div class="user-extra-stack">'
             f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or []), tone="activity")}'
             f'{_user_extra_details("Розыгрыш", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}), tone="raffle")}'
+            f'{_user_extra_details("Билеты", _user_tickets_html(user["bookings"]), tone="tickets")}'
             f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]), tone="reminders")}'
             "</div>"
             f'{_booking_table(bookings, show_format=True)}'
@@ -2020,12 +2101,14 @@ def render_admin_html(
     .metric.tone-best, .metric.tone-hitloto, .metric.tone-proverka {{ border-width:1px; }}
     .branch-grid {{ display:grid; grid-template-columns: 1fr; gap:14px; margin-top:18px; }}
     .branch-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:16px; padding:16px; }}
-    .user-extra-stack {{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; margin:12px 0 18px; align-items:start; }}
+    .user-extra-stack {{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px; margin:12px 0 18px; align-items:start; }}
     .user-extra-details {{ background:#f8fafc; border:1px solid var(--line); border-radius:14px; overflow:hidden; }}
     .user-extra-activity {{ background:#eff6ff; border-color:#93c5fd; }}
     .user-extra-activity .user-extra-summary strong {{ color:#1d4ed8; }}
     .user-extra-raffle {{ background:#fff7ed; border-color:#fdba74; }}
     .user-extra-raffle .user-extra-summary strong {{ color:#c2410c; }}
+    .user-extra-tickets {{ background:#f5f3ff; border-color:#c4b5fd; }}
+    .user-extra-tickets .user-extra-summary strong {{ color:#6d28d9; }}
     .user-extra-reminders {{ background:#f0fdf4; border-color:#86efac; }}
     .user-extra-reminders .user-extra-summary strong {{ color:#15803d; }}
     .user-extra-summary {{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:14px 16px; cursor:pointer; list-style:none; }}
@@ -2079,6 +2162,18 @@ def render_admin_html(
     }}
     .screen-card-nav {{ margin-top:8px; font-size:11px; }}
     .screen-carousel-hint {{ margin:0; font-size:12px; }}
+    .ticket-card .ticket-loc {{ white-space:normal; word-break:break-word; }}
+    .ticket-card-note {{
+      margin:8px 0 0; padding:8px 10px; border-radius:10px; font-size:12px; line-height:1.4;
+    }}
+    .ticket-card-note--cancel {{ background:#fef2f2; color:#b91c1c; }}
+    .ticket-card-note--annul {{ background:#f1f5f9; color:#475569; }}
+    .ticket-card--confirmed {{ border-left-color:#22c55e; }}
+    .ticket-card--cancelled {{ border-left-color:#ef4444; }}
+    .ticket-card--annulled {{ border-left-color:#64748b; }}
+    .screen-status--annulled {{ background:#64748b; }}
+    .screen-status--cancelled {{ background:#ef4444; }}
+    .screen-status--confirmed {{ background:#22c55e; }}
     .funnel-layout {{ display:flex; flex-direction:column; gap:10px; margin-top:14px; }}
     .funnel-row {{ display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:stretch; }}
     .funnel-step {{ background:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; padding:12px 14px; min-height:78px; }}
@@ -2168,7 +2263,7 @@ def render_admin_html(
       .branch-metrics {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
     }}
     @media (max-width: 1100px) and (min-width: 901px) {{
-      .command-grid {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
+      .user-extra-stack, .command-grid {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
       .branch-metrics {{ grid-template-columns: repeat(6, minmax(0,1fr)); }}
       .branch-metric {{ padding:10px; }}
       .branch-metric b {{ font-size:18px; }}
