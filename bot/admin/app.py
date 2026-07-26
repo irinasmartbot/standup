@@ -2491,10 +2491,12 @@ def _filters_from_request(request: web.Request) -> dict:
     date_to = request.query.get("date_to", "").strip()
     tab = request.query.get("tab", "date").strip() or "date"
     all_period = request.query.get("all", "").strip() == "1"
+    # Analytics default: whole period (not today), unless dates are set explicitly.
     if tab == "analytics" and not all_period and not date_from and not date_to:
-        today = datetime.now(MSK).strftime("%Y-%m-%d")
-        date_from = today
-        date_to = today
+        all_period = True
+    if all_period:
+        date_from = ""
+        date_to = ""
     ef = request.query.get("ef", "").strip()
     if ef not in ("best", "proverka", "hitloto"):
         ef = "best" if tab == "events" else ""
