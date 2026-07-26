@@ -2414,14 +2414,20 @@ def render_admin_html(
     .events-weekday {{ font-size:11px; margin-top:4px; }}
     .events-del {{
       white-space:nowrap; font-size:12px;
-      display:flex; flex-direction:column; align-items:flex-start; gap:3px;
+      display:flex; flex-direction:column; align-items:flex-start; gap:4px;
       vertical-align:top;
     }}
-    .events-del label {{ display:flex; align-items:center; gap:5px; margin:0; line-height:1.25; }}
-    .events-del input[type="checkbox"] {{ margin:0; flex:0 0 auto; }}
+    .events-del label {{
+      display:grid; grid-template-columns:16px auto; align-items:center; gap:6px;
+      margin:0; line-height:1.2; cursor:pointer;
+    }}
+    table.events-edit .events-del input[type="checkbox"] {{
+      display:inline-block; width:14px; height:14px; min-width:14px; max-width:14px;
+      margin:0; padding:0; flex:none; appearance:auto;
+    }}
     .events-past {{ margin-top:16px; }}
     .events-tickets-link {{
-      display:inline-block; margin:2px 0 0; padding:2px 8px; font-size:11px; line-height:1.2;
+      display:inline-block; margin:1px 0 0; padding:2px 8px; font-size:11px; line-height:1.2;
     }}
     .events-tickets-panel {{ margin-bottom:16px; border:1px solid #c4b5fd; }}
     .inline-form {{ display:inline; }}
