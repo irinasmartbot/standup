@@ -2294,26 +2294,55 @@ def render_admin_html(
     .events-edit-hint[hidden] {{ display:none; }}
     .events-errors {{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; border-radius:12px; padding:10px 14px; margin-bottom:12px; }}
     .events-errors ul {{ margin:8px 0 0; padding-left:18px; }}
-    table.events-edit {{ table-layout:auto; min-width:1400px; }}
-    table.events-edit th {{ white-space:nowrap; }}
-    table.events-edit input {{ width:100%; min-width:96px; padding:8px 10px; font-size:13px; }}
-    table.events-edit input[type="date"], table.events-edit input[type="time"],
-    table.events-edit input[type="number"] {{ min-width:120px; }}
-    table.events-edit .events-id {{ width:56px; }}
-    table.events-edit .events-col-addr input {{ min-width:160px; max-width:420px; }}
-    table.events-edit .events-col-url input {{ min-width:120px; max-width:420px; }}
-    table.events-edit .events-col-wide input {{ min-width:100px; max-width:320px; }}
+    table.events-edit {{
+      table-layout:fixed; width:100%; min-width:1480px; border-collapse:collapse;
+    }}
+    table.events-edit th, table.events-edit td {{
+      padding:10px 8px; vertical-align:top; text-align:left;
+    }}
+    table.events-edit th {{
+      white-space:nowrap; vertical-align:bottom; padding-bottom:8px;
+    }}
+    table.events-edit input {{
+      display:block; width:100%; box-sizing:border-box;
+      padding:8px 10px; font-size:13px; margin:0;
+    }}
+    table.events-edit .events-id {{ width:58px; }}
+    table.events-edit .events-col-date {{ width:148px; }}
+    table.events-edit .events-col-time {{ width:168px; }}
+    table.events-edit .events-col-loc {{ width:152px; }}
+    table.events-edit .events-col-addr {{ width:190px; }}
+    table.events-edit .events-col-seats {{ width:72px; }}
+    table.events-edit .events-col-price {{ width:78px; }}
+    table.events-edit .events-col-host {{ width:150px; }}
+    table.events-edit .events-col-desc {{ width:140px; }}
+    table.events-edit .events-col-url {{ width:150px; }}
+    table.events-edit .events-del {{ width:108px; }}
+    table.events-edit input[type="date"] {{
+      width:132px; max-width:100%;
+    }}
+    table.events-edit input[type="time"] {{
+      width:118px; max-width:100%;
+    }}
+    table.events-edit input[name="e_location"] {{
+      width:136px; max-width:100%;
+    }}
+    table.events-edit input[name="e_price"],
+    table.events-edit input[name="e_seats"] {{
+      width:64px; max-width:100%;
+    }}
     table.events-edit input.events-grow {{
       width:120px; max-width:100%; transition: width .12s ease;
       text-overflow:ellipsis; overflow:hidden; white-space:nowrap;
     }}
     table.events-edit input.events-grow:focus {{
-      text-overflow:clip; overflow:visible;
+      text-overflow:clip; overflow:visible; position:relative; z-index:2;
     }}
     .events-time-cell, .events-loc-cell {{ vertical-align:top; }}
     .events-tpls {{
       display:flex; flex-wrap:nowrap; gap:4px; margin-top:6px;
-      align-items:center; overflow-x:auto; max-width:100%;
+      align-items:center; justify-content:flex-start;
+      overflow-x:auto; max-width:100%;
     }}
     .events-tpl {{
       border:1px solid #cbd5e1; background:#f8fafc; color:#334155;

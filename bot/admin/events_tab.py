@@ -109,9 +109,9 @@ def _row_html(
     paid_cells = ""
     if paid:
         paid_cells = (
-            f'<td class="events-col-wide"><input name="e_price" type="number" min="0" step="1" value="{_h(price)}" placeholder="0"></td>'
+            f'<td class="events-col-price"><input name="e_price" type="number" min="0" step="1" value="{_h(price)}" placeholder="0"></td>'
             f'<td class="events-col-url"><input class="events-grow" name="e_payment" value="{_h(pay)}" placeholder="https://…"></td>'
-            f'<td class="events-col-wide"><input class="events-grow" name="e_host" value="{_h(host)}" placeholder="Кто в составе"></td>'
+            f'<td class="events-col-host"><input class="events-grow" name="e_host" value="{_h(host)}" placeholder="Кто в составе"></td>'
         )
     else:
         paid_cells = (
@@ -123,7 +123,8 @@ def _row_html(
     seats_cell = ""
     if show_seats:
         seats_cell = (
-            f'<td><input name="e_seats" type="number" min="0" value="{_h(seats)}" placeholder="мест"></td>'
+            f'<td class="events-col-seats">'
+            f'<input name="e_seats" type="number" min="0" value="{_h(seats)}" placeholder="мест"></td>'
         )
     else:
         seats_cell = f'<input type="hidden" name="e_seats" value="{_h(seats or "0")}">'
@@ -160,17 +161,17 @@ def _row_html(
         f'<td class="events-id"><input type="hidden" name="e_id" value="{_h(eid)}">'
         f'<span class="muted">{_h(eid or "—")}</span>'
         f'<div class="muted events-weekday">{_h(weekday)}</div></td>'
-        f'<td><input name="e_date" type="date" value="{_h(date_val)}"></td>'
-        f'<td class="events-time-cell">'
+        f'<td class="events-col-date"><input name="e_date" type="date" value="{_h(date_val)}"></td>'
+        f'<td class="events-col-time events-time-cell">'
         f'<input name="e_time" type="time" value="{_h(time_val)}" list="events-time-presets">'
         f'<div class="events-tpls">{time_presets}</div></td>'
-        f'<td class="events-loc-cell">'
+        f'<td class="events-col-loc events-loc-cell">'
         f'<input name="e_location" value="{_h(loc)}" placeholder="Площадка" list="events-location-presets">'
         f'<div class="events-tpls">{loc_presets}</div></td>'
         f'<td class="events-col-addr"><input class="events-grow" name="e_address" value="{_h(addr)}" placeholder="Адрес"></td>'
         f"{seats_cell}"
         f"{paid_cells}"
-        f'<td class="events-col-wide"><input class="events-grow" name="e_description" value="{_h(desc)}" placeholder="Описание"></td>'
+        f'<td class="events-col-desc"><input class="events-grow" name="e_description" value="{_h(desc)}" placeholder="Описание"></td>'
         f'<td class="events-col-url"><input class="events-grow" name="e_image" value="{_h(image)}" placeholder="URL картинки"></td>'
         f"{delete_cell}"
         "</tr>"
@@ -186,8 +187,14 @@ def _table(
     show_tickets: bool = True,
     show_seats: bool = False,
 ) -> str:
-    head_paid = "<th>Цена</th><th>Оплата</th><th>Состав</th>" if paid else ""
-    head_seats = "<th>Мест</th>" if show_seats else ""
+    head_paid = (
+        '<th class="events-col-price">Цена</th>'
+        '<th class="events-col-url">Оплата</th>'
+        '<th class="events-col-host">Состав</th>'
+        if paid
+        else ""
+    )
+    head_seats = '<th class="events-col-seats">Мест</th>' if show_seats else ""
     body = "".join(
         _row_html(e, paid, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)
         for e in events
@@ -207,9 +214,16 @@ def _table(
         f"{loc_opts}</datalist>"
         '<div class="table-wrap events-table-wrap"><table class="events-edit">'
         "<thead><tr>"
-        f"<th>ID</th><th>Дата</th><th>Время</th><th>Площадка</th><th>Адрес</th>{head_seats}"
+        '<th class="events-id">ID</th>'
+        '<th class="events-col-date">Дата</th>'
+        '<th class="events-col-time">Время</th>'
+        '<th class="events-col-loc">Площадка</th>'
+        '<th class="events-col-addr">Адрес</th>'
+        f"{head_seats}"
         f"{head_paid}"
-        "<th>Описание</th><th>Картинка</th><th></th>"
+        '<th class="events-col-desc">Описание</th>'
+        '<th class="events-col-url">Картинка</th>'
+        '<th class="events-del"></th>'
         "</tr></thead>"
         f"<tbody>{body}</tbody></table></div>"
     )
