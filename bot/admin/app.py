@@ -1615,11 +1615,11 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "bot_unblocked": "Разблокировали бота",
     }
     # Always list every known step in these groups (even if 0).
-    always_show_groups = {"Розыгрыш", "Ветки", "Брони · Проверка", "Команды меню"}
+    always_show_groups = {"Розыгрыш", "Ветки", "Брони · Проверка", "Запуск команд меню"}
     event_groups = [
         ("Вход в бот", ["bot_start"]),
         (
-            "Команды меню",
+            "Запуск команд меню",
             [
                 "cmd_my_bookings",
                 "cmd_main_menu",
@@ -1805,14 +1805,23 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             "</tr>"
         )
     starts_table = (
-        '<section class="card analytics-section">'
-        "<h2>Входы в бот по ссылкам</h2>"
-        '<p class="muted">Все заходы и уникальные люди.</p>'
+        '<section class="card details-card analytics-section">'
+        '<details data-persist-key="analytics:starts-by-link">'
+        '<summary class="details-summary">'
+        "<div>"
+        "<strong>Входы в бот по ссылкам</strong>"
+        '<span class="muted">Все заходы и уникальные люди</span>'
+        "</div>"
+        '<span class="details-action"><span class="closed-label">Развернуть</span>'
+        '<span class="open-label">Свернуть</span></span>'
+        "</summary>"
+        '<div class="details-body">'
         '<div class="table-wrap"><table><thead><tr>'
         "<th>Вход</th><th>Все заходы</th><th>Уникальные люди</th>"
         "</tr></thead>"
         f"<tbody>{''.join(payload_rows) or '<tr><td colspan=\"3\" class=\"muted\">Пока нет данных</td></tr>'}</tbody>"
-        "</table></div></section>"
+        "</table></div>"
+        "</div></details></section>"
     )
 
     def _card_cell(events: int, uniques: int) -> str:
@@ -1853,11 +1862,19 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             "</div></div>"
         )
     cards_table = (
-        '<section class="card analytics-section">'
-        "<h2>Просмотры карточек шоу</h2>"
-        '<p class="muted">Открытия карточек по способу поиска.</p>'
+        '<section class="card details-card analytics-section">'
+        '<details data-persist-key="analytics:show-cards">'
+        '<summary class="details-summary">'
+        "<div>"
+        "<strong>Просмотры карточек шоу</strong>"
+        '<span class="muted">Открытия карточек по способу поиска</span>'
+        "</div>"
+        '<span class="details-action"><span class="closed-label">Развернуть</span>'
+        '<span class="open-label">Свернуть</span></span>'
+        "</summary>"
+        '<div class="details-body">'
         f'<div class="show-format-grid">{"".join(show_blocks)}</div>'
-        "</section>"
+        "</div></details></section>"
     )
 
     command_blocks = []
@@ -1880,11 +1897,19 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             "</div>"
         )
     commands_table = (
-        '<section class="card analytics-section">'
-        "<h2>Команды меню</h2>"
-        '<p class="muted">Переходы по командам из меню Telegram · заходы и уникальные люди.</p>'
+        '<section class="card details-card analytics-section">'
+        '<details data-persist-key="analytics:menu-commands">'
+        '<summary class="details-summary">'
+        "<div>"
+        "<strong>Запуск команд меню</strong>"
+        '<span class="muted">Переходы по командам из меню Telegram · заходы и уникальные люди</span>'
+        "</div>"
+        '<span class="details-action"><span class="closed-label">Развернуть</span>'
+        '<span class="open-label">Свернуть</span></span>'
+        "</summary>"
+        '<div class="details-body">'
         f'<div class="command-grid">{"".join(command_blocks)}</div>'
-        "</section>"
+        "</div></details></section>"
     )
 
     raffle_bookings = report.get("raffle_bookings") or {}
