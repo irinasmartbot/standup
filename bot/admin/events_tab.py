@@ -414,27 +414,44 @@ def render_events_tab(
     {past_block}
     <script>
     (function () {{
-      function fitGrow(el) {{
-        if (!el || !el.classList.contains("events-grow")) return;
+      var COMPACT = {{
+        e_address: 180,
+        e_payment: 140,
+        e_host: 130,
+        e_description: 120,
+        e_image: 130
+      }};
+      var EXPAND_MAX = 520;
+      function measure(el) {{
         var style = window.getComputedStyle(el);
-        var minPx = parseFloat(style.minWidth) || 120;
-        var maxPx = parseFloat(style.maxWidth) || 520;
-        // Measure text width via canvas for reliable shrink/grow
-        var canvas = fitGrow._c || (fitGrow._c = document.createElement("canvas"));
+        var canvas = measure._c || (measure._c = document.createElement("canvas"));
         var ctx = canvas.getContext("2d");
         ctx.font = style.font || "13px sans-serif";
         var text = el.value || el.placeholder || "";
-        var pad = 28;
-        var w = Math.ceil(ctx.measureText(text).width + pad);
-        el.style.width = Math.max(minPx, Math.min(maxPx, w)) + "px";
+        return Math.ceil(ctx.measureText(text).width + 28);
+      }}
+      function fitGrow(el, expanded) {{
+        if (!el || !el.classList.contains("events-grow")) return;
+        var compact = COMPACT[el.name] || 120;
+        if (!expanded) {{
+          el.style.width = compact + "px";
+          return;
+        }}
+        var w = measure(el);
+        el.style.width = Math.max(compact, Math.min(EXPAND_MAX, w)) + "px";
       }}
       document.querySelectorAll(".events-form").forEach(function (form) {{
-        form.querySelectorAll("input.events-grow").forEach(fitGrow);
-        form.addEventListener("input", function (ev) {{
-          if (ev.target && ev.target.classList.contains("events-grow")) fitGrow(ev.target);
+        form.querySelectorAll("input.events-grow").forEach(function (el) {{
+          fitGrow(el, false);
         }});
         form.addEventListener("focusin", function (ev) {{
-          if (ev.target && ev.target.classList.contains("events-grow")) fitGrow(ev.target);
+          if (ev.target && ev.target.classList.contains("events-grow")) fitGrow(ev.target, true);
+        }});
+        form.addEventListener("focusout", function (ev) {{
+          if (ev.target && ev.target.classList.contains("events-grow")) fitGrow(ev.target, false);
+        }});
+        form.addEventListener("input", function (ev) {{
+          if (ev.target && ev.target.classList.contains("events-grow")) fitGrow(ev.target, true);
         }});
         form.addEventListener("click", function (ev) {{
           var btn = ev.target.closest("[data-events-tpl]");
@@ -453,7 +470,7 @@ def render_events_tab(
             if (locInput) locInput.value = btn.getAttribute("data-location") || "";
             if (addrInput) {{
               addrInput.value = btn.getAttribute("data-address") || "";
-              fitGrow(addrInput);
+              fitGrow(addrInput, document.activeElement === addrInput);
             }}
           }}
         }});

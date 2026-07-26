@@ -2172,12 +2172,15 @@ def render_admin_html(
     table.events-edit input[type="date"], table.events-edit input[type="time"],
     table.events-edit input[type="number"] {{ min-width:120px; }}
     table.events-edit .events-id {{ width:56px; }}
-    table.events-edit .events-col-addr input {{ min-width:220px; max-width:520px; }}
-    table.events-edit .events-col-url input {{ min-width:180px; max-width:520px; }}
-    table.events-edit .events-col-wide input {{ min-width:140px; max-width:420px; }}
+    table.events-edit .events-col-addr input {{ min-width:160px; max-width:420px; }}
+    table.events-edit .events-col-url input {{ min-width:120px; max-width:420px; }}
+    table.events-edit .events-col-wide input {{ min-width:100px; max-width:320px; }}
     table.events-edit input.events-grow {{
-      width:auto; transition: width .12s ease;
-      field-sizing: content;
+      width:120px; max-width:100%; transition: width .12s ease;
+      text-overflow:ellipsis; overflow:hidden; white-space:nowrap;
+    }}
+    table.events-edit input.events-grow:focus {{
+      text-overflow:clip; overflow:visible;
     }}
     .events-time-cell, .events-loc-cell {{ vertical-align:top; }}
     .events-tpls {{
