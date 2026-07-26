@@ -865,10 +865,10 @@ def _tabs(
 ) -> str:
     if can_view_ops:
         tabs = [
-            ("date", "По дате"),
-            ("bookings", "Все брони"),
-            ("events", "Мероприятия"),
             ("users", "Users"),
+            ("bookings", "Все брони"),
+            ("date", "По дате"),
+            ("events", "Мероприятия"),
             ("analytics", "Аналитика"),
         ]
         if can_view_db:
@@ -1569,7 +1569,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     raffle_overview = report.get("raffle_bookings") or {}
     overview = (
         '<div class="summary analytics-summary">'
-        f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"))}'
+        f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"), css_class="tone-bot-start")}'
         f'{_analytics_metric_card("Зашли · Проверка", by_name.get("branch_proverka"), css_class="tone-proverka")}'
         f'{_analytics_metric_card("Зашли · BEST", by_name.get("branch_best"), css_class="tone-best")}'
         f'{_analytics_metric_card("Зашли · Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto")}'
@@ -2166,12 +2166,34 @@ def render_admin_html(
     .events-flash {{ background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; border-radius:12px; padding:10px 14px; }}
     .events-errors {{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; border-radius:12px; padding:10px 14px; margin-bottom:12px; }}
     .events-errors ul {{ margin:8px 0 0; padding-left:18px; }}
-    table.events-edit {{ table-layout:auto; min-width:1100px; }}
+    table.events-edit {{ table-layout:auto; min-width:1400px; }}
     table.events-edit th {{ white-space:nowrap; }}
-    table.events-edit input {{ width:100%; min-width:72px; padding:7px 8px; font-size:13px; }}
+    table.events-edit input {{ width:100%; min-width:96px; padding:8px 10px; font-size:13px; }}
     table.events-edit input[type="date"], table.events-edit input[type="time"],
-    table.events-edit input[type="number"] {{ min-width:110px; }}
+    table.events-edit input[type="number"] {{ min-width:120px; }}
     table.events-edit .events-id {{ width:56px; }}
+    table.events-edit .events-col-addr input {{ min-width:220px; }}
+    table.events-edit .events-col-url input {{ min-width:180px; }}
+    table.events-edit .events-col-wide input {{ min-width:140px; }}
+    .events-time-cell, .events-loc-cell {{ vertical-align:top; }}
+    .events-tpls {{ display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }}
+    .events-tpl {{
+      border:1px solid #cbd5e1; background:#f8fafc; color:#334155;
+      border-radius:999px; padding:2px 8px; font-size:11px; cursor:pointer;
+    }}
+    .events-tpl:hover {{ background:#e2e8f0; }}
+    .events-purge {{ color:#b91c1c; }}
+    .events-update-btn {{ background:#1d4ed8; }}
+    .events-raffle-badge {{
+      display:inline-block; margin-left:6px; padding:2px 7px; border-radius:999px;
+      background:#fef3c7; color:#92400e; font-size:11px; font-weight:600;
+    }}
+    .metric.tone-bot-start {{
+      background:linear-gradient(180deg, #111827 0%, #1f2937 100%);
+      border-color:#111827; color:#f8fafc; box-shadow:0 10px 24px rgba(15,23,42,.18);
+    }}
+    .metric.tone-bot-start span, .metric.tone-bot-start small {{ color:#cbd5e1; }}
+    .metric.tone-bot-start b {{ color:#fff; font-size:34px; }}
     .events-weekday {{ font-size:11px; margin-top:4px; }}
     .events-del {{ white-space:nowrap; font-size:12px; }}
     .events-past {{ margin-top:16px; }}
@@ -2683,7 +2705,14 @@ async def admin_page(request: web.Request) -> web.Response:
                 None, list_event_ticket_holders, int(tickets_id)
             )
         if saved_flag == "1":
-            events_flash = "Сохранено. Афиша в боте обновится сразу."
+            if can_resend:
+                events_flash = (
+                    "Сохранено. Афиша в боте уже с новыми данными. "
+                    "Когда закончите работу с бронями — нажмите «Обновить», "
+                    "чтобы гости получили актуальные билеты."
+                )
+            else:
+                events_flash = "Сохранено. Афиша в боте уже с новыми данными."
         elif saved_flag == "resend":
             ok = request.query.get("ok") or "0"
             fail = request.query.get("fail") or "0"
@@ -2772,6 +2801,31 @@ async def events_resend_ticket_page(request: web.Request) -> web.Response:
 
     event_id_raw = (post.get("event_id") or "").strip()
     booking_id_raw = (post.get("booking_id") or "").strip()
+    resend_all_active = (post.get("resend_all_active") or "").strip() == "1"
+
+    if resend_all_active:
+        from bot.db.events_admin import list_events_for_admin
+
+        loop = asyncio.get_running_loop()
+        bundle = await loop.run_in_executor(None, list_events_for_admin, event_format)
+        ok = fail = 0
+        for event in bundle.get("active") or []:
+            eid = event.get("id")
+            if not eid:
+                continue
+            result = await resend_tickets_for_event_async(int(eid), updated=updated)
+            ok += int(result.get("ok") or 0)
+            fail += int(result.get("fail") or 0)
+        q = urlencode(
+            {
+                "tab": "events",
+                "ef": event_format,
+                "saved": "resend",
+                "ok": str(ok),
+                "fail": str(fail),
+            }
+        )
+        raise web.HTTPFound(f"/admin?{q}")
 
     if event_id_raw.isdigit():
         result = await resend_tickets_for_event_async(int(event_id_raw), updated=updated)
@@ -2860,7 +2914,8 @@ async def events_save_page(request: web.Request) -> web.Response:
         events_bundle = await loop.run_in_executor(None, list_events_for_admin, event_format)
         flash = (
             f"Частично сохранено: {result.get('saved', 0)} · скрыто: {result.get('hidden', 0)}"
-            if result.get("saved") or result.get("hidden")
+            f" · удалено: {result.get('deleted', 0)}"
+            if result.get("saved") or result.get("hidden") or result.get("deleted")
             else ""
         )
         source_label = "PostgreSQL" if _use_postgres(config) else f"SQLite ({config.db_path})"

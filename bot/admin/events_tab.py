@@ -6,6 +6,12 @@ from urllib.parse import urlencode
 
 from bot.db.events_admin import AFISHA_FORMAT_LABELS, AFISHA_FORMATS
 
+TIME_PRESETS = ("19:00", "19:30", "20:00")
+LOCATION_PRESETS = (
+    ("Escobar", "ESCOBAR, м. Площадь Ильича, ул. Сергия Радонежского, 15-17с17"),
+    ("Temple Bar", "Temple Bar, Москва"),
+)
+
 
 def _h(value) -> str:
     return (
@@ -29,10 +35,6 @@ def parse_events_form(post) -> tuple[str, list[dict]]:
     if event_format not in AFISHA_FORMATS:
         event_format = "best"
 
-    ids = post.getall("e_id") if hasattr(post, "getall") else [post.get("e_id")]
-    if ids is None:
-        ids = []
-    # aiohttp MultiDictProxy getall
     def all_vals(name: str) -> list:
         if hasattr(post, "getall"):
             return list(post.getall(name, []))
@@ -52,6 +54,7 @@ def parse_events_form(post) -> tuple[str, list[dict]]:
     payments = all_vals("e_payment")
     hosts = all_vals("e_host")
     deletes = set(all_vals("e_delete"))
+    purges = set(all_vals("e_purge"))
 
     def at(seq, i, default=""):
         return seq[i] if i < len(seq) else default
@@ -74,6 +77,7 @@ def parse_events_form(post) -> tuple[str, list[dict]]:
                 "payment_url": at(payments, i),
                 "host": at(hosts, i),
                 "delete": raw_id in deletes or str(event_id) in deletes,
+                "purge": raw_id in purges or str(event_id) in purges,
             }
         )
     return event_format, rows
@@ -86,6 +90,7 @@ def _row_html(
     fmt: str = "best",
     *,
     show_tickets: bool = True,
+    show_seats: bool = False,
 ) -> str:
     e = event or {}
     eid = "" if blank else str(e.get("id") or "")
@@ -104,17 +109,24 @@ def _row_html(
     paid_cells = ""
     if paid:
         paid_cells = (
-            f'<td><input name="e_price" type="number" min="0" step="1" value="{_h(price)}" placeholder="0"></td>'
-            f'<td><input name="e_payment" value="{_h(pay)}" placeholder="https://…"></td>'
-            f'<td><input name="e_host" value="{_h(host)}" placeholder="Кто в составе"></td>'
+            f'<td class="events-col-wide"><input name="e_price" type="number" min="0" step="1" value="{_h(price)}" placeholder="0"></td>'
+            f'<td class="events-col-url"><input name="e_payment" value="{_h(pay)}" placeholder="https://…"></td>'
+            f'<td class="events-col-wide"><input name="e_host" value="{_h(host)}" placeholder="Кто в составе"></td>'
         )
     else:
         paid_cells = (
-            '<td class="muted">—<input type="hidden" name="e_price" value="0">'
+            '<input type="hidden" name="e_price" value="0">'
             '<input type="hidden" name="e_payment" value="">'
-            '<input type="hidden" name="e_host" value=""></td>'
-            '<td class="muted">—</td><td class="muted">—</td>'
+            '<input type="hidden" name="e_host" value="">'
         )
+
+    seats_cell = ""
+    if show_seats:
+        seats_cell = (
+            f'<td><input name="e_seats" type="number" min="0" value="{_h(seats)}" placeholder="мест"></td>'
+        )
+    else:
+        seats_cell = f'<input type="hidden" name="e_seats" value="{_h(seats or "0")}">'
 
     if eid:
         tickets_link = ""
@@ -125,24 +137,41 @@ def _row_html(
             )
         delete_cell = (
             f'<td class="events-del">'
-            f'<label><input type="checkbox" name="e_delete" value="{_h(eid)}"> скрыть</label>'
+            f'<label><input type="checkbox" name="e_delete" value="{_h(eid)}"> скрыть</label><br>'
+            f'<label class="events-purge"><input type="checkbox" name="e_purge" value="{_h(eid)}"> удалить</label>'
             f"{tickets_link}</td>"
         )
     else:
         delete_cell = '<td class="muted">новая</td>'
+
+    # datalist once per row is redundant; keep one global in table footer via first row only — use shared ids
+    loc_presets = "".join(
+        f'<button type="button" class="events-tpl" data-events-tpl="location" '
+        f'data-location="{_h(name)}" data-address="{_h(address)}">{_h(name)}</button>'
+        for name, address in LOCATION_PRESETS
+    )
+    time_presets = "".join(
+        f'<button type="button" class="events-tpl" data-events-tpl="time" data-value="{_h(t)}">{_h(t)}</button>'
+        for t in TIME_PRESETS
+    )
+
     return (
         "<tr>"
         f'<td class="events-id"><input type="hidden" name="e_id" value="{_h(eid)}">'
         f'<span class="muted">{_h(eid or "—")}</span>'
         f'<div class="muted events-weekday">{_h(weekday)}</div></td>'
         f'<td><input name="e_date" type="date" value="{_h(date_val)}"></td>'
-        f'<td><input name="e_time" type="time" value="{_h(time_val)}"></td>'
-        f'<td><input name="e_location" value="{_h(loc)}" placeholder="Площадка"></td>'
-        f'<td><input name="e_address" value="{_h(addr)}" placeholder="Адрес"></td>'
-        f'<td><input name="e_seats" type="number" min="0" value="{_h(seats)}" placeholder="мест"></td>'
+        f'<td class="events-time-cell">'
+        f'<input name="e_time" type="time" value="{_h(time_val)}" list="events-time-presets">'
+        f'<div class="events-tpls">{time_presets}</div></td>'
+        f'<td class="events-loc-cell">'
+        f'<input name="e_location" value="{_h(loc)}" placeholder="Площадка" list="events-location-presets">'
+        f'<div class="events-tpls">{loc_presets}</div></td>'
+        f'<td class="events-col-addr"><input name="e_address" value="{_h(addr)}" placeholder="Адрес"></td>'
+        f"{seats_cell}"
         f"{paid_cells}"
-        f'<td><input name="e_description" value="{_h(desc)}" placeholder="Описание"></td>'
-        f'<td><input name="e_image" value="{_h(image)}" placeholder="URL картинки"></td>'
+        f'<td class="events-col-wide"><input name="e_description" value="{_h(desc)}" placeholder="Описание"></td>'
+        f'<td class="events-col-url"><input name="e_image" value="{_h(image)}" placeholder="URL картинки"></td>'
         f"{delete_cell}"
         "</tr>"
     )
@@ -155,17 +184,30 @@ def _table(
     fmt: str = "best",
     *,
     show_tickets: bool = True,
+    show_seats: bool = False,
 ) -> str:
-    head_paid = "<th>Цена</th><th>Оплата</th><th>Состав</th>" if paid else "<th></th><th></th><th></th>"
-    body = "".join(_row_html(e, paid, fmt=fmt, show_tickets=show_tickets) for e in events)
+    head_paid = "<th>Цена</th><th>Оплата</th><th>Состав</th>" if paid else ""
+    head_seats = "<th>Мест</th>" if show_seats else ""
+    body = "".join(
+        _row_html(e, paid, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)
+        for e in events
+    )
     body += "".join(
-        _row_html(None, paid, blank=True, fmt=fmt, show_tickets=show_tickets)
+        _row_html(
+            None, paid, blank=True, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats
+        )
         for _ in range(blank_rows)
     )
+    time_opts = "".join(f'<option value="{_h(t)}">' for t in TIME_PRESETS)
+    loc_opts = "".join(f'<option value="{_h(name)}">' for name, _ in LOCATION_PRESETS)
     return (
+        '<datalist id="events-time-presets">'
+        f"{time_opts}</datalist>"
+        '<datalist id="events-location-presets">'
+        f"{loc_opts}</datalist>"
         '<div class="table-wrap events-table-wrap"><table class="events-edit">'
         "<thead><tr>"
-        "<th>ID</th><th>Дата</th><th>Время</th><th>Площадка</th><th>Адрес</th><th>Мест</th>"
+        f"<th>ID</th><th>Дата</th><th>Время</th><th>Площадка</th><th>Адрес</th>{head_seats}"
         f"{head_paid}"
         "<th>Описание</th><th>Картинка</th><th></th>"
         "</tr></thead>"
@@ -186,6 +228,8 @@ def render_events_tab(
     fmt = event_format if event_format in AFISHA_FORMATS else "best"
     bundle = bundle or {"active": [], "past": [], "hidden": []}
     paid = fmt in {"best", "hitloto"}
+    show_seats = fmt == "proverka"
+    show_tickets = can_resend_tickets and fmt == "best"
     sub = "".join(
         f'<a class="pill {"active" if key == fmt else ""}" href="{_events_link(key)}">{label}</a>'
         for key, label in AFISHA_FORMAT_LABELS.items()
@@ -199,44 +243,53 @@ def render_events_tab(
             + "</ul></div>"
         )
 
-    if can_resend_tickets:
+    if fmt == "best":
+        if can_resend_tickets:
+            note = (
+                '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
+                "Пустые нижние строки — для быстрого добавления.<br>"
+                "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить». "
+                "Когда закончите работу с бронями — «Обновить», чтобы гости получили актуальные билеты.<br>"
+                "«Скрыть» убирает из бота; «удалить» — насовсем (только если нет броней). "
+                "Вернуть скрытые — в блоке «Скрытые».</p>"
+            )
+        else:
+            note = (
+                '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
+                "Пустые нижние строки — для быстрого добавления.<br>"
+                "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить».<br>"
+                "«Скрыть» убирает из бота; «удалить» — насовсем (только если нет броней). "
+                "Вернуть скрытые — в блоке «Скрытые».</p>"
+            )
+    elif fmt == "hitloto":
         note = (
-            '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
-            "Пустые нижние строки — для быстрого добавления.<br>"
-            "<b>Смена времени или площадки:</b> правьте ту же строку и сохраните — брони "
-            "остаются на этом шоу и подтянут новые данные.<br>"
-            "«билеты» — кто уже получил билет и переотправка. "
-            "«Скрыть» убирает из бота; вернуть — в блоке «Скрытые».</p>"
-            if fmt == "best"
-            else '<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
-            "<b>Смена времени/площадки:</b> правьте ту же строку. "
-            "«билеты» — список получивших и переотправка.</p>"
+            '<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
+            "<b>Смена времени/площадки:</b> правьте ту же строку и «Сохранить». "
+            "«Скрыть» / «удалить» — справа.</p>"
         )
     else:
         note = (
-            '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
-            "Пустые нижние строки — для быстрого добавления.<br>"
-            "<b>Смена времени или площадки:</b> правьте ту же строку и сохраните — брони "
-            "остаются на этом шоу.<br>"
-            "«Скрыть» убирает из бота; вернуть — в блоке «Скрытые».</p>"
-            if fmt == "best"
-            else '<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
-            "<b>Смена времени/площадки:</b> правьте ту же строку. "
-            "«Скрыть» убирает из бота; вернуть — в блоке «Скрытые».</p>"
+            '<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
+            "<b>Смена времени/площадки:</b> правьте ту же строку и «Сохранить». "
+            "«Скрыть» / «удалить» — справа.</p>"
         )
 
     holders = ticket_holders or []
     tickets_panel = ""
-    if can_resend_tickets and tickets_event_id:
+    if show_tickets and tickets_event_id:
         rows = []
         for h in holders:
             tid = h.get("telegram_id") or "—"
             uname = f"@{h.get('username')}" if h.get("username") else "—"
             got = "да" if h.get("has_ticket_msg") else "нет msg id"
+            is_raffle = (h.get("booking_format") or "") == "rozygrysh"
+            guest = _h(h.get("name") or "—")
+            if is_raffle:
+                guest += ' <span class="badge events-raffle-badge">розыгрыш</span>'
             rows.append(
                 "<tr>"
                 f"<td>{_h(h.get('booking_id'))}</td>"
-                f"<td>{_h(h.get('name') or '—')}<br><span class='muted'>{_h(uname)}</span></td>"
+                f"<td>{guest}<br><span class='muted'>{_h(uname)}</span></td>"
                 f"<td>{_h(tid)}</td>"
                 f"<td>{_h(h.get('phone') or '—')}</td>"
                 f"<td>{_h(h.get('guests'))}</td>"
@@ -256,6 +309,7 @@ def render_events_tab(
     <section class="card analytics-section events-tickets-panel">
       <h2>Билеты по шоу #{_h(tickets_event_id)}</h2>
       <p class="muted">Показаны только брони со статусом «подтверждено» (билет получен).
+      Метка «розыгрыш» — билет выдан в рамках розыгрыша BEST.
       Переотправка шлёт новый билет с текущими датой/временем/местом из афиши.</p>
       <div class="events-toolbar">
         <form method="post" action="/admin/events/resend-ticket">
@@ -282,19 +336,24 @@ def render_events_tab(
     def _archive_block(title: str, items: list[dict], persist_key: str, hint: str) -> str:
         if not items:
             return ""
-        rows_html = "".join(
-            "<tr>"
-            f'<td><label><input type="checkbox" name="e_restore" value="{_h(e.get("id"))}"> '
-            f'{_h(e.get("id"))}</label></td>'
-            f"<td>{_h(e.get('date_display'))}</td>"
-            f"<td>{_h(e.get('time'))}</td>"
-            f"<td>{_h(e.get('location'))}</td>"
-            f"<td>{_h(e.get('address'))}</td>"
-            f"<td>{_h(e.get('max_seats'))}</td>"
-            f"<td>{_h(e.get('price'))}</td>"
-            "</tr>"
-            for e in items
-        )
+        seat_th = "<th>Мест</th>" if show_seats else ""
+        price_th = "<th>Цена</th>" if paid else ""
+        rows_html = []
+        for e in items:
+            cells = [
+                f'<td><label><input type="checkbox" name="e_restore" value="{_h(e.get("id"))}"> '
+                f'{_h(e.get("id"))}</label></td>',
+                f"<td>{_h(e.get('date_display'))}</td>",
+                f"<td>{_h(e.get('time'))}</td>",
+                f"<td>{_h(e.get('location'))}</td>",
+                f"<td>{_h(e.get('address'))}</td>",
+            ]
+            if show_seats:
+                cells.append(f"<td>{_h(e.get('max_seats'))}</td>")
+            if paid:
+                cells.append(f"<td>{_h(e.get('price'))}</td>")
+            rows_html.append("<tr>" + "".join(cells) + "</tr>")
+        rows_html = "".join(rows_html)
         return (
             f'<section class="card details-card analytics-section events-past">'
             f'<details data-persist-key="{_h(persist_key)}">'
@@ -312,7 +371,7 @@ def render_events_tab(
             "</div>"
             '<div class="table-wrap"><table><thead><tr>'
             "<th>Вернуть · ID</th><th>Дата</th><th>Время</th><th>Площадка</th>"
-            "<th>Адрес</th><th>Мест</th><th>Цена</th>"
+            f"<th>Адрес</th>{seat_th}{price_th}"
             f"</tr></thead><tbody>{rows_html}</tbody></table></div>"
             "</form></div></details></section>"
         )
@@ -330,6 +389,19 @@ def render_events_tab(
         "Убраны из бота · отметьте и нажмите «Вернуть»",
     )
 
+    update_btn = ""
+    if show_tickets:
+        update_btn = (
+            f'<form method="post" action="/admin/events/resend-ticket" class="inline-form" '
+            f'onsubmit="return confirm(\'Переотправить актуальные билеты всем подтверждённым '
+            f'гостям по всем актуальным шоу BEST?\');">'
+            f'<input type="hidden" name="ef" value="{_h(fmt)}">'
+            f'<input type="hidden" name="resend_all_active" value="1">'
+            f'<input type="hidden" name="updated" value="1">'
+            '<button type="submit" class="events-update-btn">Обновить</button>'
+            "</form>"
+        )
+
     return f"""
     <div class="filters events-filters">
       <div class="events-subtabs">{sub}</div>
@@ -339,19 +411,44 @@ def render_events_tab(
     <section class="card analytics-section">
       <h2>Афиша · {_h(AFISHA_FORMAT_LABELS.get(fmt, fmt))}</h2>
       {note}
-      <form method="post" action="/admin/events/save" class="events-form">
+      <div class="events-toolbar">
+        <button type="submit" form="events-save-form">Сохранить</button>
+        {update_btn}
+        <a class="pill" href="{_events_link(fmt)}">Отменить правки</a>
+        <span class="muted">Актуальных: <b>{len(bundle.get("active") or [])}</b></span>
+      </div>
+      <form method="post" action="/admin/events/save" class="events-form" id="events-save-form">
         <input type="hidden" name="ef" value="{_h(fmt)}">
-        <div class="events-toolbar">
-          <button type="submit">Сохранить / обновить</button>
-          <a class="pill" href="{_events_link(fmt)}">Отменить правки</a>
-          <span class="muted">Актуальных: <b>{len(bundle.get("active") or [])}</b></span>
-        </div>
-        {_table(bundle.get("active") or [], paid=paid, blank_rows=3, fmt=fmt, show_tickets=can_resend_tickets)}
+        {_table(bundle.get("active") or [], paid=paid, blank_rows=3, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)}
         <div class="events-toolbar events-toolbar-bottom">
-          <button type="submit">Сохранить / обновить</button>
+          <button type="submit">Сохранить</button>
         </div>
       </form>
     </section>
     {hidden_block}
     {past_block}
+    <script>
+    (function () {{
+      document.querySelectorAll(".events-form").forEach(function (form) {{
+        form.addEventListener("click", function (ev) {{
+          var btn = ev.target.closest("[data-events-tpl]");
+          if (!btn || !form.contains(btn)) return;
+          ev.preventDefault();
+          var cell = btn.closest("td");
+          if (!cell) return;
+          var kind = btn.getAttribute("data-events-tpl");
+          if (kind === "time") {{
+            var timeInput = cell.querySelector('input[name="e_time"]');
+            if (timeInput) timeInput.value = btn.getAttribute("data-value") || "";
+          }} else if (kind === "location") {{
+            var locInput = cell.querySelector('input[name="e_location"]');
+            var row = cell.closest("tr");
+            var addrInput = row ? row.querySelector('input[name="e_address"]') : null;
+            if (locInput) locInput.value = btn.getAttribute("data-location") || "";
+            if (addrInput) addrInput.value = btn.getAttribute("data-address") || "";
+          }}
+        }});
+      }});
+    }})();
+    </script>
     """

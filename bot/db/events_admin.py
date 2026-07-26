@@ -146,7 +146,7 @@ def save_events_batch(event_format: str, rows: list[dict[str, Any]]) -> dict:
     Each row may have id (int|None), date, time, location, address, ...
     Empty required fields → skip. delete=True → status hidden.
     """
-    result = {"saved": 0, "hidden": 0, "errors": []}
+    result = {"saved": 0, "hidden": 0, "deleted": 0, "errors": []}
     if not _use_postgres():
         result["errors"].append("Мероприятия правятся только в PostgreSQL.")
         return result
@@ -172,7 +172,28 @@ def save_events_batch(event_format: str, rows: list[dict[str, Any]]) -> dict:
 
 def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
     event_id = raw.get("id")
+    purge = bool(raw.get("purge"))
     delete = bool(raw.get("delete"))
+    if purge:
+        if not event_id:
+            return
+        cur.execute(
+            "SELECT COUNT(*) FROM bookings WHERE event_id = %s",
+            (event_id,),
+        )
+        booking_count = int((cur.fetchone() or [0])[0] or 0)
+        if booking_count:
+            result["errors"].append(
+                f"#{event_id}: есть брони ({booking_count}) — можно только скрыть, не удалить"
+            )
+            return
+        cur.execute(
+            "DELETE FROM events WHERE id = %s AND format = %s",
+            (event_id, event_format),
+        )
+        if cur.rowcount:
+            result["deleted"] += 1
+        return
     if delete:
         if event_id:
             cur.execute(
