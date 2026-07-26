@@ -14,7 +14,11 @@ from bot.db.analytics import (
     EVENT_BOT_BLOCKED,
     EVENT_BOT_START,
     EVENT_BOT_UNBLOCKED,
-    EVENT_HELP_OPEN,
+    EVENT_CMD_BUY_TICKET,
+    EVENT_CMD_CHANNEL,
+    EVENT_CMD_HELP,
+    EVENT_CMD_MAIN_MENU,
+    EVENT_CMD_MY_BOOKINGS,
     EVENT_HELP_QUESTION,
     set_user_blocked,
     track_event,
@@ -425,6 +429,7 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
 @router.message(Command("main_menu"), F.chat.type == "private")
 async def main_menu_command(message: Message, state: FSMContext):
     await state.clear()
+    track_event(EVENT_CMD_MAIN_MENU, telegram_id=message.from_user.id)
     await refresh_user_commands(message.bot, message.from_user.id)
     await _send_welcome(message)
 
@@ -432,6 +437,7 @@ async def main_menu_command(message: Message, state: FSMContext):
 @router.message(Command("buy_ticket"), F.chat.type == "private")
 async def buy_ticket_command(message: Message, state: FSMContext):
     await state.clear()
+    track_event(EVENT_CMD_BUY_TICKET, telegram_id=message.from_user.id)
     from bot.handlers.formats import send_buy_ticket_formats
     await send_buy_ticket_formats(message)
 
@@ -453,7 +459,7 @@ def _help_hub_kb():
 
 async def _send_help_hub(message: Message, state: FSMContext):
     await state.clear()
-    track_event(EVENT_HELP_OPEN, telegram_id=message.from_user.id)
+    track_event(EVENT_CMD_HELP, telegram_id=message.from_user.id)
     await message.answer(HELP_HUB_TEXT, reply_markup=_help_hub_kb())
 
 
@@ -465,6 +471,7 @@ async def manager_command(message: Message, state: FSMContext):
 
 @router.message(Command("channel"), F.chat.type == "private")
 async def channel_command(message: Message):
+    track_event(EVENT_CMD_CHANNEL, telegram_id=message.from_user.id)
     await message.answer(
         "Канал с анонсами шоу:",
         reply_markup=_link_kb("📢 Открыть канал", CHANNEL_LINK),
@@ -474,6 +481,7 @@ async def channel_command(message: Message):
 @router.message(Command("my_bookings"), F.chat.type == "private")
 async def my_bookings_command(message: Message, state: FSMContext):
     await state.clear()
+    track_event(EVENT_CMD_MY_BOOKINGS, telegram_id=message.from_user.id)
     await _send_command_bookings(message)
 
 
@@ -481,6 +489,7 @@ async def my_bookings_command(message: Message, state: FSMContext):
 async def active_bookings_command(message: Message, state: FSMContext):
     # Алиас на /my_bookings
     await state.clear()
+    track_event(EVENT_CMD_MY_BOOKINGS, telegram_id=message.from_user.id, props={"alias": "active_bookings"})
     await _send_command_bookings(message)
 
 
@@ -488,6 +497,7 @@ async def active_bookings_command(message: Message, state: FSMContext):
 async def myticket_command(message: Message, state: FSMContext):
     # Алиас на /my_bookings
     await state.clear()
+    track_event(EVENT_CMD_MY_BOOKINGS, telegram_id=message.from_user.id, props={"alias": "myticket"})
     await _send_command_bookings(message)
 
 
@@ -679,6 +689,7 @@ async def back_to_menu(call: CallbackQuery, state: FSMContext):
         await call.answer()
         return
     await state.clear()
+    track_event(EVENT_CMD_MAIN_MENU, telegram_id=call.from_user.id, props={"via": "callback"})
     await _delete_previous_menu_message(call)
     await _send_welcome(call.message)
     await call.answer()

@@ -3,7 +3,6 @@ import hmac
 import html
 import os
 import sqlite3
-import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -37,15 +36,17 @@ STATUS_COLORS = {
 }
 ADMIN_COOKIE_NAME = "standup_admin_token"
 ADMIN_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
-# Last analytics event for user stage line — refresh at most every 30 minutes.
-_LAST_EVENT_TTL_SEC = 30 * 60
-_LAST_EVENT_CACHE: dict[int, tuple[float, dict | None]] = {}
 ACTIVITY_SHORT_LABELS = {
     "bot_start": "Вход в бот",
     "branch_proverka": "Ветка · Проверка",
     "branch_best": "Ветка · BEST",
     "branch_hitloto": "Ветка · Hit Loto",
     "show_card": "Карточка концерта",
+    "cmd_my_bookings": "Команда · /my_bookings",
+    "cmd_main_menu": "Команда · /main_menu",
+    "cmd_buy_ticket": "Команда · /buy_ticket",
+    "cmd_help": "Команда · /help",
+    "cmd_channel": "Команда · /channel",
     "raffle_enter": "Розыгрыш · вход",
     "raffle_branch": "Розыгрыш · выбор ветки",
     "raffle_screenshot": "Розыгрыш · отправили скрин",
@@ -61,6 +62,35 @@ ACTIVITY_SHORT_LABELS = {
     "help_question": "Обращение в поддержку",
     "bot_blocked": "Заблокировали бота",
     "bot_unblocked": "Разблокировали бота",
+}
+# Rough "where the guest is now" from the latest tracked event.
+LAST_PLACE_LABELS = {
+    "bot_start": "Старт бота",
+    "cmd_my_bookings": "Мои брони",
+    "cmd_main_menu": "Главное меню",
+    "cmd_buy_ticket": "Купить билет",
+    "cmd_help": "Помощь / FAQ",
+    "cmd_channel": "Канал анонсов",
+    "help_open": "Помощь / FAQ",
+    "help_question": "Написал в поддержку",
+    "branch_proverka": "Ветка «Проверка»",
+    "branch_best": "Ветка BEST",
+    "branch_hitloto": "Ветка Hit Loto",
+    "show_card": "Карточка концерта",
+    "buy_click": "Нажал «Купить»",
+    "raffle_enter": "Розыгрыш",
+    "raffle_branch": "Розыгрыш · выбор ветки",
+    "raffle_screenshot": "Розыгрыш · отправил скрин",
+    "raffle_approved": "Розыгрыш · скрин принят",
+    "raffle_rejected": "Розыгрыш · скрин отклонён",
+    "raffle_subscribed": "Розыгрыш · подписка",
+    "raffle_sub_failed": "Розыгрыш · подписка не прошла",
+    "booking_created": "Создал бронь",
+    "booking_confirmed": "Получил билет",
+    "booking_cancelled": "Отменил бронь",
+    "booking_annulled": "Бронь аннулирована",
+    "bot_blocked": "Заблокировал бота",
+    "bot_unblocked": "Разблокировал бота",
 }
 DB_VIEW_TABLES = (
     "events",
@@ -1035,6 +1065,7 @@ def _bookings_tab(dashboard: dict, filters: dict) -> str:
 
 
 def _user_stage(user: dict) -> str:
+    """Fallback booking portfolio summary (users table column)."""
     counts = user["status_counts"]
     if counts.get("confirmed"):
         return "Есть полученный билет"
@@ -1047,30 +1078,14 @@ def _user_stage(user: dict) -> str:
     return "Нет активного этапа"
 
 
-def _cached_last_event(telegram_id: int | None) -> dict | None:
-    """Last analytics event for stage line; DB at most once per 30 minutes per user."""
-    if not telegram_id:
-        return None
-    tid = int(telegram_id)
-    now = time.time()
-    hit = _LAST_EVENT_CACHE.get(tid)
-    if hit and (now - hit[0]) < _LAST_EVENT_TTL_SEC:
-        return hit[1]
-    from bot.db.analytics import fetch_user_last_event
-
-    row = fetch_user_last_event(tid)
-    _LAST_EVENT_CACHE[tid] = (now, row)
-    return row
-
-
 def _user_stage_line(user: dict, last_event: dict | None = None) -> str:
-    stage = _user_stage(user)
-    if not last_event:
-        return stage
-    name = last_event.get("name") or ""
-    label = ACTIVITY_SHORT_LABELS.get(name, name or "событие")
-    when = _fmt_msk(last_event.get("created_at"))
-    return f"{stage} · последнее: {label} ({when})"
+    """Where the guest was last seen (tracked action), roughly."""
+    if last_event:
+        name = last_event.get("name") or ""
+        place = LAST_PLACE_LABELS.get(name) or ACTIVITY_SHORT_LABELS.get(name) or name or "событие"
+        when = _fmt_msk(last_event.get("created_at"))
+        return f"Сейчас: {place} ({when})"
+    return f"Сводка по броням: {_user_stage(user)}"
 
 
 def _fmt_msk(dt) -> str:
@@ -1151,6 +1166,11 @@ def _user_activity_html(activity_counts: list[dict]) -> str:
 
     order = [
         "bot_start",
+        "cmd_my_bookings",
+        "cmd_main_menu",
+        "cmd_buy_ticket",
+        "cmd_help",
+        "cmd_channel",
         "branch_proverka",
         "branch_best",
         "branch_hitloto",
@@ -1359,7 +1379,7 @@ def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) 
             f'<span>Напоминание за сутки: <b>{reminders_24h}</b></span>'
             f'<span>Напоминание в день: <b>{reminders_day}</b></span>'
             '</div>'
-            f'<p class="user-stage"><b>Текущий этап:</b> {_h(stage_text)}</p>'
+            f'<p class="user-stage"><b>Где сейчас:</b> {_h(stage_text)}</p>'
             f"{empty_note}"
             '<div class="user-extra-stack">'
             f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or []), tone="activity")}'
@@ -1434,7 +1454,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         f'{_analytics_metric_card("Зашли · Проверка", by_name.get("branch_proverka"), css_class="tone-proverka")}'
         f'{_analytics_metric_card("Зашли · BEST", by_name.get("branch_best"), css_class="tone-best")}'
         f'{_analytics_metric_card("Зашли · Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto")}'
-        f'{_analytics_metric_card("Help / FAQ · обращение", by_name.get("help_open"))}'
+        f'{_analytics_metric_card("Help / FAQ · обращение", by_name.get("cmd_help") or by_name.get("help_open"))}'
         f'{_analytics_metric_card("Брони созданы · проверка", proverka_overview.get("created"))}'
         f'{_analytics_metric_card("Билет получен · проверка", proverka_overview.get("confirmed"))}'
         f'{_analytics_metric_card("Отмены брони · проверка", proverka_overview.get("cancelled"))}'
@@ -1445,6 +1465,11 @@ def _analytics_tab(report: dict, filters: dict) -> str:
 
     event_labels = {
         "bot_start": "Зашли в бот (/start)",
+        "cmd_my_bookings": "/my_bookings · Мои брони",
+        "cmd_main_menu": "/main_menu · Главное меню",
+        "cmd_buy_ticket": "/buy_ticket · Купить билет",
+        "cmd_help": "/help · Задать вопрос",
+        "cmd_channel": "/channel · Канал анонсов",
         "help_open": "Открыли Help / FAQ",
         "help_question": "Написали в поддержку",
         "branch_best": "BEST · вход",
@@ -1470,12 +1495,22 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "bot_unblocked": "Разблокировали бота",
     }
     # Always list every known step in these groups (even if 0).
-    always_show_groups = {"Розыгрыш", "Ветки", "Брони · Проверка"}
+    always_show_groups = {"Розыгрыш", "Ветки", "Брони · Проверка", "Команды меню"}
     event_groups = [
         ("Вход в бот", ["bot_start"]),
+        (
+            "Команды меню",
+            [
+                "cmd_my_bookings",
+                "cmd_main_menu",
+                "cmd_buy_ticket",
+                "cmd_help",
+                "cmd_channel",
+            ],
+        ),
         ("Ветки", ["branch_proverka", "branch_best", "branch_hitloto"]),
         ("Карточки концертов", []),  # filled from show_cards breakdown below
-        ("Помощь", ["help_open", "help_question"]),
+        ("Помощь", ["help_question"]),
         (
             "Розыгрыш",
             [
@@ -2335,7 +2370,7 @@ async def admin_page(request: web.Request) -> web.Response:
             user_id = selected.get("user_id")
 
             def _load_user_extras():
-                from bot.db.analytics import fetch_user_activity_counts
+                from bot.db.analytics import fetch_user_activity_counts, fetch_user_last_event
                 from bot.db.crud import get_raffle_submissions_for_telegram, get_user_raffle_flags
 
                 tid = int(telegram_id) if telegram_id else None
@@ -2344,7 +2379,7 @@ async def admin_page(request: web.Request) -> web.Response:
                     "activity_counts": fetch_user_activity_counts(tid) if tid else [],
                     "submissions": get_raffle_submissions_for_telegram(tid) if tid else [],
                     "flags": get_user_raffle_flags(telegram_id=tid, user_id=uid),
-                    "last_event": _cached_last_event(tid),
+                    "last_event": fetch_user_last_event(tid) if tid else None,
                 }
 
             user_extras = await loop.run_in_executor(None, _load_user_extras)

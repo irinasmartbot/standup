@@ -568,8 +568,19 @@ def update_reminder_flag(booking_id, flag):
 
 def annul_booking(booking_id):
     if _use_postgres():
+        meta = None
         with _pg_connect() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT u.telegram_id, b.format, b.event_id, b.user_id
+                    FROM bookings b
+                    JOIN users u ON u.id = b.user_id
+                    WHERE b.id = %s AND b.status = 'booked'
+                    """,
+                    (booking_id,),
+                )
+                meta = cur.fetchone()
                 cur.execute(
                     """
                     UPDATE bookings
@@ -578,7 +589,23 @@ def annul_booking(booking_id):
                     """,
                     (datetime.now(), booking_id),
                 )
+                updated = cur.rowcount or 0
             conn.commit()
+        if updated and meta:
+            try:
+                from bot.db.analytics import EVENT_BOOKING_ANNULLED, track_event
+
+                telegram_id, booking_format, event_id, user_id = meta
+                track_event(
+                    EVENT_BOOKING_ANNULLED,
+                    telegram_id=telegram_id,
+                    user_id=user_id,
+                    event_id=event_id,
+                    booking_id=booking_id,
+                    props={"format": booking_format, "source": "annul_booking"},
+                )
+            except Exception:
+                pass
         return
 
     conn = sqlite3.connect(DB_PATH)

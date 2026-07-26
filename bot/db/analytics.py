@@ -39,6 +39,20 @@ EVENT_BOOKING_CANCELLED = "booking_cancelled"
 EVENT_BOOKING_ANNULLED = "booking_annulled"
 EVENT_BOT_BLOCKED = "bot_blocked"
 EVENT_BOT_UNBLOCKED = "bot_unblocked"
+# Menu / slash commands (Telegram command menu — 5 items)
+EVENT_CMD_MY_BOOKINGS = "cmd_my_bookings"
+EVENT_CMD_MAIN_MENU = "cmd_main_menu"
+EVENT_CMD_BUY_TICKET = "cmd_buy_ticket"
+EVENT_CMD_HELP = "cmd_help"
+EVENT_CMD_CHANNEL = "cmd_channel"
+
+COMMAND_EVENT_NAMES = (
+    EVENT_CMD_MY_BOOKINGS,
+    EVENT_CMD_MAIN_MENU,
+    EVENT_CMD_BUY_TICKET,
+    EVENT_CMD_HELP,
+    EVENT_CMD_CHANNEL,
+)
 
 
 def _use_postgres() -> bool:

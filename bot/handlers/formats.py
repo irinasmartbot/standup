@@ -11,6 +11,7 @@ from bot.config import MANAGER_LINK, CHANNEL_LINK, TICKET_TEMPLATE
 from bot.db.analytics import (
     EVENT_BRANCH_BEST,
     EVENT_BRANCH_HITLOTO,
+    EVENT_CMD_BUY_TICKET,
     EVENT_SHOW_CARD,
     browse_mode_from_callback,
     track_event,
@@ -711,6 +712,7 @@ async def book(call: CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "buy_ticket")
 async def buy_ticket(call: CallbackQuery):
+    track_event(EVENT_CMD_BUY_TICKET, telegram_id=call.from_user.id, props={"via": "callback"})
     await delete_booking_nav(call.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     await send_buy_ticket_formats(call.message)
