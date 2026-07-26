@@ -55,8 +55,8 @@ jobs:
             echo "standup-admin.service not found; skipping restart"
           fi
           if sudo /usr/bin/systemctl list-unit-files standup-events-sync.service --no-legend | grep -q standup-events-sync.service; then
-            sudo /usr/bin/systemctl restart standup-events-sync || echo "standup-events-sync restart failed; bot deploy continues"
+            sudo /usr/bin/systemctl disable --now standup-events-sync || echo "standup-events-sync stop/disable failed; continuing"
           else
-            echo "standup-events-sync.service not found; skipping restart"
+            echo "standup-events-sync.service not found; skipping"
           fi
           EOF

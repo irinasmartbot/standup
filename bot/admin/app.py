@@ -857,6 +857,7 @@ def _tabs(filters: dict, can_view_db: bool = False) -> str:
     tabs = [
         ("date", "По дате"),
         ("bookings", "Все брони"),
+        ("events", "Мероприятия"),
         ("users", "Users"),
         ("analytics", "Аналитика"),
     ]
@@ -865,7 +866,7 @@ def _tabs(filters: dict, can_view_db: bool = False) -> str:
     current = filters.get("tab") or "date"
     return "".join(
         f'<a class="tab {"active" if current == key else ""}" '
-        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="", date_from="", date_to="", channel="")}">{label}</a>'
+        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="", date_from="", date_to="", channel="", ef="")}">{label}</a>'
         for key, label in tabs
     )
 
@@ -1966,6 +1967,9 @@ def _content(
     db_data: dict | None = None,
     analytics: dict | None = None,
     user_extras: dict | None = None,
+    events_bundle: dict | None = None,
+    events_flash: str = "",
+    events_errors: list[str] | None = None,
 ) -> str:
     tab = filters.get("tab") or "date"
     if tab == "bookings":
@@ -1974,6 +1978,15 @@ def _content(
         return _users_tab(dashboard, filters, user_extras=user_extras)
     if tab == "analytics":
         return _analytics_tab(analytics or {}, filters)
+    if tab == "events":
+        from bot.admin.events_tab import render_events_tab
+
+        return render_events_tab(
+            filters.get("ef") or "best",
+            events_bundle,
+            flash=events_flash,
+            errors=events_errors,
+        )
     if tab == "db":
         db_data = db_data or {"tables": [], "browse": None}
         return _db_tab(db_data.get("tables") or [], db_data.get("browse"), filters)
@@ -1988,12 +2001,16 @@ def render_admin_html(
     can_view_db: bool = False,
     analytics: dict | None = None,
     user_extras: dict | None = None,
+    events_bundle: dict | None = None,
+    events_flash: str = "",
+    events_errors: list[str] | None = None,
 ) -> str:
     totals = dashboard["totals"]
     tab = filters.get("tab") or "date"
     is_db = tab == "db"
     is_analytics = tab == "analytics"
-    filters = _normalize_event_filter(dashboard, filters) if not is_analytics else filters
+    is_events = tab == "events"
+    filters = _normalize_event_filter(dashboard, filters) if not is_analytics and not is_events else filters
     date_value = _date_to_input(filters.get("date", ""))
     date_input = '<input name="date" type="date" value="{}">'.format(_h(date_value))
     event_select = _event_select(dashboard, filters)
@@ -2027,7 +2044,7 @@ def render_admin_html(
         <a class="pill" href="/admin?tab={_h(filters.get('tab') or 'date')}">Сбросить</a>
       </form>
     </div>"""
-    refresh_meta = "" if is_db or is_analytics else '<meta http-equiv="refresh" content="30">'
+    refresh_meta = "" if is_db or is_analytics or is_events else '<meta http-equiv="refresh" content="30">'
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -2089,6 +2106,22 @@ def render_admin_html(
     .tone-cmd-help .command-block-cmd {{ color:#7e22ce; }}
     .tone-cmd-channel {{ background:#f0fdf4; border-color:#bbf7d0; }}
     .tone-cmd-channel .command-block-cmd {{ color:#15803d; }}
+    .events-subtabs {{ display:flex; gap:8px; flex-wrap:wrap; }}
+    .events-filters {{ margin-bottom:16px; }}
+    .events-toolbar {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:12px 0; }}
+    .events-toolbar-bottom {{ margin-top:16px; }}
+    .events-flash {{ background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; border-radius:12px; padding:10px 14px; }}
+    .events-errors {{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; border-radius:12px; padding:10px 14px; margin-bottom:12px; }}
+    .events-errors ul {{ margin:8px 0 0; padding-left:18px; }}
+    table.events-edit {{ table-layout:auto; min-width:1100px; }}
+    table.events-edit th {{ white-space:nowrap; }}
+    table.events-edit input {{ width:100%; min-width:72px; padding:7px 8px; font-size:13px; }}
+    table.events-edit input[type="date"], table.events-edit input[type="time"],
+    table.events-edit input[type="number"] {{ min-width:110px; }}
+    table.events-edit .events-id {{ width:56px; }}
+    .events-weekday {{ font-size:11px; margin-top:4px; }}
+    .events-del {{ white-space:nowrap; font-size:12px; }}
+    .events-past {{ margin-top:16px; }}
     .show-format-stats b {{ display:block; margin-top:2px; font-size:18px; line-height:1.2; }}
     .show-format-stats small {{ display:block; margin-top:2px; font-size:11px; }}
     .show-format-block h3, .branch-card h3 {{ margin:0 0 10px; font-size:16px; }}
@@ -2286,7 +2319,7 @@ def render_admin_html(
   <main>
     <nav class="tabs">{_tabs(filters, can_view_db)}</nav>
     {summary_html}
-    {_content(dashboard, filters, db_data, analytics, user_extras)}
+    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors)}
   </main>
   <script>
     (function () {{
@@ -2363,6 +2396,9 @@ def _filters_from_request(request: web.Request) -> dict:
         today = datetime.now(MSK).strftime("%Y-%m-%d")
         date_from = today
         date_to = today
+    ef = request.query.get("ef", "").strip()
+    if ef not in ("best", "proverka", "hitloto"):
+        ef = "best" if tab == "events" else ""
     return {
         "tab": tab,
         "status": request.query.get("status", "").strip(),
@@ -2378,6 +2414,7 @@ def _filters_from_request(request: web.Request) -> dict:
         "date_from": date_from,
         "date_to": date_to,
         "all": "1" if all_period else "",
+        "ef": ef,
     }
 
 
@@ -2480,7 +2517,7 @@ async def admin_page(request: web.Request) -> web.Response:
         filters["status"] = ""
     if filters.get("format") and filters["format"] not in FORMAT_OPTIONS:
         filters["format"] = ""
-    if filters.get("tab") not in {"date", "bookings", "users", "analytics", "db"}:
+    if filters.get("tab") not in {"date", "bookings", "users", "analytics", "events", "db"}:
         filters["tab"] = "date"
     # Managers must not open DB via direct URL
     if filters.get("tab") == "db" and not can_view_db:
@@ -2490,6 +2527,9 @@ async def admin_page(request: web.Request) -> web.Response:
     source_label = "PostgreSQL" if _use_postgres(config) else f"SQLite ({config.db_path})"
     db_data = None
     analytics = None
+    events_bundle = None
+    events_flash = (request.query.get("saved") or "").strip()
+    events_errors: list[str] = []
     empty_dashboard = {
         "events": [],
         "bookings": [],
@@ -2521,6 +2561,16 @@ async def admin_page(request: web.Request) -> web.Response:
             ),
         )
         dashboard = empty_dashboard
+    elif filters.get("tab") == "events":
+        from bot.db.events_admin import list_events_for_admin
+
+        ef = filters.get("ef") or "best"
+        events_bundle = await loop.run_in_executor(None, list_events_for_admin, ef)
+        dashboard = empty_dashboard
+        if events_flash == "1":
+            events_flash = "Сохранено. Афиша в боте обновится сразу."
+        elif events_flash:
+            events_flash = ""
     else:
         # With a date selected, load all shows that day (even empty) so the show picker is complete.
         include_empty_events = bool(filters.get("date")) and filters.get("tab") in {"date", "bookings"}
@@ -2553,10 +2603,81 @@ async def admin_page(request: web.Request) -> web.Response:
             user_extras = await loop.run_in_executor(None, _load_user_extras)
     return web.Response(
         text=render_admin_html(
-            dashboard, filters, source_label, db_data, can_view_db, analytics, user_extras
+            dashboard,
+            filters,
+            source_label,
+            db_data,
+            can_view_db,
+            analytics,
+            user_extras,
+            events_bundle,
+            events_flash,
+            events_errors,
         ),
         content_type="text/html",
     )
+
+
+async def events_save_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        return web.Response(text=render_login_html(), status=401, content_type="text/html")
+    from bot.admin.events_tab import parse_events_form
+    from bot.db.events_admin import list_events_for_admin, save_events_batch
+    from urllib.parse import quote
+
+    post = await request.post()
+    event_format, rows = parse_events_form(post)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, save_events_batch, event_format, rows)
+    if result.get("errors"):
+        can_view_db = _can_view_db(request, config)
+        filters = {
+            "tab": "events",
+            "ef": event_format,
+            "status": "",
+            "date": "",
+            "event": "",
+            "format": "",
+            "u": "",
+            "table": "",
+            "page": "1",
+            "sort": "",
+            "order": "",
+            "channel": "",
+            "date_from": "",
+            "date_to": "",
+            "all": "",
+        }
+        empty_dashboard = {
+            "events": [],
+            "bookings": [],
+            "users": {},
+            "totals": {"events": 0, "bookings": 0, "reserved_guests": 0, "confirmed_guests": 0},
+        }
+        events_bundle = await loop.run_in_executor(None, list_events_for_admin, event_format)
+        flash = (
+            f"Частично сохранено: {result.get('saved', 0)} · скрыто: {result.get('hidden', 0)}"
+            if result.get("saved") or result.get("hidden")
+            else ""
+        )
+        source_label = "PostgreSQL" if _use_postgres(config) else f"SQLite ({config.db_path})"
+        return web.Response(
+            text=render_admin_html(
+                empty_dashboard,
+                filters,
+                source_label,
+                None,
+                can_view_db,
+                None,
+                None,
+                events_bundle,
+                flash,
+                result.get("errors") or [],
+            ),
+            content_type="text/html",
+        )
+    raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}&saved=1")
 
 
 async def login_page(request: web.Request) -> web.Response:
@@ -2585,6 +2706,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app["config"] = config or load_config()
     app.router.add_get("/", index_page)
     app.router.add_get("/admin", admin_page)
+    app.router.add_post("/admin/events/save", events_save_page)
     app.router.add_post("/admin/login", login_page)
     app.router.add_get("/admin/logout", logout_page)
     return app
