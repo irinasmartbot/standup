@@ -231,8 +231,6 @@ def render_events_tab(
     show_seats = fmt == "proverka"
     # Hit Loto: no per-row «билеты»; Update still available for all formats.
     show_tickets = can_resend_tickets and fmt in {"best", "proverka"}
-    show_update = can_resend_tickets
-    fmt_label = AFISHA_FORMAT_LABELS.get(fmt, fmt)
     sub = "".join(
         f'<a class="pill {"active" if key == fmt else ""}" href="{_events_link(key)}">{label}</a>'
         for key, label in AFISHA_FORMAT_LABELS.items()
@@ -248,9 +246,13 @@ def render_events_tab(
 
     save_hint = (
         "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить». "
-        "Когда закончите работу с бронями — «Обновить», чтобы гости получили актуальные билеты."
-        if show_update
-        else "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить»."
+        "«Обновить» — перезагрузить таблицу с сервера (билеты не шлёт). "
+        "Переотправка билетов — только через «билеты» у строки."
+        if can_resend_tickets
+        else (
+            "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить». "
+            "«Обновить» — перезагрузить таблицу с сервера."
+        )
     )
     hide_hint = (
         "«Скрыть» убирает из бота; «удалить» — насовсем (только если нет броней). "
@@ -382,18 +384,9 @@ def render_events_tab(
         "Убраны из бота · отметьте и нажмите «Вернуть»",
     )
 
-    update_btn = ""
-    if show_update:
-        update_btn = (
-            f'<form method="post" action="/admin/events/resend-ticket" class="inline-form" '
-            f'onsubmit="return confirm(\'Переотправить актуальные билеты всем подтверждённым '
-            f'гостям по всем актуальным шоу «{_h(fmt_label)}»?\');">'
-            f'<input type="hidden" name="ef" value="{_h(fmt)}">'
-            f'<input type="hidden" name="resend_all_active" value="1">'
-            f'<input type="hidden" name="updated" value="1">'
-            '<button type="submit" class="events-update-btn">Обновить</button>'
-            "</form>"
-        )
+    update_btn = (
+        f'<a class="pill events-update-btn" href="{_events_link(fmt)}">Обновить</a>'
+    )
 
     return f"""
     <div class="filters events-filters">

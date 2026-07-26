@@ -2183,7 +2183,8 @@ def render_admin_html(
     }}
     .events-tpl:hover {{ background:#e2e8f0; }}
     .events-purge {{ color:#b91c1c; }}
-    .events-update-btn {{ background:#1d4ed8; }}
+    .events-update-btn {{ background:#1d4ed8; color:#fff !important; border-color:#1d4ed8; }}
+    .events-update-btn:hover {{ background:#1e40af; }}
     .events-raffle-badge {{
       display:inline-block; margin-left:6px; padding:2px 7px; border-radius:999px;
       background:#fef3c7; color:#92400e; font-size:11px; font-weight:600;
@@ -2705,14 +2706,7 @@ async def admin_page(request: web.Request) -> web.Response:
                 None, list_event_ticket_holders, int(tickets_id)
             )
         if saved_flag == "1":
-            if can_resend:
-                events_flash = (
-                    "Сохранено. Афиша в боте уже с новыми данными. "
-                    "Когда закончите работу с бронями — нажмите «Обновить», "
-                    "чтобы гости получили актуальные билеты."
-                )
-            else:
-                events_flash = "Сохранено. Афиша в боте уже с новыми данными."
+            events_flash = "Сохранено. Афиша в боте уже с новыми данными."
         elif saved_flag == "resend":
             ok = request.query.get("ok") or "0"
             fail = request.query.get("fail") or "0"
@@ -2801,31 +2795,6 @@ async def events_resend_ticket_page(request: web.Request) -> web.Response:
 
     event_id_raw = (post.get("event_id") or "").strip()
     booking_id_raw = (post.get("booking_id") or "").strip()
-    resend_all_active = (post.get("resend_all_active") or "").strip() == "1"
-
-    if resend_all_active:
-        from bot.db.events_admin import list_events_for_admin
-
-        loop = asyncio.get_running_loop()
-        bundle = await loop.run_in_executor(None, list_events_for_admin, event_format)
-        ok = fail = 0
-        for event in bundle.get("active") or []:
-            eid = event.get("id")
-            if not eid:
-                continue
-            result = await resend_tickets_for_event_async(int(eid), updated=updated)
-            ok += int(result.get("ok") or 0)
-            fail += int(result.get("fail") or 0)
-        q = urlencode(
-            {
-                "tab": "events",
-                "ef": event_format,
-                "saved": "resend",
-                "ok": str(ok),
-                "fail": str(fail),
-            }
-        )
-        raise web.HTTPFound(f"/admin?{q}")
 
     if event_id_raw.isdigit():
         result = await resend_tickets_for_event_async(int(event_id_raw), updated=updated)
