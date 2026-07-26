@@ -1503,7 +1503,7 @@ def _users_tab(
             f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or []), tone="activity")}'
             f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]), tone="reminders")}'
             f'{_user_extra_details("Билеты", _user_tickets_html(user["bookings"], user_key=user["key"], can_resend_tickets=can_resend_tickets), tone="tickets")}'
-            f'{_user_extra_details("Розыгрыш", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}), tone="raffle")}'
+            f'{_user_extra_details("Скрины розыгрыша", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}), tone="raffle")}'
             "</div>"
             f'{_booking_table(bookings, show_format=True)}'
             "</section>"
