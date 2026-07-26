@@ -229,7 +229,10 @@ def render_events_tab(
     bundle = bundle or {"active": [], "past": [], "hidden": []}
     paid = fmt in {"best", "hitloto"}
     show_seats = fmt == "proverka"
-    show_tickets = can_resend_tickets and fmt == "best"
+    # Hit Loto: no per-row «билеты»; Update still available for all formats.
+    show_tickets = can_resend_tickets and fmt in {"best", "proverka"}
+    show_update = can_resend_tickets
+    fmt_label = AFISHA_FORMAT_LABELS.get(fmt, fmt)
     sub = "".join(
         f'<a class="pill {"active" if key == fmt else ""}" href="{_events_link(key)}">{label}</a>'
         for key, label in AFISHA_FORMAT_LABELS.items()
@@ -243,35 +246,25 @@ def render_events_tab(
             + "</ul></div>"
         )
 
+    save_hint = (
+        "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить». "
+        "Когда закончите работу с бронями — «Обновить», чтобы гости получили актуальные билеты."
+        if show_update
+        else "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить»."
+    )
+    hide_hint = (
+        "«Скрыть» убирает из бота; «удалить» — насовсем (только если нет броней). "
+        "Вернуть скрытые — в блоке «Скрытые»."
+    )
     if fmt == "best":
-        if can_resend_tickets:
-            note = (
-                '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
-                "Пустые нижние строки — для быстрого добавления.<br>"
-                "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить». "
-                "Когда закончите работу с бронями — «Обновить», чтобы гости получили актуальные билеты.<br>"
-                "«Скрыть» убирает из бота; «удалить» — насовсем (только если нет броней). "
-                "Вернуть скрытые — в блоке «Скрытые».</p>"
-            )
-        else:
-            note = (
-                '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
-                "Пустые нижние строки — для быстрого добавления.<br>"
-                "<b>Смена времени или площадки:</b> правьте ту же строку и нажмите «Сохранить».<br>"
-                "«Скрыть» убирает из бота; «удалить» — насовсем (только если нет броней). "
-                "Вернуть скрытые — в блоке «Скрытые».</p>"
-            )
-    elif fmt == "hitloto":
         note = (
-            '<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
-            "<b>Смена времени/площадки:</b> правьте ту же строку и «Сохранить». "
-            "«Скрыть» / «удалить» — справа.</p>"
+            '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
+            f"Пустые нижние строки — для быстрого добавления.<br>{save_hint}<br>{hide_hint}</p>"
         )
     else:
         note = (
-            '<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
-            "<b>Смена времени/площадки:</b> правьте ту же строку и «Сохранить». "
-            "«Скрыть» / «удалить» — справа.</p>"
+            f'<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
+            f"{save_hint}<br>{hide_hint}</p>"
         )
 
     holders = ticket_holders or []
@@ -390,11 +383,11 @@ def render_events_tab(
     )
 
     update_btn = ""
-    if show_tickets:
+    if show_update:
         update_btn = (
             f'<form method="post" action="/admin/events/resend-ticket" class="inline-form" '
             f'onsubmit="return confirm(\'Переотправить актуальные билеты всем подтверждённым '
-            f'гостям по всем актуальным шоу BEST?\');">'
+            f'гостям по всем актуальным шоу «{_h(fmt_label)}»?\');">'
             f'<input type="hidden" name="ef" value="{_h(fmt)}">'
             f'<input type="hidden" name="resend_all_active" value="1">'
             f'<input type="hidden" name="updated" value="1">'
