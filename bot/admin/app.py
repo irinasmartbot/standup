@@ -2193,6 +2193,10 @@ def render_admin_html(
       white-space:nowrap; flex:0 0 auto;
     }}
     .events-tpl:hover {{ background:#e2e8f0; }}
+    table.events-edit tr.events-row-new td {{ background:#fffbeb; }}
+    table.events-edit tr.events-row-new input {{
+      background:#fffef5; border-color:#f6e05e;
+    }}
     .events-purge {{ color:#b91c1c; }}
     .events-update-btn {{
       background:#1d4ed8; color:#fff; border:1px solid #1d4ed8;

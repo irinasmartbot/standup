@@ -156,7 +156,7 @@ def _row_html(
     )
 
     return (
-        "<tr>"
+        "<tr" + (' class="events-row-new"' if blank else "") + ">"
         f'<td class="events-id"><input type="hidden" name="e_id" value="{_h(eid)}">'
         f'<span class="muted">{_h(eid or "—")}</span>'
         f'<div class="muted events-weekday">{_h(weekday)}</div></td>'
@@ -404,7 +404,7 @@ def render_events_tab(
       </div>
       <form method="post" action="/admin/events/save" class="events-form" id="events-save-form">
         <input type="hidden" name="ef" value="{_h(fmt)}">
-        {_table(bundle.get("active") or [], paid=paid, blank_rows=3, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)}
+        {_table(bundle.get("active") or [], paid=paid, blank_rows=5, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)}
         <div class="events-toolbar events-toolbar-bottom">
           <button type="submit" class="events-update-btn">Обновить</button>
         </div>
