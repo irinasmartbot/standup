@@ -1,0 +1,228 @@
+"""Resend ticket images from admin (Telegram Bot API)."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from html import escape
+
+import psycopg
+from psycopg.rows import dict_row
+
+from bot.config import BOOKINGS_SOURCE, DATABASE_URL
+from bot.utils.ticket import generate_ticket, guests_word
+
+logger = logging.getLogger(__name__)
+
+
+def _use_postgres() -> bool:
+    return BOOKINGS_SOURCE == "postgres" and bool(DATABASE_URL)
+
+
+def _bot_token() -> str:
+    return (os.getenv("BOT_TOKEN") or "").strip()
+
+
+def list_event_ticket_holders(event_id: int) -> list[dict]:
+    """Confirmed bookings for an event (people who got / should have a ticket)."""
+    if not _use_postgres() or not event_id:
+        return []
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        b.id AS booking_id,
+                        b.guests,
+                        b.status,
+                        b.ticket_message_id,
+                        b.confirmed_at,
+                        b.format AS booking_format,
+                        u.id AS user_id,
+                        u.telegram_id,
+                        u.name,
+                        u.username,
+                        u.phone,
+                        e.id AS event_id,
+                        e.event_date,
+                        e.event_time,
+                        e.location,
+                        e.address
+                    FROM bookings b
+                    JOIN users u ON u.id = b.user_id
+                    JOIN events e ON e.id = b.event_id
+                    WHERE b.event_id = %(event_id)s
+                      AND b.status = 'confirmed'
+                    ORDER BY b.confirmed_at NULLS LAST, b.id
+                    """,
+                    {"event_id": int(event_id)},
+                )
+                return [_serialize(row) for row in cur.fetchall()]
+    except Exception:
+        logger.exception("list_event_ticket_holders failed for %s", event_id)
+        return []
+
+
+def get_booking_for_ticket_resend(booking_id: int) -> dict | None:
+    if not _use_postgres() or not booking_id:
+        return None
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        b.id AS booking_id,
+                        b.guests,
+                        b.status,
+                        b.ticket_message_id,
+                        b.confirmed_at,
+                        b.format AS booking_format,
+                        u.id AS user_id,
+                        u.telegram_id,
+                        u.name,
+                        u.username,
+                        u.phone,
+                        e.id AS event_id,
+                        e.event_date,
+                        e.event_time,
+                        e.location,
+                        e.address
+                    FROM bookings b
+                    JOIN users u ON u.id = b.user_id
+                    JOIN events e ON e.id = b.event_id
+                    WHERE b.id = %(booking_id)s
+                    """,
+                    {"booking_id": int(booking_id)},
+                )
+                row = cur.fetchone()
+                return _serialize(row) if row else None
+    except Exception:
+        logger.exception("get_booking_for_ticket_resend failed for %s", booking_id)
+        return None
+
+
+def _serialize(row: dict) -> dict:
+    d = row.get("event_date")
+    t = row.get("event_time")
+    return {
+        "booking_id": row.get("booking_id"),
+        "guests": int(row.get("guests") or 0),
+        "status": row.get("status") or "",
+        "ticket_message_id": row.get("ticket_message_id"),
+        "confirmed_at": row.get("confirmed_at"),
+        "booking_format": row.get("booking_format") or "",
+        "user_id": row.get("user_id"),
+        "telegram_id": row.get("telegram_id"),
+        "name": row.get("name") or "",
+        "username": row.get("username") or "",
+        "phone": row.get("phone") or "",
+        "event_id": row.get("event_id"),
+        "event_date": d.strftime("%d.%m.%Y") if hasattr(d, "strftime") else str(d or ""),
+        "event_time": t.strftime("%H:%M") if hasattr(t, "strftime") else str(t or "")[:5],
+        "location": row.get("location") or "",
+        "address": row.get("address") or "",
+        "has_ticket_msg": bool(row.get("ticket_message_id")),
+    }
+
+
+def _ticket_bytes(row: dict) -> bytes:
+    address = row.get("address") or ""
+    location = row.get("location") or ""
+    address_part = address.split(",", 1)[1].strip() if "," in address else address
+    short_address = f"{location}, {address_part}".strip(", ")
+    buf = generate_ticket(
+        row.get("name") or "",
+        row.get("event_date") or "",
+        row.get("event_time") or "",
+        short_address,
+        int(row.get("guests") or 1),
+    )
+    return buf.getvalue()
+
+
+def _caption(row: dict, *, updated: bool) -> str:
+    place = f"{row.get('location') or ''}, {row.get('address') or ''}".strip(", ")
+    head = (
+        "Обновлённый билет\n\nДанные мероприятия изменились — актуальный билет ниже.\n\n"
+        if updated
+        else "Билет\n\n"
+    )
+    return (
+        f"{head}"
+        f"<b>Данные по билету:</b>\n\n"
+        f"<b>Ваше имя:</b> {escape(row.get('name') or '')}\n"
+        f"<b>Дата:</b> {escape(row.get('event_date') or '')}\n"
+        f"<b>Время:</b> {escape(row.get('event_time') or '')}\n"
+        f"<b>Место:</b> {escape(place)}\n"
+        f"<b>Количество гостей:</b> {guests_word(int(row.get('guests') or 1))}"
+    )
+
+
+async def resend_ticket_async(booking_id: int, *, updated: bool = True) -> dict:
+    """Send ticket photo to the guest. Returns {ok, error, booking_id}."""
+    token = _bot_token()
+    if not token:
+        return {"ok": False, "error": "BOT_TOKEN не задан", "booking_id": booking_id}
+    row = get_booking_for_ticket_resend(booking_id)
+    if not row:
+        return {"ok": False, "error": "бронь не найдена", "booking_id": booking_id}
+    if row.get("status") != "confirmed":
+        return {
+            "ok": False,
+            "error": f"статус «{row.get('status')}», нужен confirmed",
+            "booking_id": booking_id,
+        }
+    telegram_id = row.get("telegram_id")
+    if not telegram_id:
+        return {"ok": False, "error": "нет telegram_id", "booking_id": booking_id}
+
+    from aiogram import Bot
+    from aiogram.types import BufferedInputFile
+    from bot.db.crud import save_ticket_message_id
+
+    bot = Bot(token=token)
+    try:
+        photo = BufferedInputFile(
+            _ticket_bytes(row),
+            filename=f"ticket_{booking_id}.jpg",
+        )
+        msg = await bot.send_photo(
+            chat_id=int(telegram_id),
+            photo=photo,
+            caption=_caption(row, updated=updated),
+            parse_mode="HTML",
+        )
+        save_ticket_message_id(booking_id, msg.message_id)
+        return {"ok": True, "error": "", "booking_id": booking_id}
+    except Exception as exc:
+        logger.exception("resend_ticket failed for booking %s", booking_id)
+        return {"ok": False, "error": str(exc), "booking_id": booking_id}
+    finally:
+        await bot.session.close()
+
+
+def resend_ticket(booking_id: int, *, updated: bool = True) -> dict:
+    return asyncio.run(resend_ticket_async(booking_id, updated=updated))
+
+
+async def resend_tickets_for_event_async(event_id: int, *, updated: bool = True) -> dict:
+    holders = list_event_ticket_holders(event_id)
+    result = {"ok": 0, "fail": 0, "errors": [], "total": len(holders)}
+    for row in holders:
+        one = await resend_ticket_async(int(row["booking_id"]), updated=updated)
+        if one.get("ok"):
+            result["ok"] += 1
+        else:
+            result["fail"] += 1
+            result["errors"].append(
+                f"#{one.get('booking_id')}: {one.get('error') or 'ошибка'}"
+            )
+        await asyncio.sleep(0.05)
+    return result
+
+
+def resend_tickets_for_event(event_id: int, *, updated: bool = True) -> dict:
+    return asyncio.run(resend_tickets_for_event_async(event_id, updated=updated))

@@ -130,6 +130,7 @@ class AdminConfig:
     db_path: str
     bookings_source: str
     admin_token: str
+    client_token: str
     owner_token: str
 
 
@@ -139,8 +140,11 @@ def load_config() -> AdminConfig:
         database_url=database_url,
         db_path=os.getenv("DB_PATH", "bookings.db"),
         bookings_source=os.getenv("BOOKINGS_SOURCE", "postgres" if database_url else "sqlite"),
+        # Manager: only «Мероприятия»
         admin_token=os.getenv("ADMIN_TOKEN", ""),
-        # Separate token for DB viewer; managers use ADMIN_TOKEN only
+        # Client: bookings/users/analytics/events (no DB, no ticket resend)
+        client_token=os.getenv("ADMIN_CLIENT_TOKEN", ""),
+        # Owner: full admin + DB + ticket resend
         owner_token=os.getenv("ADMIN_OWNER_TOKEN", ""),
     )
 
@@ -853,20 +857,28 @@ def _event_card(event: dict) -> str:
     )
 
 
-def _tabs(filters: dict, can_view_db: bool = False) -> str:
-    tabs = [
-        ("date", "По дате"),
-        ("bookings", "Все брони"),
-        ("events", "Мероприятия"),
-        ("users", "Users"),
-        ("analytics", "Аналитика"),
-    ]
-    if can_view_db:
-        tabs.append(("db", "База"))
-    current = filters.get("tab") or "date"
+def _tabs(
+    filters: dict,
+    *,
+    can_view_ops: bool = True,
+    can_view_db: bool = False,
+) -> str:
+    if can_view_ops:
+        tabs = [
+            ("date", "По дате"),
+            ("bookings", "Все брони"),
+            ("events", "Мероприятия"),
+            ("users", "Users"),
+            ("analytics", "Аналитика"),
+        ]
+        if can_view_db:
+            tabs.append(("db", "База"))
+    else:
+        tabs = [("events", "Мероприятия")]
+    current = filters.get("tab") or ("date" if can_view_ops else "events")
     return "".join(
         f'<a class="tab {"active" if current == key else ""}" '
-        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="", date_from="", date_to="", channel="", ef="")}">{label}</a>'
+        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="", date_from="", date_to="", channel="", ef="", tickets="")}">{label}</a>'
         for key, label in tabs
     )
 
@@ -1298,7 +1310,12 @@ def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
     )
 
 
-def _user_tickets_html(bookings: list[dict]) -> str:
+def _user_tickets_html(
+    bookings: list[dict],
+    user_key: str = "",
+    *,
+    can_resend_tickets: bool = True,
+) -> str:
     """Cards for tickets the guest actually received (confirmed_at), including later cancels."""
     tickets = [
         b
@@ -1344,6 +1361,7 @@ def _user_tickets_html(bookings: list[dict]) -> str:
                 f"<div><dt>Выдан</dt><dd>{_h(_fmt_msk(row.get('confirmed_at_raw')))}</dd></div>"
             )
         note = ""
+        resend = ""
         if status == "cancelled":
             when = _fmt_msk(row.get("cancelled_at_raw")) if row.get("cancelled_at_raw") else ""
             note = (
@@ -1356,6 +1374,16 @@ def _user_tickets_html(bookings: list[dict]) -> str:
                 f'<p class="ticket-card-note ticket-card-note--annul">'
                 f"<b>Билет аннулирован</b>{' · ' + _h(when) if when and when != '—' else ''}</p>"
             )
+        elif status == "confirmed" and can_resend_tickets:
+            resend = (
+                f'<form method="post" action="/admin/events/resend-ticket" class="ticket-resend-form">'
+                f'<input type="hidden" name="booking_id" value="{_h(str(row.get("id")))}">'
+                f'<input type="hidden" name="updated" value="0">'
+                f'<input type="hidden" name="back" value="user">'
+                f'<input type="hidden" name="u" value="{_h(user_key)}">'
+                '<button type="submit">Переотправить билет</button>'
+                "</form>"
+            )
         cards.append(
             f'<article class="screen-card ticket-card ticket-card--{status_mod}" data-idx="{idx}">'
             f'<div class="screen-card-top">'
@@ -1364,6 +1392,7 @@ def _user_tickets_html(bookings: list[dict]) -> str:
             f"</div>"
             f'<dl class="screen-card-facts">{"".join(facts)}</dl>'
             f"{note}"
+            f"{resend}"
             f'<div class="screen-card-nav muted">{idx + 1} / {total}</div>'
             "</article>"
         )
@@ -1394,7 +1423,14 @@ def _user_extra_details(
     )
 
 
-def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) -> str:
+def _users_tab(
+    dashboard: dict,
+    filters: dict,
+    user_extras: dict | None = None,
+    flash: str = "",
+    *,
+    can_resend_tickets: bool = True,
+) -> str:
     status = filters.get("status") or ""
     users = sorted(
         dashboard["users"].values(),
@@ -1431,6 +1467,7 @@ def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) 
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"muted\">Пользователей пока нет</td></tr>'}</tbody>"
         "</table></div>"
     )
+    flash_html = f'<p class="events-flash">{_h(flash)}</p>' if flash else ""
     detail = ""
     if selected_key and selected_key in dashboard["users"]:
         user = dashboard["users"][selected_key]
@@ -1465,13 +1502,13 @@ def _users_tab(dashboard: dict, filters: dict, user_extras: dict | None = None) 
             '<div class="user-extra-stack">'
             f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or []), tone="activity")}'
             f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]), tone="reminders")}'
-            f'{_user_extra_details("Билеты", _user_tickets_html(user["bookings"]), tone="tickets")}'
+            f'{_user_extra_details("Билеты", _user_tickets_html(user["bookings"], user_key=user["key"], can_resend_tickets=can_resend_tickets), tone="tickets")}'
             f'{_user_extra_details("Розыгрыш", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}), tone="raffle")}'
             "</div>"
             f'{_booking_table(bookings, show_format=True)}'
             "</section>"
         )
-    return detail + f'<section class="card"><h2>Users</h2>{table}</section>'
+    return flash_html + detail + f'<section class="card"><h2>Users</h2>{table}</section>'
 
 
 def _metric_pair(metric: dict | None) -> str:
@@ -1970,12 +2007,21 @@ def _content(
     events_bundle: dict | None = None,
     events_flash: str = "",
     events_errors: list[str] | None = None,
+    ticket_holders: list[dict] | None = None,
+    *,
+    can_resend_tickets: bool = True,
 ) -> str:
     tab = filters.get("tab") or "date"
     if tab == "bookings":
         return _bookings_tab(dashboard, filters)
     if tab == "users":
-        return _users_tab(dashboard, filters, user_extras=user_extras)
+        return _users_tab(
+            dashboard,
+            filters,
+            user_extras=user_extras,
+            flash=events_flash,
+            can_resend_tickets=can_resend_tickets,
+        )
     if tab == "analytics":
         return _analytics_tab(analytics or {}, filters)
     if tab == "events":
@@ -1986,6 +2032,9 @@ def _content(
             events_bundle,
             flash=events_flash,
             errors=events_errors,
+            tickets_event_id=(filters.get("tickets") or "") if can_resend_tickets else "",
+            ticket_holders=ticket_holders if can_resend_tickets else None,
+            can_resend_tickets=can_resend_tickets,
         )
     if tab == "db":
         db_data = db_data or {"tables": [], "browse": None}
@@ -2004,6 +2053,10 @@ def render_admin_html(
     events_bundle: dict | None = None,
     events_flash: str = "",
     events_errors: list[str] | None = None,
+    ticket_holders: list[dict] | None = None,
+    *,
+    can_view_ops: bool = True,
+    can_resend_tickets: bool = True,
 ) -> str:
     totals = dashboard["totals"]
     tab = filters.get("tab") or "date"
@@ -2122,6 +2175,11 @@ def render_admin_html(
     .events-weekday {{ font-size:11px; margin-top:4px; }}
     .events-del {{ white-space:nowrap; font-size:12px; }}
     .events-past {{ margin-top:16px; }}
+    .events-tickets-link {{ display:inline-block; margin-top:6px; padding:4px 8px; font-size:12px; }}
+    .events-tickets-panel {{ margin-bottom:16px; border:1px solid #c4b5fd; }}
+    .inline-form {{ display:inline; }}
+    .ticket-resend-form {{ margin-top:10px; }}
+    .ticket-resend-form button {{ font-size:12px; padding:8px 10px; }}
     .show-format-stats b {{ display:block; margin-top:2px; font-size:18px; line-height:1.2; }}
     .show-format-stats small {{ display:block; margin-top:2px; font-size:11px; }}
     .show-format-block h3, .branch-card h3 {{ margin:0 0 10px; font-size:16px; }}
@@ -2317,9 +2375,9 @@ def render_admin_html(
     <p>Автообновление каждые 30 секунд · источник данных: {_h(source_label)} · <a href="/admin/logout">выйти</a></p>
   </header>
   <main>
-    <nav class="tabs">{_tabs(filters, can_view_db)}</nav>
+    <nav class="tabs">{_tabs(filters, can_view_ops=can_view_ops, can_view_db=can_view_db)}</nav>
     {summary_html}
-    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors)}
+    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors, ticket_holders, can_resend_tickets=can_resend_tickets)}
   </main>
   <script>
     (function () {{
@@ -2415,6 +2473,7 @@ def _filters_from_request(request: web.Request) -> dict:
         "date_to": date_to,
         "all": "1" if all_period else "",
         "ef": ef,
+        "tickets": request.query.get("tickets", "").strip(),
     }
 
 
@@ -2427,8 +2486,16 @@ def _request_token(request: web.Request) -> str:
     )
 
 
+def _tokens_configured(config: AdminConfig) -> bool:
+    return bool(config.admin_token or config.client_token or config.owner_token)
+
+
 def _is_manager_token(candidate: str, config: AdminConfig) -> bool:
     return bool(candidate and config.admin_token and hmac.compare_digest(candidate, config.admin_token))
+
+
+def _is_client_token(candidate: str, config: AdminConfig) -> bool:
+    return bool(candidate and config.client_token and hmac.compare_digest(candidate, config.client_token))
 
 
 def _is_owner_token(candidate: str, config: AdminConfig) -> bool:
@@ -2436,22 +2503,46 @@ def _is_owner_token(candidate: str, config: AdminConfig) -> bool:
 
 
 def _token_matches(candidate: str, config: AdminConfig) -> bool:
-    """Any valid login token: manager or owner."""
+    """Any valid login token: manager, client, or owner."""
     if not candidate:
         return False
-    if not config.admin_token and not config.owner_token:
+    if not _tokens_configured(config):
         return False
-    return _is_manager_token(candidate, config) or _is_owner_token(candidate, config)
+    return (
+        _is_manager_token(candidate, config)
+        or _is_client_token(candidate, config)
+        or _is_owner_token(candidate, config)
+    )
+
+
+def _admin_role(request: web.Request, config: AdminConfig) -> str:
+    """owner | client | manager. Open local (no tokens) → owner."""
+    if not _tokens_configured(config):
+        return "owner"
+    token = _request_token(request)
+    if _is_owner_token(token, config):
+        return "owner"
+    if _is_client_token(token, config):
+        return "client"
+    return "manager"
 
 
 def _can_view_db(request: web.Request, config: AdminConfig) -> bool:
-    """DB viewer is only for the owner token, not for managers."""
-    return _is_owner_token(_request_token(request), config)
+    return _admin_role(request, config) == "owner"
+
+
+def _can_view_ops(request: web.Request, config: AdminConfig) -> bool:
+    """Bookings / users / analytics (not events-only manager)."""
+    return _admin_role(request, config) in {"owner", "client"}
+
+
+def _can_resend_tickets(request: web.Request, config: AdminConfig) -> bool:
+    return _admin_role(request, config) == "owner"
 
 
 def _check_auth(request: web.Request, config: AdminConfig) -> bool:
     # Open only if no tokens configured at all (local/dev)
-    if not config.admin_token and not config.owner_token:
+    if not _tokens_configured(config):
         return True
     return _token_matches(_request_token(request), config)
 
@@ -2487,7 +2578,7 @@ def render_login_html(error: str = "") -> str:
 <body>
   <form method="post" action="/admin/login">
     <h1>Стендап бронирование</h1>
-    <p>Введите токен доступа. У менеджера и владельца токены разные.</p>
+    <p>Введите токен доступа. У менеджера, клиента и владельца токены разные.</p>
     {error_html}
     <input name="token" type="password" autofocus placeholder="Токен доступа">
     <button type="submit">Войти</button>
@@ -2512,6 +2603,8 @@ async def admin_page(request: web.Request) -> web.Response:
         raise response
 
     can_view_db = _can_view_db(request, config)
+    can_view_ops = _can_view_ops(request, config)
+    can_resend = _can_resend_tickets(request, config)
     filters = _filters_from_request(request)
     if filters.get("status") and filters["status"] not in STATUSES:
         filters["status"] = ""
@@ -2519,17 +2612,25 @@ async def admin_page(request: web.Request) -> web.Response:
         filters["format"] = ""
     if filters.get("tab") not in {"date", "bookings", "users", "analytics", "events", "db"}:
         filters["tab"] = "date"
-    # Managers must not open DB via direct URL
-    if filters.get("tab") == "db" and not can_view_db:
+    # Manager: only «Мероприятия». Client/owner: ops tabs, tickets only for owner.
+    if not can_view_ops:
+        if filters.get("tab") != "events":
+            raise web.HTTPFound("/admin?tab=events")
+        filters["tickets"] = ""
+    elif filters.get("tab") == "db" and not can_view_db:
         raise web.HTTPFound("/admin?tab=date")
+    if not can_resend:
+        filters["tickets"] = ""
 
     loop = asyncio.get_running_loop()
     source_label = "PostgreSQL" if _use_postgres(config) else f"SQLite ({config.db_path})"
     db_data = None
     analytics = None
     events_bundle = None
-    events_flash = (request.query.get("saved") or "").strip()
+    saved_flag = (request.query.get("saved") or "").strip()
+    events_flash = ""
     events_errors: list[str] = []
+    ticket_holders = None
     empty_dashboard = {
         "events": [],
         "bookings": [],
@@ -2567,8 +2668,22 @@ async def admin_page(request: web.Request) -> web.Response:
         ef = filters.get("ef") or "best"
         events_bundle = await loop.run_in_executor(None, list_events_for_admin, ef)
         dashboard = empty_dashboard
-        if events_flash == "1":
+        tickets_id = (filters.get("tickets") or "").strip()
+        if can_resend and tickets_id.isdigit():
+            from bot.admin.ticket_resend import list_event_ticket_holders
+
+            ticket_holders = await loop.run_in_executor(
+                None, list_event_ticket_holders, int(tickets_id)
+            )
+        if saved_flag == "1":
             events_flash = "Сохранено. Афиша в боте обновится сразу."
+        elif saved_flag == "resend":
+            ok = request.query.get("ok") or "0"
+            fail = request.query.get("fail") or "0"
+            err = (request.query.get("err") or "").strip()
+            events_flash = f"Переотправка билетов: успешно {ok}, ошибок {fail}."
+            if err:
+                events_flash += f" ({err[:200]})"
         else:
             events_flash = ""
     else:
@@ -2580,6 +2695,15 @@ async def admin_page(request: web.Request) -> web.Response:
             fetch_filters["status"] = ""
         rows = await loop.run_in_executor(None, fetch_admin_rows, config, fetch_filters, include_empty_events)
         dashboard = build_dashboard(rows)
+        if filters.get("tab") == "users" and saved_flag == "resend":
+            ok = request.query.get("ok") or "0"
+            fail = request.query.get("fail") or "0"
+            err = (request.query.get("err") or "").strip()
+            events_flash = (
+                "Билет переотправлен."
+                if ok == "1" and fail == "0"
+                else f"Не удалось переотправить билет{': ' + err[:200] if err else '.'}"
+            )
     user_extras = None
     if filters.get("tab") == "users" and filters.get("u"):
         selected = (dashboard.get("users") or {}).get(filters.get("u") or "")
@@ -2613,9 +2737,77 @@ async def admin_page(request: web.Request) -> web.Response:
             events_bundle,
             events_flash,
             events_errors,
+            ticket_holders,
+            can_view_ops=can_view_ops,
+            can_resend_tickets=can_resend,
         ),
         content_type="text/html",
     )
+
+
+async def events_resend_ticket_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        return web.Response(text=render_login_html(), status=401, content_type="text/html")
+    if not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin?tab=events")
+    from bot.admin.ticket_resend import resend_ticket_async, resend_tickets_for_event_async
+    from urllib.parse import quote, urlencode
+
+    post = await request.post()
+    event_format = (post.get("ef") or "best").strip()
+    if event_format not in {"best", "proverka", "hitloto"}:
+        event_format = "best"
+    updated = (post.get("updated") or "1").strip() != "0"
+    tickets = (post.get("tickets") or "").strip()
+    back = (post.get("back") or "").strip()
+    user_key = (post.get("u") or "").strip()
+
+    event_id_raw = (post.get("event_id") or "").strip()
+    booking_id_raw = (post.get("booking_id") or "").strip()
+
+    if event_id_raw.isdigit():
+        result = await resend_tickets_for_event_async(int(event_id_raw), updated=updated)
+        q = urlencode(
+            {
+                "tab": "events",
+                "ef": event_format,
+                "tickets": event_id_raw,
+                "saved": "resend",
+                "ok": str(result.get("ok") or 0),
+                "fail": str(result.get("fail") or 0),
+            }
+        )
+        raise web.HTTPFound(f"/admin?{q}")
+
+    if booking_id_raw.isdigit():
+        one = await resend_ticket_async(int(booking_id_raw), updated=updated)
+        err = (one.get("error") or "")[:200]
+        if back == "user" and user_key:
+            q = {
+                "tab": "users",
+                "u": user_key,
+                "saved": "resend",
+                "ok": "1" if one.get("ok") else "0",
+                "fail": "0" if one.get("ok") else "1",
+            }
+            if err and not one.get("ok"):
+                q["err"] = err
+            raise web.HTTPFound(f"/admin?{urlencode(q)}")
+        q = {
+            "tab": "events",
+            "ef": event_format,
+            "saved": "resend",
+            "ok": "1" if one.get("ok") else "0",
+            "fail": "0" if one.get("ok") else "1",
+        }
+        if tickets:
+            q["tickets"] = tickets
+        if err and not one.get("ok"):
+            q["err"] = err
+        raise web.HTTPFound(f"/admin?{urlencode(q)}")
+
+    raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}")
 
 
 async def events_save_page(request: web.Request) -> web.Response:
@@ -2632,6 +2824,8 @@ async def events_save_page(request: web.Request) -> web.Response:
     result = await loop.run_in_executor(None, save_events_batch, event_format, rows)
     if result.get("errors"):
         can_view_db = _can_view_db(request, config)
+        can_view_ops = _can_view_ops(request, config)
+        can_resend = _can_resend_tickets(request, config)
         filters = {
             "tab": "events",
             "ef": event_format,
@@ -2648,6 +2842,7 @@ async def events_save_page(request: web.Request) -> web.Response:
             "date_from": "",
             "date_to": "",
             "all": "",
+            "tickets": "",
         }
         empty_dashboard = {
             "events": [],
@@ -2674,6 +2869,9 @@ async def events_save_page(request: web.Request) -> web.Response:
                 events_bundle,
                 flash,
                 result.get("errors") or [],
+                None,
+                can_view_ops=can_view_ops,
+                can_resend_tickets=can_resend,
             ),
             content_type="text/html",
         )
@@ -2706,7 +2904,12 @@ async def login_page(request: web.Request) -> web.Response:
     token = (data.get("token") or "").strip()
     if not _token_matches(token, config):
         return web.Response(text=render_login_html("Неверный токен"), status=401, content_type="text/html")
-    response = web.HTTPFound("/admin")
+    # Manager → only events; client/owner → main admin
+    if _is_manager_token(token, config) and not _is_owner_token(token, config) and not _is_client_token(token, config):
+        dest = "/admin?tab=events"
+    else:
+        dest = "/admin"
+    response = web.HTTPFound(dest)
     _set_auth_cookie(response, token)
     raise response
 
@@ -2728,6 +2931,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_get("/admin", admin_page)
     app.router.add_post("/admin/events/save", events_save_page)
     app.router.add_post("/admin/events/restore", events_restore_page)
+    app.router.add_post("/admin/events/resend-ticket", events_resend_ticket_page)
     app.router.add_post("/admin/login", login_page)
     app.router.add_get("/admin/logout", logout_page)
     return app

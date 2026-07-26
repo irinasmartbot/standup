@@ -79,7 +79,14 @@ def parse_events_form(post) -> tuple[str, list[dict]]:
     return event_format, rows
 
 
-def _row_html(event: dict | None, paid: bool, blank: bool = False) -> str:
+def _row_html(
+    event: dict | None,
+    paid: bool,
+    blank: bool = False,
+    fmt: str = "best",
+    *,
+    show_tickets: bool = True,
+) -> str:
     e = event or {}
     eid = "" if blank else str(e.get("id") or "")
     date_val = "" if blank else (e.get("date_iso") or "")
@@ -109,11 +116,20 @@ def _row_html(event: dict | None, paid: bool, blank: bool = False) -> str:
             '<td class="muted">—</td><td class="muted">—</td>'
         )
 
-    delete_cell = (
-        f'<td class="events-del"><label><input type="checkbox" name="e_delete" value="{_h(eid)}"> скрыть</label></td>'
-        if eid
-        else '<td class="muted">новая</td>'
-    )
+    if eid:
+        tickets_link = ""
+        if show_tickets:
+            tickets_link = (
+                f'<br><a class="pill events-tickets-link" '
+                f'href="{_events_link(fmt, tickets=eid)}">билеты</a>'
+            )
+        delete_cell = (
+            f'<td class="events-del">'
+            f'<label><input type="checkbox" name="e_delete" value="{_h(eid)}"> скрыть</label>'
+            f"{tickets_link}</td>"
+        )
+    else:
+        delete_cell = '<td class="muted">новая</td>'
     return (
         "<tr>"
         f'<td class="events-id"><input type="hidden" name="e_id" value="{_h(eid)}">'
@@ -132,10 +148,20 @@ def _row_html(event: dict | None, paid: bool, blank: bool = False) -> str:
     )
 
 
-def _table(events: list[dict], paid: bool, blank_rows: int = 2) -> str:
+def _table(
+    events: list[dict],
+    paid: bool,
+    blank_rows: int = 2,
+    fmt: str = "best",
+    *,
+    show_tickets: bool = True,
+) -> str:
     head_paid = "<th>Цена</th><th>Оплата</th><th>Состав</th>" if paid else "<th></th><th></th><th></th>"
-    body = "".join(_row_html(e, paid) for e in events)
-    body += "".join(_row_html(None, paid, blank=True) for _ in range(blank_rows))
+    body = "".join(_row_html(e, paid, fmt=fmt, show_tickets=show_tickets) for e in events)
+    body += "".join(
+        _row_html(None, paid, blank=True, fmt=fmt, show_tickets=show_tickets)
+        for _ in range(blank_rows)
+    )
     return (
         '<div class="table-wrap events-table-wrap"><table class="events-edit">'
         "<thead><tr>"
@@ -153,9 +179,12 @@ def render_events_tab(
     *,
     flash: str = "",
     errors: list[str] | None = None,
+    tickets_event_id: str = "",
+    ticket_holders: list[dict] | None = None,
+    can_resend_tickets: bool = True,
 ) -> str:
     fmt = event_format if event_format in AFISHA_FORMATS else "best"
-    bundle = bundle or {"active": [], "past": []}
+    bundle = bundle or {"active": [], "past": [], "hidden": []}
     paid = fmt in {"best", "hitloto"}
     sub = "".join(
         f'<a class="pill {"active" if key == fmt else ""}" href="{_events_link(key)}">{label}</a>'
@@ -170,20 +199,85 @@ def render_events_tab(
             + "</ul></div>"
         )
 
-    note = (
-        '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
-        "Пустые нижние строки — для быстрого добавления.<br>"
-        "<b>Смена времени или площадки:</b> правьте ту же строку и сохраните — брони "
-        "остаются на этом шоу и подтянут новые данные. "
-        "Уже отправленные в Telegram билеты сами не перерисуются.<br>"
-        "«Скрыть» убирает из бота; вернуть можно из блока «Скрытые» ниже.</p>"
-        if fmt == "best"
-        else '<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
-        "<b>Смена времени или площадки:</b> правьте ту же строку и сохраните — брони "
-        "остаются привязаны к этому шоу. "
-        "Уже отправленные билеты в чате сами не обновятся.<br>"
-        "«Скрыть» → убрать из бота; вернуть — в блоке «Скрытые».</p>"
-    )
+    if can_resend_tickets:
+        note = (
+            '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
+            "Пустые нижние строки — для быстрого добавления.<br>"
+            "<b>Смена времени или площадки:</b> правьте ту же строку и сохраните — брони "
+            "остаются на этом шоу и подтянут новые данные.<br>"
+            "«билеты» — кто уже получил билет и переотправка. "
+            "«Скрыть» убирает из бота; вернуть — в блоке «Скрытые».</p>"
+            if fmt == "best"
+            else '<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
+            "<b>Смена времени/площадки:</b> правьте ту же строку. "
+            "«билеты» — список получивших и переотправка.</p>"
+        )
+    else:
+        note = (
+            '<p class="muted">BEST — платные шоу; даты отсюда же использует розыгрыш. '
+            "Пустые нижние строки — для быстрого добавления.<br>"
+            "<b>Смена времени или площадки:</b> правьте ту же строку и сохраните — брони "
+            "остаются на этом шоу.<br>"
+            "«Скрыть» убирает из бота; вернуть — в блоке «Скрытые».</p>"
+            if fmt == "best"
+            else '<p class="muted">Пустые нижние строки — быстро добавить шоу.<br>'
+            "<b>Смена времени/площадки:</b> правьте ту же строку. "
+            "«Скрыть» убирает из бота; вернуть — в блоке «Скрытые».</p>"
+        )
+
+    holders = ticket_holders or []
+    tickets_panel = ""
+    if can_resend_tickets and tickets_event_id:
+        rows = []
+        for h in holders:
+            tid = h.get("telegram_id") or "—"
+            uname = f"@{h.get('username')}" if h.get("username") else "—"
+            got = "да" if h.get("has_ticket_msg") else "нет msg id"
+            rows.append(
+                "<tr>"
+                f"<td>{_h(h.get('booking_id'))}</td>"
+                f"<td>{_h(h.get('name') or '—')}<br><span class='muted'>{_h(uname)}</span></td>"
+                f"<td>{_h(tid)}</td>"
+                f"<td>{_h(h.get('phone') or '—')}</td>"
+                f"<td>{_h(h.get('guests'))}</td>"
+                f"<td>{_h(got)}</td>"
+                f"<td>"
+                f'<form method="post" action="/admin/events/resend-ticket" class="inline-form">'
+                f'<input type="hidden" name="ef" value="{_h(fmt)}">'
+                f'<input type="hidden" name="tickets" value="{_h(tickets_event_id)}">'
+                f'<input type="hidden" name="booking_id" value="{_h(h.get("booking_id"))}">'
+                f'<input type="hidden" name="updated" value="1">'
+                '<button type="submit">Переотправить</button>'
+                "</form></td>"
+                "</tr>"
+            )
+        body = "".join(rows) or '<tr><td colspan="7" class="muted">Подтверждённых билетов на это шоу нет</td></tr>'
+        tickets_panel = f"""
+    <section class="card analytics-section events-tickets-panel">
+      <h2>Билеты по шоу #{_h(tickets_event_id)}</h2>
+      <p class="muted">Показаны только брони со статусом «подтверждено» (билет получен).
+      Переотправка шлёт новый билет с текущими датой/временем/местом из афиши.</p>
+      <div class="events-toolbar">
+        <form method="post" action="/admin/events/resend-ticket">
+          <input type="hidden" name="ef" value="{_h(fmt)}">
+          <input type="hidden" name="tickets" value="{_h(tickets_event_id)}">
+          <input type="hidden" name="event_id" value="{_h(tickets_event_id)}">
+          <input type="hidden" name="updated" value="1">
+          <button type="submit" {"disabled" if not holders else ""}>
+            Переотправить всем ({len(holders)})
+          </button>
+        </form>
+        <a class="pill" href="{_events_link(fmt)}">Закрыть список</a>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>booking</th><th>Гость</th><th>telegram_id</th><th>Телефон</th>
+          <th>Гости</th><th>Уже слали</th><th></th>
+        </tr></thead>
+        <tbody>{body}</tbody>
+      </table></div>
+    </section>
+    """
 
     def _archive_block(title: str, items: list[dict], persist_key: str, hint: str) -> str:
         if not items:
@@ -241,6 +335,7 @@ def render_events_tab(
       <div class="events-subtabs">{sub}</div>
     </div>
     {flash_html}{err_html}
+    {tickets_panel}
     <section class="card analytics-section">
       <h2>Афиша · {_h(AFISHA_FORMAT_LABELS.get(fmt, fmt))}</h2>
       {note}
@@ -251,7 +346,7 @@ def render_events_tab(
           <a class="pill" href="{_events_link(fmt)}">Отменить правки</a>
           <span class="muted">Актуальных: <b>{len(bundle.get("active") or [])}</b></span>
         </div>
-        {_table(bundle.get("active") or [], paid=paid, blank_rows=3)}
+        {_table(bundle.get("active") or [], paid=paid, blank_rows=3, fmt=fmt, show_tickets=can_resend_tickets)}
         <div class="events-toolbar events-toolbar-bottom">
           <button type="submit">Сохранить / обновить</button>
         </div>
