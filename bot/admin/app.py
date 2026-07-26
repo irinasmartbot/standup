@@ -2304,6 +2304,13 @@ def render_admin_html(
     table.events-edit {{
       table-layout:fixed; width:100%; min-width:1480px; border-collapse:collapse;
     }}
+    .events-table-scroll {{ margin:0; }}
+    .events-table-scroll-top {{
+      overflow-x:auto; overflow-y:hidden; height:14px; margin-bottom:6px;
+      -webkit-overflow-scrolling:touch;
+    }}
+    .events-table-scroll-top-inner {{ height:1px; }}
+    .events-table-wrap {{ overflow-x:auto; -webkit-overflow-scrolling:touch; }}
     table.events-edit th, table.events-edit td {{
       padding:10px 8px; vertical-align:top; text-align:left;
     }}

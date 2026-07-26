@@ -214,6 +214,10 @@ def _table(
         f"{time_opts}</datalist>"
         '<datalist id="events-location-presets">'
         f"{loc_opts}</datalist>"
+        '<div class="events-table-scroll">'
+        '<div class="events-table-scroll-top" aria-hidden="true">'
+        '<div class="events-table-scroll-top-inner"></div>'
+        "</div>"
         '<div class="table-wrap events-table-wrap"><table class="events-edit">'
         "<thead><tr>"
         '<th class="events-id">ID</th>'
@@ -228,6 +232,7 @@ def _table(
         '<th class="events-del"></th>'
         "</tr></thead>"
         f"<tbody>{body}</tbody></table></div>"
+        "</div>"
     )
 
 
@@ -468,6 +473,40 @@ def render_events_tab(
       document.querySelectorAll(".events-form").forEach(function (form) {{
         form.querySelectorAll("input.events-grow").forEach(function (el) {{
           fitGrow(el, false);
+        }});
+        form.querySelectorAll(".events-table-scroll").forEach(function (root) {{
+          var top = root.querySelector(".events-table-scroll-top");
+          var inner = root.querySelector(".events-table-scroll-top-inner");
+          var bottom = root.querySelector(".events-table-wrap");
+          var table = bottom ? bottom.querySelector("table") : null;
+          if (!top || !inner || !bottom || !table) return;
+          var syncing = false;
+          function syncWidth() {{
+            inner.style.width = table.scrollWidth + "px";
+            top.style.display = table.scrollWidth > bottom.clientWidth + 1 ? "" : "none";
+          }}
+          function onTopScroll() {{
+            if (syncing) return;
+            syncing = true;
+            bottom.scrollLeft = top.scrollLeft;
+            syncing = false;
+          }}
+          function onBottomScroll() {{
+            if (syncing) return;
+            syncing = true;
+            top.scrollLeft = bottom.scrollLeft;
+            syncing = false;
+          }}
+          top.addEventListener("scroll", onTopScroll, {{ passive: true }});
+          bottom.addEventListener("scroll", onBottomScroll, {{ passive: true }});
+          syncWidth();
+          if (window.ResizeObserver) {{
+            var ro = new ResizeObserver(syncWidth);
+            ro.observe(table);
+            ro.observe(bottom);
+          }} else {{
+            window.addEventListener("resize", syncWidth);
+          }}
         }});
         form.addEventListener("focusin", function (ev) {{
           var t = ev.target;
