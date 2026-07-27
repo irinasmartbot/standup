@@ -112,15 +112,17 @@ def bookings_keyboard(row, *, page: int = 0, total: int = 1) -> str:
 
     nav_count = 0
     if total > 1:
-        # Как в TG: на первой — только «Далее», на последней — только «Назад»
+        # Фиксированный ряд из 3 кнопок — меньше «прыжков» при листании.
         if page > 0:
-            kb.button("⬅️ Назад", _payload("mb_page", page=page - 1))
-            nav_count += 1
+            kb.button("⬅️", _payload("mb_page", page=page - 1), color="primary")
+        else:
+            kb.button("·", _payload("mb_noop"))
         kb.button(f"{page + 1}/{total}", _payload("mb_noop"))
-        nav_count += 1
         if page < total - 1:
-            kb.button("Далее ➡️", _payload("mb_page", page=page + 1))
-            nav_count += 1
+            kb.button("➡️", _payload("mb_page", page=page + 1), color="primary")
+        else:
+            kb.button("·", _payload("mb_noop"))
+        nav_count = 3
 
     kb.button("⬅️ В главное меню", _payload("main_menu"))
     if total > 1:
@@ -132,7 +134,7 @@ def bookings_keyboard(row, *, page: int = 0, total: int = 1) -> str:
 
 def ticket_view_keyboard(page: int = 0) -> str:
     kb = VKKeyboardBuilder(inline=True)
-    kb.button("⬅️ Назад к броням", _payload("mb_page", page=page))
+    kb.button("⬅️ Назад к броням", _payload("my_bookings", page=page))
     kb.button("⬅️ В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()

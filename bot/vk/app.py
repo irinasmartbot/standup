@@ -312,6 +312,7 @@ class VKBotApp:
         self.peer_nav_message_ids: dict[int, list[int]] = {}
         self._pending_delete_ids: dict[int, list[int]] = {}
         self.peer_carousel_message_ids: dict[int, int] = {}
+        self.peer_my_bookings_message_ids: dict[int, int] = {}
         self._seen_event_ids: dict[str, float] = {}
         self._seen_message_ids: dict[int, float] = {}
         self._peer_cmd_cooldown: dict[tuple[int, str], float] = {}
@@ -482,6 +483,7 @@ class VKBotApp:
         vk_booking.clear_session(self.booking_sessions, user_id)
         vk_mb.clear_manage_session(self.manage_sessions, user_id)
         self.peer_carousel_message_ids.pop(int(peer_id), None)
+        self.peer_my_bookings_message_ids.pop(int(peer_id), None)
         if is_start:
             self._track(user_id, EVENT_BOT_START)
         else:
@@ -607,11 +609,21 @@ class VKBotApp:
         finally:
             self._ticket_in_progress.discard(booking_id)
 
-    async def _send_my_bookings(self, peer_id: int, vk_id: int, *, page: int = 0) -> None:
+    async def _send_my_bookings(
+        self,
+        peer_id: int,
+        vk_id: int,
+        *,
+        page: int = 0,
+        edit: bool = False,
+    ) -> None:
         vk_booking.clear_session(self.booking_sessions, vk_id)
         vk_mb.clear_manage_session(self.manage_sessions, vk_id)
+        # Не путаем с BEST-каруселью: у каждой свой message_id для edit.
+        self.peer_carousel_message_ids.pop(int(peer_id), None)
         rows = vk_mb.list_rows(vk_id)
         if not rows:
+            self.peer_my_bookings_message_ids.pop(int(peer_id), None)
             await self._send_text(
                 peer_id,
                 vk_mb.empty_bookings_text(),
@@ -619,11 +631,30 @@ class VKBotApp:
             )
             return
         page = page % len(rows)
-        await self._send_text(
-            peer_id,
-            vk_mb.booking_card_text(rows[page], page=page, total=len(rows)),
-            keyboard=vk_mb.bookings_keyboard(rows[page], page=page, total=len(rows)),
-        )
+        text = vk_mb.booking_card_text(rows[page], page=page, total=len(rows))
+        keyboard = vk_mb.bookings_keyboard(rows[page], page=page, total=len(rows))
+        peer = int(peer_id)
+        existing_id = self.peer_my_bookings_message_ids.get(peer)
+
+        if edit and existing_id:
+            ok = await self.client.edit_message(
+                peer_id,
+                existing_id,
+                text,
+                keyboard=keyboard,
+            )
+            await self._delete_pending(peer_id)
+            if ok:
+                return
+            logger.warning(
+                "My bookings carousel edit failed peer_id=%s msg_id=%s, falling back to send",
+                peer_id,
+                existing_id,
+            )
+
+        mid = await self._send_text(peer_id, text, keyboard=keyboard)
+        if mid:
+            self.peer_my_bookings_message_ids[peer] = int(mid)
 
     async def _send_my_booking_ticket(self, peer_id: int, vk_id: int, page: int) -> None:
         rows = vk_mb.list_rows(vk_id)
@@ -682,12 +713,22 @@ class VKBotApp:
 
         if cmd == "my_bookings":
             self._track(vk_id, EVENT_CMD_MY_BOOKINGS)
-            await self._send_my_bookings(peer_id, vk_id)
+            await self._send_my_bookings(
+                peer_id,
+                vk_id,
+                page=int(payload.get("page") or 0),
+                edit=False,
+            )
             return True
         if cmd == "mb_noop":
             return True
         if cmd == "mb_page":
-            await self._send_my_bookings(peer_id, vk_id, page=int(payload.get("page") or 0))
+            await self._send_my_bookings(
+                peer_id,
+                vk_id,
+                page=int(payload.get("page") or 0),
+                edit=True,
+            )
             return True
         if cmd == "mb_ticket":
             await self._send_my_booking_ticket(peer_id, vk_id, int(payload.get("page") or 0))
@@ -1560,6 +1601,8 @@ class VKBotApp:
         vk_id: int | None = None,
         edit: bool = False,
     ) -> None:
+        # Не путаем с каруселью «Мои брони».
+        self.peer_my_bookings_message_ids.pop(int(peer_id), None)
         events = await self._best_venue_events(venue)
         if not events:
             self.peer_carousel_message_ids.pop(int(peer_id), None)
