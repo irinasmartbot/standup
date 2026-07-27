@@ -3,6 +3,7 @@ import asyncio
 import os
 import ssl
 import sys
+import time
 from pathlib import Path
 
 import aiohttp
@@ -10,7 +11,7 @@ import aiohttp
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bot.vk.client import VKClient
+from bot.vk.client import VKAPIError, VKClient
 from bot.vk.config import load_vk_settings
 from bot.vk.media import VKSystemImageCache
 
@@ -46,7 +47,8 @@ _EXCLUDED_RANDOM_NAMES = {
     "nebar.jpg",
     "ticket_template.jpg",
 }
-_MAX_RANDOM_PHOTO_SIZE = 10 * 1024 * 1024
+# VK message photo upload is picky; keep under ~5 MB to avoid empty photo responses.
+_MAX_RANDOM_PHOTO_SIZE = 5 * 1024 * 1024
 
 
 def _project_root() -> Path:
@@ -105,11 +107,22 @@ async def upload_image(client: VKClient, peer_id: int, path: Path) -> str:
             async with session.post(upload_url, data=form) as resp:
                 uploaded = await resp.json(content_type=None)
 
+    if not isinstance(uploaded, dict):
+        raise RuntimeError(f"Bad upload response for {path.name}: {uploaded!r}")
+    photo = uploaded.get("photo")
+    server_id = uploaded.get("server")
+    photo_hash = uploaded.get("hash")
+    if not photo or photo in {"", "[]", "null"} or server_id is None or not photo_hash:
+        raise RuntimeError(
+            f"VK rejected upload for {path.name} "
+            f"(size={path.stat().st_size} bytes, response={uploaded!r})"
+        )
+
     saved = await client.api(
         "photos.saveMessagesPhoto",
-        photo=uploaded["photo"],
-        server=uploaded["server"],
-        hash=uploaded["hash"],
+        photo=photo,
+        server=server_id,
+        hash=photo_hash,
     )
     if not saved:
         raise RuntimeError(f"VK did not return saved photo for {path}")
@@ -129,6 +142,13 @@ def collect_images(args) -> list[tuple[str, Path]]:
             known = {path.resolve() for _, path in items if path.exists()}
             for path in sorted(photos_dir.iterdir()):
                 if not path.is_file() or not _is_random_cover_candidate(path):
+                    if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+                        try:
+                            size = path.stat().st_size
+                        except OSError:
+                            size = -1
+                        if size > _MAX_RANDOM_PHOTO_SIZE:
+                            print(f"skip too large (>5MB): {path.name} ({size} bytes)")
                     continue
                 if path.resolve() in known:
                     continue
@@ -154,6 +174,11 @@ async def main():
         action="append",
         help="Image to upload, either path or key=path. Can be repeated.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-upload even if key already exists in cache",
+    )
     args = parser.parse_args()
 
     settings = load_vk_settings()
@@ -166,10 +191,26 @@ async def main():
     cache = VKSystemImageCache(settings.system_images_cache)
     client = VKClient(settings)
 
+    ok = 0
+    skipped = 0
+    failed = 0
     for key, path in collect_images(args):
-        attachment = await upload_image(client, peer_id, path)
-        cache.set(key, os.path.relpath(path, _project_root()), attachment)
-        print(f"{key}: {attachment}")
+        if not args.force and cache.get(key):
+            print(f"skip cached: {key}")
+            skipped += 1
+            continue
+        try:
+            attachment = await upload_image(client, peer_id, path)
+            cache.set(key, os.path.relpath(path, _project_root()), attachment)
+            print(f"{key}: {attachment}")
+            ok += 1
+            await asyncio.sleep(0.35)
+        except (VKAPIError, RuntimeError, OSError, aiohttp.ClientError) as exc:
+            failed += 1
+            print(f"FAIL {key} ({path.name}): {exc}")
+            continue
+
+    print(f"done: uploaded={ok} skipped_cached={skipped} failed={failed}")
 
 
 if __name__ == "__main__":
