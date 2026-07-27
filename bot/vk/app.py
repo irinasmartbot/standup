@@ -757,7 +757,7 @@ class VKBotApp:
             await self._send_text(
                 peer_id,
                 vk_booking.name_confirm_text(name),
-                keyboard=vk_booking.name_confirm_keyboard(),
+                keyboard=vk_booking.name_confirm_keyboard(name),
                 replace_nav=False,
             )
             return
@@ -1187,6 +1187,36 @@ class VKBotApp:
         if cmd == "booking_get_ticket":
             await self._issue_ticket(peer_id, int(payload.get("booking_id") or 0))
             return True
+        if cmd in {"booking_name_ok", "booking_name_change"}:
+            if not session:
+                await self._send_text(
+                    peer_id,
+                    "Сессия бронирования сброшена. Выбери дату ещё раз 😊",
+                    replace_nav=False,
+                )
+                return True
+            if cmd == "booking_name_change":
+                session["name"] = ""
+                session["step"] = vk_booking.STEP_NAME
+                await self._send_text(peer_id, vk_booking.NAME_ASK_TEXT, replace_nav=False)
+                return True
+            name = (payload.get("name") or session.get("name") or "").strip()
+            if not name:
+                session["step"] = vk_booking.STEP_NAME
+                await self._send_text(peer_id, vk_booking.NAME_ASK_TEXT, replace_nav=False)
+                return True
+            session["name"] = name
+            try:
+                await self._ask_phone(peer_id, vk_id, session)
+            except Exception:
+                logger.exception("ask_phone failed after name_ok vk_id=%s", vk_id)
+                await self._send_text(
+                    peer_id,
+                    vk_booking.PHONE_ASK_TEXT,
+                    replace_nav=False,
+                )
+                session["step"] = vk_booking.STEP_PHONE
+            return True
         if await self._handle_my_bookings_flow(
             peer_id,
             vk_id,
@@ -1201,18 +1231,6 @@ class VKBotApp:
         if not session:
             return False
 
-        if cmd == "booking_name_ok":
-            if not (session.get("name") or "").strip():
-                session["step"] = vk_booking.STEP_NAME
-                await self.client.send_message(peer_id, vk_booking.NAME_ASK_TEXT)
-                return True
-            await self._ask_phone(peer_id, vk_id, session)
-            return True
-        if cmd == "booking_name_change":
-            session["name"] = ""
-            session["step"] = vk_booking.STEP_NAME
-            await self.client.send_message(peer_id, vk_booking.NAME_ASK_TEXT)
-            return True
         if cmd == "booking_phone_use":
             phone = normalize_phone(session.get("phone"))
             if not phone:
@@ -1357,6 +1375,10 @@ class VKBotApp:
             "best_date_page",
             "hitloto_date_page",
             "rz_dates_page",
+            "booking_name_ok",
+            "booking_name_change",
+            "booking_phone_use",
+            "booking_phone_change",
             "venues_details",
             "venues_card",
         }:

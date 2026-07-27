@@ -50,11 +50,15 @@ def name_confirm_text(name: str) -> str:
     )
 
 
-def name_confirm_keyboard() -> str:
+def name_confirm_keyboard(name: str = "") -> str:
     kb = VKKeyboardBuilder(inline=True)
-    kb.button("Все верно 👌", _payload("booking_name_ok"), color="primary")
+    # В один столбец: в ряду из 2 VK обрезает длинный текст до «С»/эмодзи.
+    payload = _payload("booking_name_ok")
+    if (name or "").strip():
+        payload["name"] = (name or "").strip()[:80]
+    kb.button("Да, всё верно", payload, color="primary")
     kb.button("Изменить", _payload("booking_name_change"))
-    kb.adjust(2)
+    kb.adjust(1)
     return kb.as_json()
 
 
