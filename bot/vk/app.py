@@ -1988,12 +1988,18 @@ class VKBotApp:
             self.peer_dates_message_ids[peer] = int(mid)
 
     async def _send_raffle_date(self, peer_id: int, vk_id: int, date: str) -> None:
+        dates_text = (
+            "Отлично, подписка на сообщество есть 🙌\n\n"
+            "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉"
+        )
+        await self._disable_callback_buttons(peer_id, dates_text)
+        self.peer_dates_message_ids.pop(int(peer_id), None)
+
         events = [e for e in await vk_raffle.future_best_events() if e.get("date") == date]
         if not events:
             await self._send_text(peer_id, "Эта дата уже недоступна. Выбери другую 👇")
             await self._send_raffle_dates(peer_id, vk_id, edit=False)
             return
-        self.peer_dates_message_ids.pop(int(peer_id), None)
         if len(events) == 1:
             await self._send_raffle_event(peer_id, vk_id, events[0]["id"])
             return
@@ -2001,6 +2007,7 @@ class VKBotApp:
             peer_id,
             f"Шоу на {format_date(date)} 👇",
             keyboard=vk_raffle.events_keyboard(events, date),
+            replace_nav=False,
         )
 
     async def _send_raffle_event(self, peer_id: int, vk_id: int, event_id: Any) -> None:
