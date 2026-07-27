@@ -2241,7 +2241,7 @@ def render_admin_html(
     header p {{ margin:0; color:#cbd5e1; }}
     header a {{ color:white; }}
     main {{ max-width:1280px; margin:0 auto; padding:24px; }}
-    .tabs {{ display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }}
+    .tabs {{ display:flex; gap:10px; margin:0 0 16px; padding-left:16px; flex-wrap:wrap; }}
     .tab, .pill {{ padding:10px 14px; border-radius:999px; border:1px solid var(--line); color:#111827; background:white; text-decoration:none; }}
     .tab.active, .pill.active {{ background:#111827; color:white; border-color:#111827; }}
     .summary {{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:16px; margin-bottom:20px; }}
