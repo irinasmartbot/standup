@@ -107,11 +107,12 @@ def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) 
     kb.button("Правила посещения шоу", _payload("rules"))
     kb.button("Задать вопрос менеджеру", link=settings.manager_link)
     kb.button("Канал анонсов", link=settings.community_link)
+    # Как на скрине TG/VK: площадки|правила и менеджер|канал в рядах по 2.
     # VK: max 6 rows / 10 buttons
     if show_my_bookings:
         kb.adjust(1, 1, 1, 1, 2, 2)
     else:
-        kb.adjust(1, 1, 1, 1, 1, 2)
+        kb.adjust(1, 1, 1, 2, 2)
     return kb.as_json()
 
 
@@ -1601,10 +1602,21 @@ class VKBotApp:
             await self._send_hitloto_event(peer_id, payload.get("event_id"), vk_id=vk_id)
             return
 
-        await self.client.send_message(
+        # Как на скрине: любой непонятный текст вне сценария → главное меню.
+        if text and not cmd:
+            await self._send_text(
+                peer_id,
+                "Пожалуйста, выбери вариант из кнопок ниже.",
+                keyboard=self._main_menu_kb(vk_id),
+            )
+            return
+        if not text and not cmd:
+            return
+
+        await self._send_text(
             peer_id,
             "Пожалуйста, выбери вариант из кнопок ниже.",
-            keyboard=self._main_menu_kb(peer_id),
+            keyboard=self._main_menu_kb(vk_id),
         )
 
     async def _send_venues(self, peer_id: int) -> None:
