@@ -41,7 +41,7 @@ def _payload(value: str, **extra) -> dict[str, Any]:
 
 
 def guests_keyboard() -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     for n in (1, 2, 3, 4):
         kb.button(str(n), _payload("booking_guests", guests=n), color="primary")
     kb.button("Отмена", _payload("booking_cancel"))
@@ -50,7 +50,7 @@ def guests_keyboard() -> str:
 
 
 def phone_saved_keyboard(phone: str) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button("Да, использовать", _payload("booking_phone_use"), color="primary")
     kb.button("Ввести другой номер", _payload("booking_phone_change"))
     kb.button("Отмена", _payload("booking_cancel"))
@@ -59,14 +59,14 @@ def phone_saved_keyboard(phone: str) -> str:
 
 
 def booking_cancel_keyboard() -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button("Отмена", _payload("booking_cancel"))
     kb.adjust(1)
     return kb.as_json()
 
 
 def after_booking_keyboard(booking_id: int, *, offer_ticket: bool) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     if offer_ticket:
         kb.button("Получить билет", _payload("booking_get_ticket", booking_id=booking_id), color="primary")
     kb.button("В главное меню", _payload("main_menu"))
@@ -75,7 +75,7 @@ def after_booking_keyboard(booking_id: int, *, offer_ticket: bool) -> str:
 
 
 def manage_ticket_keyboard(booking_id: int, settings_manager_link: str) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id), color="negative")
     kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
     kb.button("Задать вопрос менеджеру", link=settings_manager_link)

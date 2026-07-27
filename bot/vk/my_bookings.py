@@ -91,7 +91,7 @@ def ticket_bytes(row) -> bytes:
 def bookings_keyboard(row, *, page: int = 0, total: int = 1) -> str:
     """Клавиатура карточки — как в Telegram (карусель + билет при confirmed)."""
     booking_id, _format_name, status, *_ = row
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     action_count = 0
 
     # «Получить билет» только из напоминания; в карточке — «Билет по брони», если confirmed
@@ -131,7 +131,7 @@ def bookings_keyboard(row, *, page: int = 0, total: int = 1) -> str:
 
 
 def ticket_view_keyboard(page: int = 0) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button("⬅️ Назад к броням", _payload("mb_page", page=page))
     kb.button("⬅️ В главное меню", _payload("main_menu"))
     kb.adjust(1)
@@ -139,7 +139,7 @@ def ticket_view_keyboard(page: int = 0) -> str:
 
 
 def confirm_keyboard(cmd: str, booking_id: int) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button("Подтверждаю", _payload(cmd, booking_id=booking_id), color="primary")
     kb.button("⬅️ Назад к броням", _payload("my_bookings"))
     kb.adjust(1)
@@ -147,7 +147,7 @@ def confirm_keyboard(cmd: str, booking_id: int) -> str:
 
 
 def after_cancel_keyboard(community_link: str) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     if community_link:
         kb.button("Канал анонсов", link=community_link)
     kb.button("⬅️ В главное меню", _payload("main_menu"))
@@ -156,7 +156,7 @@ def after_cancel_keyboard(community_link: str) -> str:
 
 
 def change_guests_done_keyboard(booking_id: int) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
     kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
     kb.button(
@@ -169,7 +169,7 @@ def change_guests_done_keyboard(booking_id: int) -> str:
 
 
 def guests_pick_keyboard(booking_id: int) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     for n in (1, 2, 3, 4):
         kb.button(str(n), _payload("mb_change_guests_set", booking_id=booking_id, guests=n), color="primary")
     kb.button("⬅️ Назад к броням", _payload("my_bookings"))

@@ -26,7 +26,7 @@ def _payload(value: str, **extra) -> dict:
 
 
 def _reminder_keyboard(booking_id: int) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button("Получить билет", _payload("booking_get_ticket", booking_id=booking_id), color="primary")
     kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id), color="negative")
     kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
@@ -40,7 +40,7 @@ def _reminder_keyboard(booking_id: int) -> str:
 
 
 def _annul_keyboard(community_link: str) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     if community_link:
         kb.button("Наше сообщество", link=community_link)
     kb.button("В главное меню", _payload("main_menu"))

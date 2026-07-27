@@ -93,7 +93,7 @@ def _date_label(date: str) -> str:
 
 
 def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button("Забронировать места", _payload("book"), color="primary")
     kb.button("Купить билет", _payload("buy_ticket"), color="primary")
     if show_my_bookings:
@@ -654,7 +654,7 @@ class VKBotApp:
     async def _mb_actionable(self, peer_id: int, vk_id: int, booking_id: int):
         booking, err = vk_mb.actionable_booking(booking_id, vk_id)
         if err == "past":
-            kb = VKKeyboardBuilder()
+            kb = VKKeyboardBuilder(inline=True)
             kb.button("📅 Посмотреть актуальные даты", _payload("check_date_page"))
             kb.button("В главное меню", _payload("main_menu"))
             kb.adjust(1)
@@ -1147,7 +1147,7 @@ class VKBotApp:
             return
         if cmd == "booking_rules":
             event_id = payload.get("event_id")
-            kb = VKKeyboardBuilder()
+            kb = VKKeyboardBuilder(inline=True)
             if event_id is not None:
                 kb.button("Назад к карточке", _payload("check_event", event_id=event_id))
             else:
@@ -1617,7 +1617,7 @@ class VKBotApp:
             return
         dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
         if not dates:
-            kb = VKKeyboardBuilder()
+            kb = VKKeyboardBuilder(inline=True)
             kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
             kb.button("В главное меню", _payload("main_menu"))
             kb.adjust(1)
