@@ -115,6 +115,27 @@ def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) 
     return kb.as_json()
 
 
+def _venues_intro_keyboard() -> str:
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button("Узнать подробнее", _payload("venues_details"), color="primary")
+    kb.button("⬅️ В главное меню", _payload("main_menu"))
+    kb.adjust(1)
+    return kb.as_json()
+
+
+def _venues_card_keyboard(index: int) -> str:
+    next_index = (int(index) + 1) % len(VENUE_CARDS)
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button("Смотреть ещё", _payload("venues_card", index=next_index), color="primary")
+    kb.button("⬅️ В главное меню", _payload("main_menu"))
+    kb.adjust(1)
+    return kb.as_json()
+
+
+def _venue_card_attachment_key(card: dict[str, Any]) -> str:
+    return str(card.get("file") or "").rsplit(".", 1)[0]
+
+
 def formats_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("STANDUP BEST", _payload("best"), color="primary")
@@ -318,6 +339,7 @@ class VKBotApp:
         self.peer_carousel_message_ids: dict[int, int] = {}
         self.peer_my_bookings_message_ids: dict[int, int] = {}
         self.peer_dates_message_ids: dict[int, int] = {}
+        self.peer_venues_message_ids: dict[int, int] = {}
         # cmid кнопки из текущего message_event — переживает рестарт бота.
         self._peer_event_cmid: dict[int, int] = {}
         self._seen_event_ids: dict[str, float] = {}
@@ -585,6 +607,7 @@ class VKBotApp:
         self.peer_carousel_message_ids.pop(int(peer_id), None)
         self.peer_my_bookings_message_ids.pop(int(peer_id), None)
         self.peer_dates_message_ids.pop(int(peer_id), None)
+        self.peer_venues_message_ids.pop(int(peer_id), None)
         if is_start:
             self._track(user_id, EVENT_BOT_START)
         else:
@@ -1231,6 +1254,8 @@ class VKBotApp:
             "check_date_page",
             "best_date_page",
             "hitloto_date_page",
+            "venues_details",
+            "venues_card",
         }:
             return False
         now = time.monotonic()
@@ -1440,6 +1465,16 @@ class VKBotApp:
         if cmd == "venues":
             await self._send_venues(peer_id)
             return
+        if cmd == "venues_details":
+            await self._send_venue_card(peer_id, 0, edit=False)
+            return
+        if cmd == "venues_card":
+            await self._send_venue_card(
+                peer_id,
+                int(payload.get("index") or 0),
+                edit=True,
+            )
+            return
         if cmd in {"check", "check_date_page"}:
             page = int(payload.get("page") or 0)
             if cmd == "check":
@@ -1573,19 +1608,53 @@ class VKBotApp:
         )
 
     async def _send_venues(self, peer_id: int) -> None:
-        await self.client.send_message(
+        self.peer_venues_message_ids.pop(int(peer_id), None)
+        await self._send_text(
             peer_id,
             VENUES_INTRO_TEXT,
-            keyboard=self._main_menu_kb(peer_id),
+            keyboard=_venues_intro_keyboard(),
         )
-        for card in VENUE_CARDS:
-            key = card["file"].rsplit(".", 1)[0]
-            attachment = self.images.get(key)
-            caption = format_vk_text(card.get("fallback_html") or "")
-            if attachment:
-                await self.client.send_message(peer_id, caption or key, attachment=attachment)
-            elif caption:
-                await self.client.send_message(peer_id, caption)
+
+    async def _send_venue_card(self, peer_id: int, index: int = 0, *, edit: bool = False) -> None:
+        """Карусель из 3 карточек площадок — как в TG («Смотреть ещё»)."""
+        if not VENUE_CARDS:
+            await self._send_text(peer_id, "Пока нет карточек площадок.", keyboard=self._main_menu_kb(peer_id))
+            return
+        index = int(index or 0) % len(VENUE_CARDS)
+        card = VENUE_CARDS[index]
+        text = format_vk_text(card.get("fallback_html") or "")
+        keyboard = _venues_card_keyboard(index)
+        key = _venue_card_attachment_key(card)
+        attachment = self.images.get(key) if key else None
+        peer = int(peer_id)
+        existing_id = self.peer_venues_message_ids.get(peer)
+
+        if edit and await self._edit_card(
+            peer_id,
+            text,
+            stored_message_id=existing_id,
+            keyboard=keyboard,
+            attachment=attachment or None,
+        ):
+            if existing_id:
+                self.peer_venues_message_ids[peer] = int(existing_id)
+            return
+        if edit and (existing_id or self._callback_cmid(peer_id)):
+            logger.warning(
+                "Venue card edit failed peer_id=%s msg_id=%s cmid=%s, falling back to send",
+                peer_id,
+                existing_id,
+                self._callback_cmid(peer_id),
+            )
+
+        mid = await self._send_text(
+            peer_id,
+            text,
+            keyboard=keyboard,
+            attachment=attachment,
+        )
+        if mid:
+            self.peer_venues_message_ids[peer] = int(mid)
 
     async def _send_check_dates(self, peer_id: int, page: int = 0, *, edit: bool = False) -> None:
         self.peer_context[peer_id] = "check"
