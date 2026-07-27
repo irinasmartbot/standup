@@ -2835,19 +2835,21 @@ def render_login_html(error: str = "") -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Вход · Стендап бронирование</title>
   <style>
+    * {{ box-sizing:border-box; }}
     body {{ margin:0; min-height:100vh; display:grid; place-items:center; background:#f4f6fb; font-family:Arial,sans-serif; color:#111827; }}
     form {{ width:min(420px, calc(100vw - 32px)); background:white; padding:28px; border-radius:18px; box-shadow:0 16px 50px rgba(15,23,42,.12); }}
-    h1 {{ margin:0 0 10px; font-size:26px; }}
-    p {{ margin:0 0 18px; color:#667085; }}
-    input, button {{ width:100%; border:1px solid #e5e7eb; border-radius:10px; padding:12px; font:inherit; }}
-    button {{ margin-top:12px; background:#111827; color:white; cursor:pointer; }}
-    .error {{ color:#b91c1c; background:#fee2e2; border-radius:10px; padding:10px 12px; }}
+    h1 {{ margin:0 0 18px; font-size:26px; }}
+    input, button {{
+      display:block; width:100%; height:48px; margin:0; border:1px solid #e5e7eb;
+      border-radius:10px; padding:0 14px; font:inherit; line-height:46px;
+    }}
+    button {{ margin-top:12px; background:#111827; color:white; border-color:#111827; cursor:pointer; }}
+    .error {{ margin:0 0 12px; color:#b91c1c; background:#fee2e2; border-radius:10px; padding:10px 12px; }}
   </style>
 </head>
 <body>
   <form method="post" action="/admin/login">
     <h1>Стендап бронирование</h1>
-    <p>Введите токен доступа. У менеджера, клиента и владельца токены разные.</p>
     {error_html}
     <input name="token" type="password" autofocus placeholder="Токен доступа">
     <button type="submit">Войти</button>
