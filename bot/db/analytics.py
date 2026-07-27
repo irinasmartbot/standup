@@ -614,6 +614,34 @@ def fetch_user_last_event(telegram_id: int) -> dict | None:
     return rows[0] if rows else None
 
 
+def fetch_users_last_events(telegram_ids: list[int]) -> dict[int, dict]:
+    """Latest analytics event per telegram_id for Users table «Этап»."""
+    ids = sorted({int(tid) for tid in telegram_ids if tid})
+    if not _use_postgres() or not ids:
+        return {}
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (telegram_id)
+                        telegram_id, name, props, created_at, channel
+                    FROM analytics_events
+                    WHERE telegram_id = ANY(%(ids)s)
+                    ORDER BY telegram_id, created_at DESC
+                    """,
+                    {"ids": ids},
+                )
+                return {
+                    int(row["telegram_id"]): dict(row)
+                    for row in cur.fetchall()
+                    if row.get("telegram_id") is not None
+                }
+    except Exception:
+        logger.exception("fetch_users_last_events failed")
+        return {}
+
+
 def fetch_user_activity_counts(telegram_id: int) -> list[dict]:
     """Per-event counts for one Telegram user (compact admin summary)."""
     if not _use_postgres() or not telegram_id:

@@ -1095,13 +1095,13 @@ def _user_stage(user: dict) -> str:
 
 
 def _user_stage_line(user: dict, last_event: dict | None = None) -> str:
-    """Where the guest was last seen (tracked action), roughly."""
+    """Актуальный этап клиента: последнее tracked-событие или сводка по броням."""
     if last_event:
         name = last_event.get("name") or ""
         place = LAST_PLACE_LABELS.get(name) or ACTIVITY_SHORT_LABELS.get(name) or name or "событие"
         when = _fmt_msk(last_event.get("created_at"))
-        return f"Сейчас: {place} ({when})"
-    return f"Сводка по броням: {_user_stage(user)}"
+        return f"{place} ({when})"
+    return _user_stage(user)
 
 
 def _fmt_msk(dt) -> str:
@@ -1430,6 +1430,7 @@ def _users_tab(
     flash: str = "",
     *,
     can_resend_tickets: bool = True,
+    stage_by_tg: dict | None = None,
 ) -> str:
     status = filters.get("status") or ""
     users = sorted(
@@ -1445,8 +1446,17 @@ def _users_tab(
             selected = dashboard["users"][selected_key]
             if all(user["key"] != selected_key for user in list_users):
                 list_users = [selected] + list_users
+    stage_by_tg = stage_by_tg or {}
     rows = []
     for user in list_users:
+        tid = user.get("telegram_id")
+        last_event = None
+        if tid is not None:
+            try:
+                last_event = stage_by_tg.get(int(tid))
+            except (TypeError, ValueError):
+                last_event = None
+        stage_text = _user_stage_line(user, last_event)
         rows.append(
             "<tr>"
             f"<td>{_h(user.get('user_id') or '—')}</td>"
@@ -1457,7 +1467,7 @@ def _users_tab(
             f"<td>{user['status_counts'].get('booked', 0)}</td>"
             f"<td>{user['status_counts'].get('confirmed', 0)}</td>"
             f"<td>{user['status_counts'].get('cancelled', 0)}</td>"
-            f"<td>{_h(_user_stage(user))}</td>"
+            f"<td>{_h(stage_text)}</td>"
             "</tr>"
         )
     table = (
@@ -2137,6 +2147,7 @@ def _content(
     ticket_holders: list[dict] | None = None,
     *,
     can_resend_tickets: bool = True,
+    user_stage_by_tg: dict | None = None,
 ) -> str:
     tab = filters.get("tab") or "date"
     if tab == "bookings":
@@ -2148,6 +2159,7 @@ def _content(
             user_extras=user_extras,
             flash=events_flash,
             can_resend_tickets=can_resend_tickets,
+            stage_by_tg=user_stage_by_tg,
         )
     if tab == "analytics":
         return _analytics_tab(analytics or {}, filters)
@@ -2184,6 +2196,7 @@ def render_admin_html(
     *,
     can_view_ops: bool = True,
     can_resend_tickets: bool = True,
+    user_stage_by_tg: dict | None = None,
 ) -> str:
     totals = dashboard["totals"]
     tab = filters.get("tab") or "date"
@@ -2637,7 +2650,7 @@ def render_admin_html(
   <main>
     <nav class="tabs">{_tabs(filters, can_view_ops=can_view_ops, can_view_db=can_view_db)}</nav>
     {summary_html}
-    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors, ticket_holders, can_resend_tickets=can_resend_tickets)}
+    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors, ticket_holders, can_resend_tickets=can_resend_tickets, user_stage_by_tg=user_stage_by_tg)}
   </main>
   <script>
     (function () {{
@@ -2976,26 +2989,47 @@ async def admin_page(request: web.Request) -> web.Response:
                 else f"Не удалось переотправить билет{': ' + err[:200] if err else '.'}"
             )
     user_extras = None
-    if filters.get("tab") == "users" and filters.get("u"):
-        selected = (dashboard.get("users") or {}).get(filters.get("u") or "")
-        if selected:
-            telegram_id = selected.get("telegram_id")
-            user_id = selected.get("user_id")
+    user_stage_by_tg: dict = {}
+    if filters.get("tab") == "users":
+        tg_ids = []
+        for u in (dashboard.get("users") or {}).values():
+            tid = u.get("telegram_id")
+            if tid:
+                try:
+                    tg_ids.append(int(tid))
+                except (TypeError, ValueError):
+                    pass
 
-            def _load_user_extras():
-                from bot.db.analytics import fetch_user_activity_counts, fetch_user_last_event
-                from bot.db.crud import get_raffle_submissions_for_telegram, get_user_raffle_flags
+        def _load_user_stages():
+            from bot.db.analytics import fetch_users_last_events
 
-                tid = int(telegram_id) if telegram_id else None
-                uid = int(user_id) if user_id else None
-                return {
-                    "activity_counts": fetch_user_activity_counts(tid) if tid else [],
-                    "submissions": get_raffle_submissions_for_telegram(tid) if tid else [],
-                    "flags": get_user_raffle_flags(telegram_id=tid, user_id=uid),
-                    "last_event": fetch_user_last_event(tid) if tid else None,
-                }
+            return fetch_users_last_events(tg_ids)
 
-            user_extras = await loop.run_in_executor(None, _load_user_extras)
+        user_stage_by_tg = await loop.run_in_executor(None, _load_user_stages)
+
+        if filters.get("u"):
+            selected = (dashboard.get("users") or {}).get(filters.get("u") or "")
+            if selected:
+                telegram_id = selected.get("telegram_id")
+                user_id = selected.get("user_id")
+
+                def _load_user_extras():
+                    from bot.db.analytics import fetch_user_activity_counts
+                    from bot.db.crud import get_raffle_submissions_for_telegram, get_user_raffle_flags
+
+                    tid = int(telegram_id) if telegram_id else None
+                    uid = int(user_id) if user_id else None
+                    last_event = None
+                    if tid is not None:
+                        last_event = user_stage_by_tg.get(tid)
+                    return {
+                        "activity_counts": fetch_user_activity_counts(tid) if tid else [],
+                        "submissions": get_raffle_submissions_for_telegram(tid) if tid else [],
+                        "flags": get_user_raffle_flags(telegram_id=tid, user_id=uid),
+                        "last_event": last_event,
+                    }
+
+                user_extras = await loop.run_in_executor(None, _load_user_extras)
     return web.Response(
         text=render_admin_html(
             dashboard,
@@ -3011,6 +3045,7 @@ async def admin_page(request: web.Request) -> web.Response:
             ticket_holders,
             can_view_ops=can_view_ops,
             can_resend_tickets=can_resend,
+            user_stage_by_tg=user_stage_by_tg,
         ),
         content_type="text/html",
     )
