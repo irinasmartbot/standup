@@ -136,7 +136,6 @@ def blocked_keyboard(booking_id: int | None = None) -> str:
         kb.button(
             "Отменить бронирование",
             _payload("mb_cancel_confirm", booking_id=int(booking_id)),
-            color="negative",
         )
     kb.adjust(1)
     return kb.as_json()

@@ -831,6 +831,7 @@ class VKBotApp:
                 peer_id=peer_id,
                 booking_id=booking_id,
                 manager_link=self.settings.manager_link,
+                community_link=self.settings.community_link,
             )
         except Exception:
             logger.exception("VK ticket issue failed booking_id=%s", booking_id)
@@ -2034,17 +2035,9 @@ class VKBotApp:
         await self._ask_name_or_phone_raffle(peer_id, vk_id, session)
 
     async def _ask_name_or_phone_raffle(self, peer_id: int, vk_id: int, session: dict) -> None:
-        # Имя из VK профиля, дальше телефон как в проверке.
-        try:
-            name = await self.client.get_user_display_name(vk_id)
-        except Exception:
-            name = ""
-        if name:
-            session["name"] = name
-            await self._ask_phone(peer_id, vk_id, session)
-            return
+        # Как в проверке материала: всегда спрашиваем имя, не подставляем из VK.
         session["step"] = vk_booking.STEP_NAME
-        await self._send_text(peer_id, "Как вас зовут? Напишите имя 👇")
+        await self._send_text(peer_id, "Напишите, пожалуйста, ваше имя.")
 
     async def _send_raffle_start(self, peer_id: int, vk_id: int) -> None:
         self._track(vk_id, EVENT_RAFFLE_ENTER)

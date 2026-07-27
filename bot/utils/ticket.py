@@ -62,6 +62,63 @@ def guests_word(n):
         return f"{n} гостей"
 
 
+def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return max(0, bbox[2] - bbox[0])
+
+
+def _fit_font(draw, text: str, load_font, max_width: int, max_size: int, min_size: int = 8):
+    """Подбирает кегль, чтобы строка влезла в max_width."""
+    size = max_size
+    while size >= min_size:
+        font = load_font(size)
+        if _text_width(draw, text, font) <= max_width:
+            return font
+        size -= 1
+    return load_font(min_size)
+
+
+def _wrap_text(draw, text: str, font, max_width: int, max_lines: int = 2) -> list[str]:
+    """Перенос по словам; если не влезает — режет с многоточием на последней строке."""
+    text = (text or "").strip()
+    if not text:
+        return [""]
+    if _text_width(draw, text, font) <= max_width:
+        return [text]
+
+    words = text.replace(",", ", ").split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip() if current else word
+        if _text_width(draw, candidate, font) <= max_width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+            current = word
+        else:
+            # одно очень длинное «слово»
+            lines.append(word)
+            current = ""
+        if len(lines) >= max_lines:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if not lines:
+        lines = [text]
+
+    # Если слов осталось больше, чем строк — ужимаем последнюю с …
+    joined_words = " ".join(words)
+    used = " ".join(lines)
+    if used != joined_words and lines:
+        last = lines[-1].rstrip(" .,")
+        while last and _text_width(draw, last + "…", font) > max_width:
+            last = last[:-1].rstrip(" .,")
+        lines[-1] = (last + "…") if last else "…"
+    return lines[:max_lines]
+
+
 def generate_ticket(name, date_str, time_str, location, guests):
     try:
         img = Image.open(TICKET_TEMPLATE).convert("RGB").copy()
@@ -75,6 +132,8 @@ def generate_ticket(name, date_str, time_str, location, guests):
     rect_y1 = int(H * 0.30)
     rect_y2 = int(H * 0.90)
     rect_h = rect_y2 - rect_y1
+    # Правый край текстового поля (чуть внутри тёмного блока шаблона).
+    max_text_w = int(W * 0.42)
 
     draw = ImageDraw.Draw(img)
 
@@ -93,20 +152,32 @@ def generate_ticket(name, date_str, time_str, location, guests):
                 continue
         return ImageFont.load_default()
 
-    # Чуть свободнее по вертикали и с меньшим кеглем для длинных строк
-    font_big = load_font(max(10, int(H * 0.070)))
-    font_med = load_font(max(9, int(H * 0.060)))
-    font_small = load_font(max(8, int(H * 0.048)))
+    font_big = _fit_font(draw, name or "", load_font, max_text_w, max(10, int(H * 0.070)))
+    date_line = f"{date_str}  {time_str}"
+    font_med = _fit_font(draw, date_line, load_font, max_text_w, max(9, int(H * 0.060)))
+    guests_line = guests_word(guests)
+    font_guests = _fit_font(draw, guests_line, load_font, max_text_w, max(9, int(H * 0.060)))
+
+    # Адрес: сначала уменьшаем кегль, затем перенос на 2 строки.
+    loc = (location or "").strip()
+    loc_max = max(8, int(H * 0.048))
+    font_small = _fit_font(draw, loc, load_font, max_text_w, loc_max, min_size=7)
+    loc_lines = _wrap_text(draw, loc, font_small, max_text_w, max_lines=2)
 
     x = rect_x1 + int(W * 0.02)
-    # 4 строки с равными промежутками внутри тёмного блока
-    step = max(1, rect_h // 5)
-    y0 = rect_y1 + int(step * 0.55)
+    # 4–5 строк с равными промежутками внутри тёмного блока
+    line_count = 3 + len(loc_lines)  # name, date, address lines, guests
+    step = max(1, rect_h // (line_count + 1))
+    y = rect_y1 + int(step * 0.45)
 
-    draw.text((x, y0), name, font=font_big, fill="white")
-    draw.text((x, y0 + step), f"{date_str}  {time_str}", font=font_med, fill="white")
-    draw.text((x, y0 + step * 2), location, font=font_small, fill="white")
-    draw.text((x, y0 + step * 3), guests_word(guests), font=font_med, fill="white")
+    draw.text((x, y), name or "", font=font_big, fill="white")
+    y += step
+    draw.text((x, y), date_line, font=font_med, fill="white")
+    y += step
+    for line in loc_lines:
+        draw.text((x, y), line, font=font_small, fill="white")
+        y += step
+    draw.text((x, y), guests_line, font=font_guests, fill="white")
 
     buf = BytesIO()
     img.save(buf, format="JPEG", quality=90)

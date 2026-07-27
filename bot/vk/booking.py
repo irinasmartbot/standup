@@ -77,7 +77,7 @@ def after_booking_keyboard(booking_id: int, *, offer_ticket: bool) -> str:
 
 def manage_ticket_keyboard(booking_id: int, settings_manager_link: str) -> str:
     kb = VKKeyboardBuilder(inline=True)
-    kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id), color="negative")
+    kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
     kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
     kb.button("Задать вопрос менеджеру", link=settings_manager_link)
     kb.button("В главное меню", _payload("main_menu"))
@@ -203,6 +203,7 @@ async def issue_ticket(
     peer_id: int,
     booking_id: int,
     manager_link: str,
+    community_link: str = "",
 ) -> None:
     booking = get_active_booking_by_id(booking_id)
     if not booking:
@@ -258,6 +259,8 @@ async def issue_ticket(
     except Exception:
         pass
 
+    vk_manager = (manager_link or "").strip() or MANAGER_LINK
+    vk_community = (community_link or "").strip() or CHANNEL_LINK
     caption = format_vk_text(
         "Отлично!\n\n"
         "<b>Данные по билету:</b>\n\n"
@@ -267,9 +270,9 @@ async def issue_ticket(
         f"<b>Место:</b> {place}\n"
         f"<b>Количество гостей:</b> {guests_word(guests)}\n\n"
         "Ждем вас на мероприятии ❤️\n\n"
-        f"При вопросах — менеджеру ({MANAGER_LINK}). "
+        f"При вопросах — менеджеру ({vk_manager}). "
         f"Если срочно — звоните {MANAGER_PHONE}.\n\n"
-        f"Канал анонсов: {CHANNEL_LINK}"
+        f"Канал анонсов: {vk_community}"
     )
     attachment = await client.upload_message_photo(
         peer_id,
