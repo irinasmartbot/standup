@@ -184,10 +184,28 @@ def _events_keyboard(
     back_cmd: str,
     **back_extra: Any,
 ) -> str:
+    """Кнопки выбора шоу, когда на одну дату несколько слотов."""
     kb = VKKeyboardBuilder()
+    dates = {e.get("date") for e in events[:8]}
+    multi_date = len(dates) > 1
     for event in events[:8]:
-        label = f"{event.get('time', '')} - {event.get('location', '')}".strip(" -")
-        kb.button(label, _payload(command, event_id=event["id"]), color="primary")
+        time_part = (event.get("time") or "").strip()
+        location = (event.get("location") or "").strip()
+        if multi_date:
+            label = f"{_date_label(event.get('date') or '')} {time_part}".strip()
+        else:
+            # На одной дате разные площадки/слоты — не дублируем одно и то же «19:00 - Escobar».
+            label = time_part or location or "Шоу"
+            if location and time_part and location not in label:
+                # Если времена совпадают, отличим по площадке.
+                same_time = sum(
+                    1
+                    for other in events[:8]
+                    if (other.get("time") or "").strip() == time_part
+                )
+                if same_time > 1:
+                    label = f"{time_part} · {location}"
+        kb.button(label or "Шоу", _payload(command, event_id=event["id"]), color="primary")
     kb.button("Назад", _payload(back_cmd, **back_extra))
     kb.adjust(1)
     return kb.as_json()
