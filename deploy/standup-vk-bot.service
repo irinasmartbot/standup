@@ -1,0 +1,17 @@
+[Unit]
+Description=Moscow StandUp VK bot
+After=network.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=standup
+Group=standup
+WorkingDirectory=/home/standup/vk-app
+EnvironmentFile=/home/standup/vk-app/.env
+ExecStart=/home/standup/vk-app/venv/bin/python vk_bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
