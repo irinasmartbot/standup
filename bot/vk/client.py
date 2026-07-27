@@ -195,8 +195,6 @@ class VKClient:
                             "key": server["key"],
                             "ts": ts,
                             "wait": 25,
-                            "mode": 2,
-                            "version": 3,
                         },
                         timeout=35,
                     ) as resp:

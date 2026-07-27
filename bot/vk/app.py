@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -289,6 +291,10 @@ class VKBotApp:
         self._ticket_in_progress: set[int] = set()
         self.peer_nav_message_ids: dict[int, list[int]] = {}
         self._pending_delete_ids: dict[int, list[int]] = {}
+        self._seen_event_ids: dict[str, float] = {}
+        self._seen_message_ids: dict[int, float] = {}
+        self._peer_cmd_cooldown: dict[tuple[int, str], float] = {}
+        self._peer_locks: dict[int, asyncio.Lock] = {}
 
     def _vk_id(self, message: dict[str, Any], peer_id: int) -> int:
         from_id = message.get("from_id")
@@ -912,6 +918,52 @@ class VKBotApp:
             return True
         return False
 
+    def _peer_lock(self, peer_id: int) -> asyncio.Lock:
+        peer = int(peer_id)
+        lock = self._peer_locks.get(peer)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._peer_locks[peer] = lock
+        return lock
+
+    def _prune_seen(self, now: float) -> None:
+        ttl = 120.0
+        if len(self._seen_event_ids) > 500:
+            self._seen_event_ids = {k: v for k, v in self._seen_event_ids.items() if now - v < ttl}
+        if len(self._seen_message_ids) > 500:
+            self._seen_message_ids = {k: v for k, v in self._seen_message_ids.items() if now - v < ttl}
+        if len(self._peer_cmd_cooldown) > 500:
+            self._peer_cmd_cooldown = {
+                k: v for k, v in self._peer_cmd_cooldown.items() if now - v < ttl
+            }
+
+    def _already_handled(self, update: dict[str, Any], message: dict[str, Any]) -> bool:
+        now = time.monotonic()
+        self._prune_seen(now)
+        event_id = str(update.get("event_id") or "").strip()
+        if event_id:
+            if event_id in self._seen_event_ids:
+                return True
+            self._seen_event_ids[event_id] = now
+        try:
+            mid = int(message.get("id") or 0)
+        except (TypeError, ValueError):
+            mid = 0
+        if mid:
+            if mid in self._seen_message_ids:
+                return True
+            self._seen_message_ids[mid] = now
+        return False
+
+    def _cmd_on_cooldown(self, peer_id: int, cmd: str | None) -> bool:
+        if not cmd:
+            return False
+        now = time.monotonic()
+        key = (int(peer_id), str(cmd))
+        prev = self._peer_cmd_cooldown.get(key)
+        self._peer_cmd_cooldown[key] = now
+        return prev is not None and (now - prev) < 1.5
+
     async def handle_update(self, update: dict[str, Any]) -> None:
         if update.get("type") != "message_new":
             return
@@ -919,9 +971,31 @@ class VKBotApp:
         message = obj.get("message") if isinstance(obj.get("message"), dict) else obj
         if not isinstance(message, dict):
             return
+        try:
+            if int(message.get("out") or 0) == 1:
+                return
+        except (TypeError, ValueError):
+            pass
+        try:
+            from_id = int(message.get("from_id") or 0)
+        except (TypeError, ValueError):
+            from_id = 0
+        if from_id < 0:
+            return
+        if self._already_handled(update, message):
+            logger.info(
+                "Skip duplicate VK update event_id=%s msg_id=%s",
+                update.get("event_id"),
+                message.get("id"),
+            )
+            return
         peer_id = message.get("peer_id")
         if not peer_id:
             return
+        async with self._peer_lock(peer_id):
+            await self._dispatch_message(message, int(peer_id))
+
+    async def _dispatch_message(self, message: dict[str, Any], peer_id: int) -> None:
         vk_id = self._vk_id(message, peer_id)
         text = (message.get("text") or "").strip()
         payload = _parse_payload(message.get("payload"))
@@ -955,6 +1029,7 @@ class VKBotApp:
                 "📍 площадки проверки": "check_venues",
                 "площадки проверки": "check_venues",
                 "в главное меню": "main_menu",
+                "⬅️ в главное меню": "main_menu",
                 "мои брони": "my_bookings",
             }
             cmd = text_commands.get(text_key)
@@ -967,6 +1042,10 @@ class VKBotApp:
                 "выбор по локации",
             }:
                 cmd = f"{context}_venues" if context in {"best", "check"} else None
+
+        if self._cmd_on_cooldown(peer_id, cmd):
+            logger.info("Skip VK cmd cooldown peer_id=%s cmd=%s", peer_id, cmd)
+            return
 
         if await self._handle_booking_flow(
             peer_id,
