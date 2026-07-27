@@ -83,8 +83,13 @@ bash /tmp/bootstrap_vk_server.sh
 Или вручную:
 
 ```bash
+git clone https://github.com/irinasmartbot/standup.git /home/standup/vk-app
+cd /home/standup/vk-app
+git checkout vk-mvp
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
 cp /home/standup/app/.env /home/standup/vk-app/.env
-# затем дописать VK_ENABLED=1, VK_GROUP_ID, VK_GROUP_TOKEN, ...
+# затем дописать VK_ENABLED=1, VK_GROUP_ID, VK_GROUP_TOKEN, VK_ADMIN_PEER_ID, ...
 ```
 
 ### 3. Картинки
