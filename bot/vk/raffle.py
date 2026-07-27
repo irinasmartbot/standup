@@ -307,7 +307,6 @@ async def send_vk_text(vk_id: int, text: str, *, keyboard: str | None = None) ->
         return True
     except Exception as exc:
         logger.exception("send_vk_text failed vk_id=%s", vk_id)
-        # Flood / transient — одна пауза и повтор.
         msg = str(exc).lower()
         if "flood" in msg or "too many" in msg or isinstance(exc, VKAPIError):
             try:
@@ -316,17 +315,28 @@ async def send_vk_text(vk_id: int, text: str, *, keyboard: str | None = None) ->
                 return True
             except Exception:
                 logger.exception("send_vk_text retry failed vk_id=%s", vk_id)
+        # Клавиатуру не выкидываем молча: пробуем отдельным сообщением только с кнопками.
         if keyboard:
             try:
                 await asyncio.sleep(0.5)
-                await _once(None)
+                await client.send_message(
+                    int(vk_id),
+                    "Выбери дату 👇",
+                    keyboard=keyboard,
+                )
                 return True
             except Exception:
-                logger.exception("send_vk_text fallback failed vk_id=%s", vk_id)
+                logger.exception("send_vk_text keyboard-only failed vk_id=%s", vk_id)
+            try:
+                await _once(None)
+            except Exception:
+                logger.exception("send_vk_text text-only failed vk_id=%s", vk_id)
+                return False
+            return False
         return False
 
 
-RAFFLE_DATES_PAGE_SIZE = 6
+RAFFLE_DATES_PAGE_SIZE = 4  # 2×2 + стрелки ≤ 6 рядов inline-клавиатуры VK
 RAFFLE_RULES_TEXT = format_vk_text(
     "<b>Порядок посещения шоу:</b>\n\n"
     "1. Сбор гостей начинается за полчаса до начала шоу\n\n"
@@ -361,12 +371,18 @@ def _date_label(date: str) -> str:
 
     try:
         d = datetime.strptime(date, "%d.%m.%Y")
-        return d.strftime("%d ") + MONTHS[d.strftime("%B")]
+        # Не используем strftime("%B"): на сервере локаль может быть ru_RU.
+        month_en = (
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        )[d.month - 1]
+        return f"{d.day:02d} " + MONTHS[month_en]
     except Exception:
         return date
 
 
 def dates_keyboard(dates: list[str], page: int = 0) -> str:
+    """Кнопки дат: по 2 в ряд, без превышения лимита inline (≤10 кнопок, ≤6 рядов)."""
     page = max(int(page or 0), 0)
     start = page * RAFFLE_DATES_PAGE_SIZE
     end = start + RAFFLE_DATES_PAGE_SIZE
@@ -374,17 +390,20 @@ def dates_keyboard(dates: list[str], page: int = 0) -> str:
     kb = VKKeyboardBuilder(inline=True)
     for date in shown:
         kb.button(_date_label(date), _payload("rz_date", date=date), color="primary")
-    nav = 0
     if page > 0:
         kb.button("⬅️", _payload("rz_dates_page", page=page - 1))
-        nav += 1
     if end < len(dates):
         kb.button("➡️", _payload("rz_dates_page", page=page + 1))
-        nav += 1
+    # Ряды: по 2 даты, затем стрелки.
+    widths: list[int] = [2] * (len(shown) // 2)
+    if len(shown) % 2:
+        widths.append(1)
+    nav = int(page > 0) + int(end < len(dates))
     if nav:
-        kb.adjust(1, nav)
-    else:
-        kb.adjust(1)
+        widths.append(nav)
+    if not widths:
+        widths = [1]
+    kb.adjust(*widths)
     return kb.as_json()
 
 

@@ -1710,7 +1710,6 @@ class VKBotApp:
                     EVENT_RAFFLE_SUBSCRIBED,
                     props={"manual_attempts": attempts},
                 )
-                await self._send_text(peer_id, "Отлично, подписка на сообщество есть 🙌")
                 await self._send_raffle_dates(peer_id, vk_id, edit=False)
             else:
                 self._track(
@@ -1868,13 +1867,25 @@ class VKBotApp:
         if not dates:
             await self._send_text(
                 peer_id,
+                "Отлично, подписка на сообщество есть 🙌\n\n"
                 "Пока нет доступных дат для бесплатного билета 😔 Загляни позже!",
                 keyboard=self._main_menu_kb(vk_id),
             )
             return
-        text = "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉"
-        keyboard = vk_raffle.dates_keyboard(dates, page=page)
-        attachment = self._random_cover_attachment()
+        text = (
+            "Отлично, подписка на сообщество есть 🙌\n\n"
+            "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉"
+        )
+        try:
+            keyboard = vk_raffle.dates_keyboard(dates, page=page)
+        except Exception:
+            logger.exception("raffle dates_keyboard failed vk_id=%s", vk_id)
+            await self._send_text(
+                peer_id,
+                text + "\n\nНе удалось показать кнопки дат. Напиши «розыгрыш» ещё раз.",
+            )
+            return
+        # Без картинки: вложение + inline keyboard у VK иногда уходит без кнопок.
         peer = int(peer_id)
         existing = self.peer_dates_message_ids.get(peer)
         if edit and existing:
@@ -1891,7 +1902,7 @@ class VKBotApp:
             peer_id,
             text,
             keyboard=keyboard,
-            attachment=attachment,
+            attachment=None,
         )
         if mid:
             self.peer_dates_message_ids[peer] = int(mid)
