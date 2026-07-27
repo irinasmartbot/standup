@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from bot.config import DATABASE_URL, EVENTS_SOURCE
+from bot.config import BOT_TOKEN, DATABASE_URL, EVENTS_SOURCE, HELP_CHAT_ID
 from bot.db.analytics import (
     EVENT_BOT_START,
     EVENT_BRANCH_BEST,
@@ -19,10 +19,11 @@ from bot.db.analytics import (
     EVENT_CMD_BUY_TICKET,
     EVENT_CMD_MAIN_MENU,
     EVENT_CMD_MY_BOOKINGS,
+    EVENT_HELP_QUESTION,
     EVENT_SHOW_CARD,
     track_event,
 )
-from bot.db.crud import ensure_user, get_booking, update_booking_status
+from bot.db.crud import ensure_user, get_booking, get_last_phone, update_booking_status
 from bot.handlers.booking import BOOKING_RULES_TEXT as TG_BOOKING_RULES_TEXT
 from bot.handlers.formats import (
     BUY_TICKET_TEXT as TG_BUY_TICKET_TEXT,
@@ -34,6 +35,7 @@ from bot.handlers.formats import (
 from bot.handlers.start import WELCOME_TEXT as TG_WELCOME_TEXT
 from bot.services.sheets import load_events
 from bot.utils.booking_texts import same_day_booking_warning
+from bot.utils.free_text import is_meaningful_free_text
 from bot.utils.phone import normalize_phone
 from bot.utils.ticket import MONTHS, format_date, now_msk
 from bot.vk import booking as vk_booking
@@ -43,6 +45,8 @@ from bot.vk.config import VKSettings
 from bot.vk.formatting import format_vk_text
 from bot.vk.keyboards import VKKeyboardBuilder, empty_keyboard
 from bot.vk.media import VKRemoteImageCache, VKSystemImageCache, resolve_image_attachment
+
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -1602,22 +1606,68 @@ class VKBotApp:
             await self._send_hitloto_event(peer_id, payload.get("event_id"), vk_id=vk_id)
             return
 
-        # Как на скрине: любой непонятный текст вне сценария → главное меню.
+        # Как в TG unknown_message:
+        # — абракадабра / короткий спам → молчим
+        # — осмысленный текст → в техподдержку + «Спасибо!»
         if text and not cmd:
-            await self._send_text(
-                peer_id,
-                "Пожалуйста, выбери вариант из кнопок ниже.",
-                keyboard=self._main_menu_kb(vk_id),
-            )
-            return
-        if not text and not cmd:
+            await self._handle_unknown_free_text(peer_id, vk_id, text)
             return
 
+    async def _handle_unknown_free_text(self, peer_id: int, vk_id: int, text: str) -> None:
+        if not is_meaningful_free_text(text):
+            return
+        self._track(vk_id, EVENT_HELP_QUESTION, props={"chars": len(text.strip())})
+        forwarded = await self._forward_vk_help_question(vk_id, text)
+        kb = VKKeyboardBuilder(inline=True)
+        if not forwarded:
+            kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
+        kb.button("В главное меню", _payload("main_menu"))
+        kb.adjust(1)
         await self._send_text(
             peer_id,
-            "Пожалуйста, выбери вариант из кнопок ниже.",
-            keyboard=self._main_menu_kb(vk_id),
+            "Спасибо! Передали вопрос в техподдержку, скоро ответим.",
+            keyboard=kb.as_json(),
         )
+
+    async def _forward_vk_help_question(self, vk_id: int, text: str) -> bool:
+        """Дублирует вопрос в Telegram HELP_CHAT (как /help в TG)."""
+        try:
+            help_chat_id = int(HELP_CHAT_ID) if HELP_CHAT_ID else 0
+        except (TypeError, ValueError):
+            help_chat_id = 0
+        if not BOT_TOKEN or not help_chat_id:
+            return False
+        phone = ""
+        try:
+            phone = get_last_phone(vk_id=vk_id) or ""
+        except Exception:
+            logger.exception("Failed to load phone for VK help vk_id=%s", vk_id)
+        body = (
+            "❓ Вопрос из VK\n"
+            f"VK id: <code>{vk_id}</code>\n"
+            f"Телефон: {phone or '—'}\n\n"
+            f"{text.strip()}"
+        )
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json={
+                        "chat_id": help_chat_id,
+                        "text": body,
+                        "parse_mode": "HTML",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    data = await resp.json(content_type=None)
+            if not data.get("ok"):
+                logger.warning("TG help forward failed for VK vk_id=%s: %s", vk_id, data)
+                return False
+            return True
+        except Exception:
+            logger.exception("TG help forward error for VK vk_id=%s", vk_id)
+            return False
 
     async def _send_venues(self, peer_id: int) -> None:
         self.peer_venues_message_ids.pop(int(peer_id), None)

@@ -1,4 +1,3 @@
-from collections import Counter
 from html import escape
 from datetime import datetime
 
@@ -32,6 +31,7 @@ from bot.db.crud import (
 )
 from bot.handlers.formats import delete_linked_venue_album
 from bot.utils.bot_commands import refresh_user_commands, setup_bot_commands
+from bot.utils.free_text import is_meaningful_free_text as _is_meaningful_free_text
 from bot.utils.nav_messages import (
     delete_my_bookings_messages,
     forget_my_bookings_message,
@@ -83,33 +83,6 @@ def _help_chat_id():
         return int(HELP_CHAT_ID)
     except (TypeError, ValueError):
         return None
-
-
-def _is_meaningful_free_text(text: str | None) -> bool:
-    """Осмысленный текст от 10 символов; короткий спам и абракадабру отсекаем."""
-    text = (text or "").strip()
-    if len(text) < 10:
-        return False
-    if text.startswith("/"):
-        return False
-
-    letters = [c for c in text.lower() if c.isalpha()]
-    if len(letters) < 6:
-        return False
-
-    unique_ratio = len(set(letters)) / len(letters)
-    if unique_ratio < 0.25:
-        return False
-
-    most_common = Counter(letters).most_common(1)[0][1]
-    if most_common / len(letters) > 0.6:
-        return False
-
-    vowels = set("аеёиоуыэюяaeiouy")
-    if sum(1 for c in letters if c in vowels) == 0:
-        return False
-
-    return True
 
 
 async def submit_help_question(message: Message, *, thank_you: bool = True) -> bool:
