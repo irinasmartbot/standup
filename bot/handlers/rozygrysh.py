@@ -601,7 +601,7 @@ async def rz_review_send(call: CallbackQuery, state: FSMContext):
     if not await _guard_action(call):
         return
     await _arm_screenshot_wait(state, "review")
-    await call.message.answer("Супер, кидай сюда скрин (одним фото) 👇")
+    await call.message.answer("Супер, кидай сюда скрин отзыва (одним фото) 👇")
     await call.answer()
 
 
@@ -889,14 +889,34 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
         from bot.vk import raffle as vk_raffle
 
         await vk_raffle.send_vk_text(vk_id, vk_raffle.SCREEN_ACCEPTED_TEXT)
-        await asyncio.sleep(2)
-        await vk_raffle.continue_after_subscribe_check(vk_id)
+        asyncio.create_task(_after_vk_screen_accepted(int(vk_id)))
         return
     await bot.send_message(
         telegram_id,
         "Класс, скрин принят. Теперь проверим подписку на канал 👌",
     )
     asyncio.create_task(_after_screen_accepted(telegram_id))
+
+
+async def _after_vk_screen_accepted(vk_id: int):
+    from bot.vk import raffle as vk_raffle
+    from bot.vk.config import load_vk_settings
+
+    try:
+        await asyncio.sleep(2)
+        await vk_raffle.continue_after_subscribe_check(vk_id)
+    except Exception:
+        logger.exception("VK after-accept flow failed for %s", vk_id)
+        try:
+            settings = load_vk_settings()
+            await vk_raffle.send_vk_text(
+                vk_id,
+                "Не удалось автоматически проверить подписку. "
+                "Подпишись на сообщество и нажми кнопку ниже 👇",
+                keyboard=vk_raffle.subscribe_keyboard(settings.community_link),
+            )
+        except Exception:
+            logger.exception("VK after-accept fallback failed for %s", vk_id)
 
 
 async def _after_screen_accepted(telegram_id: int):
@@ -942,9 +962,13 @@ async def _reject_submission(row, reason: str | None, card_ref, cleanup_chat_id=
                 text += f"\n\nКомментарий менеджера: {reason}"
         from bot.db.crud import set_raffle_vk_awaiting_screenshot
 
-        # Без кнопок: ждём новое фото; флаг в БД — VK-бот подхватит после рестарта.
+        # Ждём новое фото; кнопка без главного меню.
         set_raffle_vk_awaiting_screenshot(int(vk_id), kind)
-        await vk_raffle.send_vk_text(vk_id, text)
+        await vk_raffle.send_vk_text(
+            vk_id,
+            text,
+            keyboard=vk_raffle.retry_screenshot_keyboard(kind),
+        )
         return
 
     if kind == "review":

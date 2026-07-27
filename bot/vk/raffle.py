@@ -60,7 +60,8 @@ def start_text(community_link: str) -> str:
 POST_TEXT = format_vk_text(
     f"Выкладываем в соцсети пост со ссылкой на наш сайт <b>MoscowStandUpshow.ru</b> 😊\n\n"
     "Если в Instagram* — обязательно сделай ссылку в сторис кликабельной 😉\n\n"
-    "Затем отправь сюда скрин поста <b>одним фото</b> и выбирай любую дату ☺️ "
+    "Затем нажимай кнопку ниже, отправляй скрин поста <b>одним фото</b> "
+    "и выбирай любую дату ☺️ "
     "(после выбора даты билеты переносу не подлежат)\n\n"
     "🎫 За 1 пост полагается 1 билет\n\n"
     "____________________\n"
@@ -70,8 +71,8 @@ POST_TEXT = format_vk_text(
 REVIEW_TEXT = format_vk_text(
     f"Оставляем отзыв по ссылке:\n{AFISHA_REVIEW_URL}\n\n"
     "И обязательно нажать на вот эти кнопочки как на фото 😻\n\n"
-    "Затем отправь сюда скрин отзыва <b>одним фото</b> "
-    "и выбирай любую дату 😻\n\n"
+    "Затем нажимайте кнопку ниже, отправляйте скрин отзыва <b>одним фото</b> "
+    "и выбирайте любую дату 😻\n\n"
     "🎟️ После выбора даты билеты переносу не подлежат\n"
     "🎫 За 1 отзыв полагается 1 билет"
 )
@@ -101,19 +102,32 @@ def start_keyboard() -> str:
     return kb.as_json()
 
 
-def post_keyboard() -> str | None:
-    """После выбора поста кнопки не нужны — сразу ждём одно фото."""
-    return None
+def post_keyboard() -> str:
+    """Крест / скрин — без «В главное меню»."""
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button("Я выложил, вот те крест", _payload("rz_post_cross"), color="positive")
+    kb.button("Я выложил, вот те скрин", _payload("rz_post_screen"), color="negative")
+    kb.adjust(1)
+    return kb.as_json()
 
 
-def review_keyboard() -> str | None:
-    """После выбора отзыва кнопки не нужны — сразу ждём одно фото."""
-    return None
+def review_keyboard() -> str:
+    """Кнопка отправки скрина отзыва — без «В главное меню»."""
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button("Отправить скрин", _payload("rz_review_send"), color="positive")
+    kb.adjust(1)
+    return kb.as_json()
 
 
-def retry_screenshot_keyboard(kind: str) -> str | None:
-    """После отказа — без кнопок, просто ждём новое фото."""
-    return None
+def retry_screenshot_keyboard(kind: str) -> str:
+    """После отказа — снова кнопка скрина, без главного меню."""
+    kb = VKKeyboardBuilder(inline=True)
+    if kind == "review":
+        kb.button("Отправить скрин", _payload("rz_review_send"), color="positive")
+    else:
+        kb.button("Я выложил, вот те скрин", _payload("rz_post_screen"), color="primary")
+    kb.adjust(1)
+    return kb.as_json()
 
 
 def blocked_keyboard(booking_id: int | None = None) -> str:
@@ -141,7 +155,18 @@ def subscribe_keyboard(community_link: str, *, manual_attempts: int = 0) -> str:
 
 async def send_raffle_dates_message(vk_id: int) -> bool:
     """Сразу список дат BEST после успешной проверки подписки (как в TG)."""
-    events = await future_best_events()
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        events = await future_best_events()
+    except Exception:
+        logger.exception("future_best_events failed for vk_id=%s", vk_id)
+        return await send_vk_text(
+            vk_id,
+            "Отлично, подписка на сообщество есть 🙌\n\n"
+            "Не удалось загрузить даты. Напиши «розыгрыш» чуть позже или менеджеру.",
+        )
     dates = sorted(
         {e["date"] for e in events},
         key=lambda d: datetime.strptime(d, "%d.%m.%Y"),
@@ -256,15 +281,29 @@ async def download_screenshot_bytes(url: str) -> bytes:
 
 async def send_vk_text(vk_id: int, text: str, *, keyboard: str | None = None) -> bool:
     """DM из TG-бота/админки в VK (нужны VK_GROUP_* в .env процесса)."""
+    import logging
+
     from bot.vk.client import VKClient
     from bot.vk.config import load_vk_settings
 
+    logger = logging.getLogger(__name__)
     settings = load_vk_settings()
     if not settings.is_configured:
+        logger.error("VK settings not configured — cannot DM vk_id=%s", vk_id)
         return False
     client = VKClient(settings)
-    await client.send_message(int(vk_id), text, keyboard=keyboard)
-    return True
+    try:
+        await client.send_message(int(vk_id), text, keyboard=keyboard)
+        return True
+    except Exception:
+        logger.exception("send_vk_text failed vk_id=%s", vk_id)
+        if keyboard:
+            try:
+                await client.send_message(int(vk_id), text)
+                return True
+            except Exception:
+                logger.exception("send_vk_text fallback failed vk_id=%s", vk_id)
+        return False
 
 
 RAFFLE_DATES_PAGE_SIZE = 6
@@ -385,27 +424,44 @@ async def is_community_member(vk_id: int) -> bool:
 
 async def continue_after_subscribe_check(vk_id: int, *, manual_attempts: int = 0) -> None:
     """После принятия скрина: проверка подписки на сообщество VK."""
+    import logging
+
     from bot.db.analytics import EVENT_RAFFLE_SUB_FAILED, EVENT_RAFFLE_SUBSCRIBED, track_event
     from bot.vk.config import load_vk_settings
 
+    logger = logging.getLogger(__name__)
     settings = load_vk_settings()
-    if await is_community_member(vk_id):
+    try:
+        subscribed = await is_community_member(vk_id)
+    except Exception:
+        logger.exception("is_community_member failed vk_id=%s", vk_id)
+        subscribed = False
+
+    if subscribed:
+        try:
+            track_event(
+                EVENT_RAFFLE_SUBSCRIBED,
+                vk_id=int(vk_id),
+                channel="vkontakte",
+                props={"manual_attempts": manual_attempts},
+            )
+        except Exception:
+            logger.exception("track subscribed failed vk_id=%s", vk_id)
+        # Сразу даты — без промежуточной кнопки «Выбрать дату» (в TG так же).
+        ok = await send_raffle_dates_message(int(vk_id))
+        if not ok:
+            logger.error("send_raffle_dates_message returned False vk_id=%s", vk_id)
+        return
+
+    try:
         track_event(
-            EVENT_RAFFLE_SUBSCRIBED,
+            EVENT_RAFFLE_SUB_FAILED,
             vk_id=int(vk_id),
             channel="vkontakte",
             props={"manual_attempts": manual_attempts},
         )
-        # Сразу даты — без промежуточной кнопки «Выбрать дату» (в TG так же).
-        await send_raffle_dates_message(int(vk_id))
-        return
-
-    track_event(
-        EVENT_RAFFLE_SUB_FAILED,
-        vk_id=int(vk_id),
-        channel="vkontakte",
-        props={"manual_attempts": manual_attempts},
-    )
+    except Exception:
+        logger.exception("track sub failed vk_id=%s", vk_id)
     await send_vk_text(
         vk_id,
         "Кажется, вы всё ещё не подписаны на наше сообщество. "

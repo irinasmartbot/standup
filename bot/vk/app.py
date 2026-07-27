@@ -1761,39 +1761,39 @@ class VKBotApp:
             return True
 
         if cmd == "rz_post":
-            self._arm_raffle_screenshot(vk_id, "post")
             self._track(vk_id, EVENT_RAFFLE_BRANCH, props={"kind": "post"})
             await self._send_text(
                 peer_id,
                 vk_raffle.POST_TEXT,
-                keyboard=None,
+                keyboard=vk_raffle.post_keyboard(),
                 attachment=self._random_cover_attachment(),
-            )
-            await self._send_text(
-                peer_id,
-                "Супер, кидай сюда скрин поста (одним фото) 👇",
             )
             return True
 
         if cmd == "rz_review":
-            self._arm_raffle_screenshot(vk_id, "review")
             self._track(vk_id, EVENT_RAFFLE_BRANCH, props={"kind": "review"})
             await self._send_raffle_review(peer_id)
+            return True
+
+        if cmd == "rz_post_cross":
+            self._arm_raffle_screenshot(vk_id, "post")
             await self._send_text(
                 peer_id,
-                "Супер, кидай сюда скрин отзыва (одним фото) 👇",
+                "Спасибо, но ждём скрин поста (одним фото) 😉 Кидай ниже 👇",
             )
             return True
 
-        # Старые кнопки «крест/скрин» — на случай старых сообщений в чате.
-        if cmd in {"rz_post_cross", "rz_post_screen"}:
+        if cmd == "rz_post_screen":
             self._arm_raffle_screenshot(vk_id, "post")
             await self._send_text(peer_id, "Супер, кидай сюда скрин (одним фото) 👇")
             return True
 
         if cmd == "rz_review_send":
             self._arm_raffle_screenshot(vk_id, "review")
-            await self._send_text(peer_id, "Супер, кидай сюда скрин (одним фото) 👇")
+            await self._send_text(
+                peer_id,
+                "Супер, кидай сюда скрин отзыва (одним фото) 👇",
+            )
             return True
 
         return False
@@ -1989,14 +1989,14 @@ class VKBotApp:
             await self._send_text(
                 peer_id,
                 vk_raffle.REVIEW_TEXT,
-                keyboard=None,
+                keyboard=vk_raffle.review_keyboard(),
                 attachment=",".join(attachments),
             )
             return
         await self._send_text(
             peer_id,
             vk_raffle.REVIEW_TEXT,
-            keyboard=None,
+            keyboard=vk_raffle.review_keyboard(),
         )
 
     async def _handle_raffle_screenshot(
