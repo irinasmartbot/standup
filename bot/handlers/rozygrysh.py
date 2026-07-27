@@ -905,17 +905,20 @@ async def _after_vk_screen_accepted(vk_id: int):
     try:
         await asyncio.sleep(2)
         await vk_raffle.continue_after_subscribe_check(vk_id)
+        return
     except Exception:
         logger.exception("VK after-accept flow failed for %s", vk_id)
-        try:
-            settings = load_vk_settings()
-            await vk_raffle.send_vk_text(
-                vk_id,
-                "Не видим вашей подписки. Подпишись на сообщество и нажми кнопку ниже 👇",
-                keyboard=vk_raffle.subscribe_keyboard(settings.community_link),
-            )
-        except Exception:
-            logger.exception("VK after-accept fallback failed for %s", vk_id)
+    # Не говорим «не видим подписки», если упали на датах/API — даём кнопку продолжить.
+    try:
+        settings = load_vk_settings()
+        await vk_raffle.send_vk_text(
+            vk_id,
+            "Не удалось продолжить автоматически. "
+            "Если ты уже подписан(а) на сообщество — нажми кнопку ниже 👇",
+            keyboard=vk_raffle.subscribe_keyboard(settings.community_link),
+        )
+    except Exception:
+        logger.exception("VK after-accept fallback failed for %s", vk_id)
 
 
 async def _after_screen_accepted(telegram_id: int):

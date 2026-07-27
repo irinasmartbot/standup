@@ -147,8 +147,8 @@ def subscribe_keyboard(community_link: str, *, manual_attempts: int = 0) -> str:
     link = (community_link or "").strip()
     if link:
         kb.button("Подписаться", link=link)
-    if manual_attempts < 1:
-        kb.button("Подписка есть 🤝", _payload("rz_sub_check", attempts=manual_attempts))
+    # Кнопку оставляем всегда — иначе после одной неудачной проверки пользователь застревает.
+    kb.button("Подписка есть 🤝", _payload("rz_sub_check", attempts=int(manual_attempts or 0)))
     kb.adjust(1)
     return kb.as_json()
 
@@ -160,6 +160,10 @@ async def send_raffle_dates_message(vk_id: int) -> bool:
     logger = logging.getLogger(__name__)
     try:
         events = await future_best_events()
+        dates = sorted(
+            {e["date"] for e in events if e.get("date")},
+            key=lambda d: datetime.strptime(d, "%d.%m.%Y"),
+        )
     except Exception:
         logger.exception("future_best_events failed for vk_id=%s", vk_id)
         return await send_vk_text(
@@ -167,21 +171,22 @@ async def send_raffle_dates_message(vk_id: int) -> bool:
             "Отлично, подписка на сообщество есть 🙌\n\n"
             "Не удалось загрузить даты. Напиши «розыгрыш» чуть позже или менеджеру.",
         )
-    dates = sorted(
-        {e["date"] for e in events},
-        key=lambda d: datetime.strptime(d, "%d.%m.%Y"),
-    )
     if not dates:
         return await send_vk_text(
             vk_id,
             "Отлично, подписка на сообщество есть 🙌\n\n"
             "Пока нет доступных дат для бесплатного билета 😔 Загляни позже!",
         )
+    try:
+        keyboard = dates_keyboard(dates, page=0)
+    except Exception:
+        logger.exception("dates_keyboard failed for vk_id=%s", vk_id)
+        keyboard = None
     return await send_vk_text(
         vk_id,
         "Отлично, подписка на сообщество есть 🙌\n\n"
         "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉",
-        keyboard=dates_keyboard(dates, page=0),
+        keyboard=keyboard,
     )
 
 
@@ -405,25 +410,45 @@ def get_active_raffle_booking_safe(vk_id: int):
     return get_active_raffle_booking(vk_id=vk_id)
 
 
+def _skip_community_sub_check() -> bool:
+    """Читаем env напрямую — без import bot.config (в VK-боте может не быть BOT_TOKEN)."""
+    import os
+
+    return os.getenv("ROZYGRYSH_SKIP_SUB_CHECK", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 async def is_community_member(vk_id: int) -> bool:
-    from bot.config import ROZYGRYSH_SKIP_SUB_CHECK
+    import logging
+
     from bot.vk.client import VKClient
     from bot.vk.config import load_vk_settings
 
-    if ROZYGRYSH_SKIP_SUB_CHECK:
+    logger = logging.getLogger(__name__)
+    if _skip_community_sub_check():
+        logger.info("ROZYGRYSH_SKIP_SUB_CHECK=1 — skip VK community check for %s", vk_id)
         return True
     settings = load_vk_settings()
     if not settings.is_configured:
+        logger.error("VK not configured — cannot check membership for %s", vk_id)
         return False
     client = VKClient(settings)
     try:
         return await client.is_group_member(int(vk_id))
     except Exception:
+        logger.exception("groups.isMember failed for vk_id=%s", vk_id)
         return False
 
 
-async def continue_after_subscribe_check(vk_id: int, *, manual_attempts: int = 0) -> None:
-    """После принятия скрина: проверка подписки на сообщество VK."""
+async def continue_after_subscribe_check(vk_id: int, *, manual_attempts: int = 0) -> bool:
+    """После принятия скрина: проверка подписки на сообщество VK.
+
+    Returns True if user may proceed to dates (message sent or ready).
+    """
     import logging
 
     from bot.db.analytics import EVENT_RAFFLE_SUB_FAILED, EVENT_RAFFLE_SUBSCRIBED, track_event
@@ -447,11 +472,10 @@ async def continue_after_subscribe_check(vk_id: int, *, manual_attempts: int = 0
             )
         except Exception:
             logger.exception("track subscribed failed vk_id=%s", vk_id)
-        # Сразу даты — без промежуточной кнопки «Выбрать дату» (в TG так же).
         ok = await send_raffle_dates_message(int(vk_id))
         if not ok:
             logger.error("send_raffle_dates_message returned False vk_id=%s", vk_id)
-        return
+        return bool(ok)
 
     try:
         track_event(
@@ -470,3 +494,4 @@ async def continue_after_subscribe_check(vk_id: int, *, manual_attempts: int = 0
             manual_attempts=manual_attempts,
         ),
     )
+    return False

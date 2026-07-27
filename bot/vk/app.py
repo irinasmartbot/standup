@@ -23,6 +23,8 @@ from bot.db.analytics import (
     EVENT_RAFFLE_BRANCH,
     EVENT_RAFFLE_ENTER,
     EVENT_RAFFLE_SCREENSHOT,
+    EVENT_RAFFLE_SUB_FAILED,
+    EVENT_RAFFLE_SUBSCRIBED,
     EVENT_SHOW_CARD,
     track_event,
 )
@@ -1700,11 +1702,30 @@ class VKBotApp:
             return True
 
         if cmd == "rz_sub_check":
-            attempts = int(payload.get("attempts") or 0)
-            await vk_raffle.continue_after_subscribe_check(
-                vk_id,
-                manual_attempts=attempts + 1,
-            )
+            attempts = int(payload.get("attempts") or 0) + 1
+            # Даты шлём через VK long-poll клиент — надёжнее, чем отдельный send_vk_text.
+            if await vk_raffle.is_community_member(vk_id):
+                self._track(
+                    vk_id,
+                    EVENT_RAFFLE_SUBSCRIBED,
+                    props={"manual_attempts": attempts},
+                )
+                await self._send_text(peer_id, "Отлично, подписка на сообщество есть 🙌")
+                await self._send_raffle_dates(peer_id, vk_id, edit=False)
+            else:
+                self._track(
+                    vk_id,
+                    EVENT_RAFFLE_SUB_FAILED,
+                    props={"manual_attempts": attempts},
+                )
+                await self._send_text(
+                    peer_id,
+                    "Не видим вашей подписки. Подпишись на сообщество и нажми кнопку ниже 👇",
+                    keyboard=vk_raffle.subscribe_keyboard(
+                        self.settings.community_link,
+                        manual_attempts=attempts,
+                    ),
+                )
             return True
 
         if cmd == "rz_rules":
