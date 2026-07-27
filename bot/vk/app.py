@@ -311,6 +311,7 @@ class VKBotApp:
         self._ticket_in_progress: set[int] = set()
         self.peer_nav_message_ids: dict[int, list[int]] = {}
         self._pending_delete_ids: dict[int, list[int]] = {}
+        self.peer_carousel_message_ids: dict[int, int] = {}
         self._seen_event_ids: dict[str, float] = {}
         self._seen_message_ids: dict[int, float] = {}
         self._peer_cmd_cooldown: dict[tuple[int, str], float] = {}
@@ -480,6 +481,7 @@ class VKBotApp:
         self._ensure_user(user_id)
         vk_booking.clear_session(self.booking_sessions, user_id)
         vk_mb.clear_manage_session(self.manage_sessions, user_id)
+        self.peer_carousel_message_ids.pop(int(peer_id), None)
         if is_start:
             self._track(user_id, EVENT_BOT_START)
         else:
@@ -1010,6 +1012,9 @@ class VKBotApp:
     def _cmd_on_cooldown(self, peer_id: int, cmd: str | None) -> bool:
         if not cmd:
             return False
+        # Листание карусели / броней должно быть мгновенным.
+        if cmd in {"best_carousel", "best_carousel_pos", "mb_page", "mb_noop"}:
+            return False
         now = time.monotonic()
         key = (int(peer_id), str(cmd))
         prev = self._peer_cmd_cooldown.get(key)
@@ -1237,10 +1242,12 @@ class VKBotApp:
                 payload.get("venue") or "",
                 int(payload.get("index") or 0),
                 vk_id=vk_id,
+                edit=True,
             )
             return
         if cmd == "best_carousel_pos":
             # Position marker button — keep current card.
+            await self._delete_pending(peer_id)
             return
         if cmd == "best_venue_date":
             # Legacy path: open carousel around that date instead of a flat list.
@@ -1249,7 +1256,7 @@ class VKBotApp:
             date = payload.get("date") or ""
             events = await self._best_venue_events(venue)
             index = next((i for i, e in enumerate(events) if e.get("date") == date), 0)
-            await self._send_best_venue_carousel(peer_id, venue, index, vk_id=vk_id)
+            await self._send_best_venue_carousel(peer_id, venue, index, vk_id=vk_id, edit=False)
             return
         if cmd == "best_date":
             self.peer_browse[peer_id] = "date"
@@ -1473,6 +1480,7 @@ class VKBotApp:
 
     async def _send_best_venues(self, peer_id: int) -> None:
         self.peer_context[peer_id] = "best"
+        self.peer_carousel_message_ids.pop(int(peer_id), None)
         events = await self._load_events("best")
         venues = sorted({e["location"] for e in events if e.get("location")})
         if not venues:
@@ -1501,7 +1509,7 @@ class VKBotApp:
                 keyboard=self._main_menu_kb(peer_id),
             )
             return
-        await self._send_best_venue_carousel(peer_id, venue, 0, vk_id=vk_id)
+        await self._send_best_venue_carousel(peer_id, venue, 0, vk_id=vk_id, edit=False)
 
     async def _send_best_venue_carousel(
         self,
@@ -1510,9 +1518,11 @@ class VKBotApp:
         index: int = 0,
         *,
         vk_id: int | None = None,
+        edit: bool = False,
     ) -> None:
         events = await self._best_venue_events(venue)
         if not events:
+            self.peer_carousel_message_ids.pop(int(peer_id), None)
             await self.client.send_message(
                 peer_id,
                 "На этой площадке пока нет актуальных BEST.",
@@ -1539,19 +1549,44 @@ class VKBotApp:
                 "has_payment": bool(payment_url),
             },
         )
+        text = format_vk_text(_best_event_text_vk(event))
+        keyboard = _best_carousel_keyboard(
+            venue,
+            index,
+            len(events),
+            payment_url=payment_url,
+            manager_link=self.settings.manager_link,
+        )
         attachment = await self._event_poster_attachment(peer_id, event)
-        await self._send_text(
+        peer = int(peer_id)
+        existing_id = self.peer_carousel_message_ids.get(peer)
+
+        if edit and existing_id:
+            # Плавно меняем ту же карточку, без delete + send.
+            ok = await self.client.edit_message(
+                peer_id,
+                existing_id,
+                text,
+                keyboard=keyboard,
+                attachment=attachment or "",
+            )
+            await self._delete_pending(peer_id)
+            if ok:
+                return
+            logger.warning(
+                "BEST carousel edit failed peer_id=%s msg_id=%s, falling back to send",
+                peer_id,
+                existing_id,
+            )
+
+        mid = await self._send_text(
             peer_id,
-            format_vk_text(_best_event_text_vk(event)),
-            keyboard=_best_carousel_keyboard(
-                venue,
-                index,
-                len(events),
-                payment_url=payment_url,
-                manager_link=self.settings.manager_link,
-            ),
+            text,
+            keyboard=keyboard,
             attachment=attachment,
         )
+        if mid:
+            self.peer_carousel_message_ids[peer] = int(mid)
 
     async def _send_best_date(self, peer_id: int, date: str, *, vk_id: int | None = None) -> None:
         events = [e for e in await self._load_events("best") if e["date"] == date]

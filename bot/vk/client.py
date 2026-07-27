@@ -64,6 +64,38 @@ class VKClient:
         response = await self.api("messages.send", **params)
         return int(response)
 
+    async def edit_message(
+        self,
+        peer_id: int,
+        message_id: int,
+        text: str,
+        *,
+        keyboard: str | None = None,
+        attachment: str | None = None,
+    ) -> bool:
+        """Edit an existing message in place (text / keyboard / attachment)."""
+        params: dict[str, Any] = {
+            "peer_id": int(peer_id),
+            "message_id": int(message_id),
+            "message": text,
+        }
+        if self.settings.group_id:
+            params["group_id"] = self.settings.group_id
+        if keyboard is not None:
+            params["keyboard"] = keyboard
+        if attachment is not None:
+            params["attachment"] = attachment
+        try:
+            response = await self.api("messages.edit", **params)
+            return bool(response)
+        except VKAPIError:
+            logger.exception(
+                "messages.edit failed peer_id=%s message_id=%s",
+                peer_id,
+                message_id,
+            )
+            return False
+
     async def delete_messages(self, peer_id: int, message_ids: list[int], *, delete_for_all: bool = True) -> None:
         ids = [int(mid) for mid in message_ids if mid]
         if not ids:
