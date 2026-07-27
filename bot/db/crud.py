@@ -178,23 +178,34 @@ def _find_event_id(
     return row[0] if row else None
 
 
-def get_booking(telegram_id, event_date, event_time):
+def get_booking(telegram_id=None, event_date=None, event_time=None, *, vk_id=None):
+    """Активная бронь пользователя на слот (дата+время). telegram_id или vk_id."""
+    if telegram_id is None and vk_id is None:
+        return None
     if _use_postgres():
+        if vk_id is not None:
+            user_sql = "u.vk_id = %s"
+            user_param = int(vk_id)
+        else:
+            user_sql = "u.telegram_id = %s"
+            user_param = telegram_id
         with _pg_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     BOOKING_SELECT_SQL
-                    + """
-                    WHERE u.telegram_id = %s
+                    + f"""
+                    WHERE {user_sql}
                       AND e.event_date = %s
                       AND e.event_time = %s
                       AND b.status IN ('booked', 'confirmed')
                     LIMIT 1
                     """,
-                    (telegram_id, _parse_event_date(event_date), _parse_event_time(event_time)),
+                    (user_param, _parse_event_date(event_date), _parse_event_time(event_time)),
                 )
                 return _fetchone_tuple(cur)
 
+    if telegram_id is None:
+        return None
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -359,13 +370,21 @@ def get_active_bookings_by_user(telegram_id):
     return rows
 
 
-def get_same_day_bookings_summary(telegram_id, event_date, exclude_time=None):
-    """Активные брони на дату: [(time, location, format), ...]."""
+def get_same_day_bookings_summary(telegram_id=None, event_date=None, exclude_time=None, *, vk_id=None):
+    """Активные брони на дату: [(time, location, format), ...]. telegram_id или vk_id."""
+    if telegram_id is None and vk_id is None:
+        return []
     if _use_postgres():
+        if vk_id is not None:
+            user_sql = "u.vk_id = %s"
+            user_param = int(vk_id)
+        else:
+            user_sql = "u.telegram_id = %s"
+            user_param = telegram_id
         with _pg_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT
                         to_char(e.event_time, 'HH24:MI') AS event_time,
                         e.location,
@@ -373,18 +392,20 @@ def get_same_day_bookings_summary(telegram_id, event_date, exclude_time=None):
                     FROM bookings b
                     JOIN users u ON u.id = b.user_id
                     JOIN events e ON e.id = b.event_id
-                    WHERE u.telegram_id = %s
+                    WHERE {user_sql}
                       AND b.status IN ('booked', 'confirmed')
                       AND e.event_date = %s
                     ORDER BY e.event_time ASC, b.id ASC
                     """,
-                    (telegram_id, _parse_event_date(event_date)),
+                    (user_param, _parse_event_date(event_date)),
                 )
                 rows = _fetchall_tuples(cur)
         if exclude_time:
             rows = [r for r in rows if (r[0] or "") != exclude_time]
         return rows
 
+    if telegram_id is None:
+        return []
     rows = []
     for booking in get_active_bookings_by_user(telegram_id):
         if (booking[5] or "") != event_date:

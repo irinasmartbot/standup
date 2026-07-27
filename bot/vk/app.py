@@ -21,7 +21,7 @@ from bot.db.analytics import (
     EVENT_SHOW_CARD,
     track_event,
 )
-from bot.db.crud import ensure_user, update_booking_status
+from bot.db.crud import ensure_user, get_booking, update_booking_status
 from bot.handlers.booking import BOOKING_RULES_TEXT as TG_BOOKING_RULES_TEXT
 from bot.handlers.formats import (
     BUY_TICKET_TEXT as TG_BUY_TICKET_TEXT,
@@ -32,8 +32,9 @@ from bot.handlers.formats import (
 )
 from bot.handlers.start import WELCOME_TEXT as TG_WELCOME_TEXT
 from bot.services.sheets import load_events
+from bot.utils.booking_texts import same_day_booking_warning
 from bot.utils.phone import normalize_phone
-from bot.utils.ticket import MONTHS, format_date
+from bot.utils.ticket import MONTHS, format_date, now_msk
 from bot.vk import booking as vk_booking
 from bot.vk import my_bookings as vk_mb
 from bot.vk.client import VKClient
@@ -503,6 +504,41 @@ class VKBotApp:
                 keyboard=self._main_menu_kb(peer_id),
             )
             return
+
+        event_date = event.get("date") or ""
+        event_time = event.get("time") or ""
+        try:
+            if datetime.strptime(event_date, "%d.%m.%Y").date() < now_msk().date():
+                await self._send_text(
+                    peer_id,
+                    "Это мероприятие уже прошло 😊 Выбери новую дату!",
+                    keyboard=self._main_menu_kb(peer_id),
+                )
+                return
+        except Exception:
+            pass
+
+        # Как в TG: нельзя повторно на тот же слот (дата+время).
+        existing = get_booking(None, event_date, event_time, vk_id=vk_id)
+        if existing:
+            date_str = format_date(event_date)
+            await self._send_text(
+                peer_id,
+                (
+                    "⚠️ ВНИМАНИЕ, мы уже внесли Вас в списки гостей:\n\n"
+                    f"Дата: {date_str}\n"
+                    f"Время: {existing[6]}\n"
+                    f"Локация: {existing[8]}\n"
+                    f"Количество гостей: {existing[9]} чел.\n\n"
+                    "Вы не можете забронировать повторный билет на данное мероприятие"
+                ),
+                keyboard=vk_booking.manage_ticket_keyboard(
+                    int(existing[0]),
+                    self.settings.manager_link,
+                ),
+            )
+            return
+
         vk_booking.start_session(self.booking_sessions, vk_id, event)
         self._track(
             vk_id,
@@ -511,11 +547,23 @@ class VKBotApp:
             props={
                 "format": "proverka",
                 "browse": self.peer_browse.get(peer_id, "date"),
-                "date": event.get("date"),
-                "time": event.get("time"),
+                "date": event_date,
+                "time": event_time,
                 "location": event.get("location"),
             },
         )
+
+        # Как в TG: на ту же дату другое шоу — предупреждаем, но бронировать можно.
+        same_day_alert = same_day_booking_warning(
+            None,
+            event_date,
+            exclude_time=event_time,
+            for_alert=True,
+            vk_id=vk_id,
+        )
+        if same_day_alert:
+            await self.client.send_message(peer_id, same_day_alert)
+
         await self._send_text(
             peer_id,
             "Напишите, пожалуйста, ваше имя.",
@@ -567,6 +615,33 @@ class VKBotApp:
                     "К сожалению, на это мероприятие места закончились. Выбери другую дату.",
                     keyboard=self._main_menu_kb(peer_id),
                 )
+                vk_booking.clear_session(self.booking_sessions, vk_id)
+                return
+            if msg == "already_booked":
+                existing = get_booking(
+                    None,
+                    session.get("event_date"),
+                    session.get("event_time"),
+                    vk_id=vk_id,
+                )
+                if existing:
+                    await self.client.send_message(
+                        peer_id,
+                        (
+                            "⚠️ ВНИМАНИЕ, мы уже внесли Вас в списки гостей.\n"
+                            "Вы не можете забронировать повторный билет на данное мероприятие"
+                        ),
+                        keyboard=vk_booking.manage_ticket_keyboard(
+                            int(existing[0]),
+                            self.settings.manager_link,
+                        ),
+                    )
+                else:
+                    await self.client.send_message(
+                        peer_id,
+                        "Вы уже забронировали это мероприятие.",
+                        keyboard=self._main_menu_kb(peer_id),
+                    )
                 vk_booking.clear_session(self.booking_sessions, vk_id)
                 return
             if msg.startswith("only:"):

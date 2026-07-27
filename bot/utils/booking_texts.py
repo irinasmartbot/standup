@@ -19,20 +19,22 @@ def _format_label(format_name: str | None) -> str:
 
 
 def same_day_booking_warning(
-    telegram_id: int,
-    event_date: str,
+    telegram_id: int | None = None,
+    event_date: str = "",
     *,
     exclude_time: str | None = None,
     for_alert: bool = False,
+    vk_id: int | None = None,
 ) -> str:
     """Мягкое предупреждение: на эту дату уже есть другая активная бронь.
 
     Не блокирует — только текст. exclude_time пропускает то же самое шоу.
     for_alert=True — plain text до 200 символов для Telegram alert.
+    telegram_id или vk_id.
     """
     others: list[str] = []
     for time, location, format_name in get_same_day_bookings_summary(
-        telegram_id, event_date, exclude_time=exclude_time
+        telegram_id, event_date, exclude_time=exclude_time, vk_id=vk_id
     ):
         time = time or ""
         location = (location or "").strip()

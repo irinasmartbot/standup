@@ -9,6 +9,7 @@ from bot.config import CHANNEL_LINK, MANAGER_LINK, MANAGER_PHONE
 from bot.db.crud import (
     create_booking,
     get_active_booking_by_id,
+    get_booking,
     get_last_phone,
     get_total_guests,
     save_ticket_message_id,
@@ -121,6 +122,8 @@ async def complete_booking(
 ) -> int:
     event_date = session["event_date"]
     event_time = session["event_time"]
+    if get_booking(None, event_date, event_time, vk_id=vk_id):
+        raise RuntimeError("already_booked")
     event = await find_event(session["event_id"])
     max_seats = (event or {}).get("max_seats") or session.get("max_seats") or 0
     if max_seats:
