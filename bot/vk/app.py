@@ -67,8 +67,22 @@ DATES_PAGE_SIZE = 6
 VK_CHANNEL = "vkontakte"
 # Как в TG: не крутим в рандоме карточки площадок / хитлото / билет / отзывы.
 _EXCLUDED_RANDOM_COVER_KEYS = frozenset({"temple_bar", "escobar", "nebar", "hitloto_start"})
-# Deep link / ref: vk.me/<club>?ref=standup_rozygr (как TG start=standup_rozygr).
+# Deep link: vk.com/write-{group_id}?ref=standup_rozygr или vk.me/{screen_name}?ref=...
+# (ссылка вида vk.com/club...?ref= НЕ передаёт ref в message_new).
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
+
+
+def raffle_entry_link(settings: VKSettings) -> str:
+    """Рабочая ссылка входа в розыгрыш (ref доходит до бота только через write-/vk.me)."""
+    if settings.group_id:
+        return f"https://vk.com/write-{int(settings.group_id)}?ref=standup_rozygr"
+    link = (settings.community_link or "").strip().rstrip("/")
+    if link:
+        # best-effort: screen_name из community_link
+        name = link.rsplit("/", 1)[-1]
+        if name and not name.startswith("club") and name not in {"vk.com", "vk.ru"}:
+            return f"https://vk.me/{name}?ref=standup_rozygr"
+    return "напиши «розыгрыш»"
 
 WELCOME_TEXT = format_vk_text(TG_WELCOME_TEXT)
 FORMATS_TEXT = format_vk_text(TG_FORMATS_TEXT)
@@ -1974,7 +1988,7 @@ class VKBotApp:
         self._raffle_photo_burst.pop(int(vk_id), None)
         self.raffle_msg_attachment.pop(int(peer_id), None)
 
-        link = (self.settings.community_link or "https://vk.com/").rstrip("/")
+        entry = raffle_entry_link(self.settings)
         await self._send_text(
             peer_id,
             (
@@ -1983,7 +1997,9 @@ class VKBotApp:
                 f"• отменено броней: {stats.get('bookings_cancelled', 0)}\n"
                 f"• снято заявок на модерации: {stats.get('submissions_cancelled', 0)}\n\n"
                 "Можно снова открыть словом «розыгрыш» или по ссылке:\n"
-                f"{link}?ref=standup_rozygr"
+                f"{entry}\n\n"
+                "После перехода напиши любое сообщение или нажми «Начать» — "
+                "иначе VK не передаст параметр ссылки."
             ),
             replace_nav=False,
         )
