@@ -959,6 +959,12 @@ def reset_raffle_for_user(telegram_id=None, *, vk_id=None) -> dict:
                     (datetime.now(), vk_id),
                 )
                 result["submissions_cancelled"] = cur.rowcount or 0
+
+                cur.execute(
+                    "DELETE FROM raffle_vk_awaiting WHERE vk_id = %s",
+                    (vk_id,),
+                )
+                result["nav_cleared"] = cur.rowcount > 0
             else:
                 _upsert_user(cur, telegram_id, None, None, None)
                 cur.execute(

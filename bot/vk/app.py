@@ -1487,6 +1487,9 @@ class VKBotApp:
             self._queue_delete(peer_id, message.get("id"))
         logger.info("VK message peer_id=%s vk_id=%s cmd=%s text=%r", peer_id, vk_id, cmd, text[:80])
         text_key = text.casefold()
+        if text_key in {"сброс розыгрыш", "сброс розыгрыша", "/reset_rozygrysh"}:
+            await self._reset_raffle_for_test(peer_id, vk_id)
+            return
         if not cmd:
             context = self.peer_context.get(peer_id)
             text_commands = {
@@ -1954,6 +1957,36 @@ class VKBotApp:
 
         self.raffle_sessions.pop(int(vk_id), None)
         clear_raffle_vk_awaiting_screenshot(int(vk_id))
+
+    async def _reset_raffle_for_test(self, peer_id: int, vk_id: int) -> None:
+        """Сброс своей ветки розыгрыша для повторного теста (как TG /reset_rozygrysh)."""
+        from bot.config import ROZYGRYSH_SKIP_SUB_CHECK
+        from bot.db.crud import reset_raffle_for_user
+
+        if not ROZYGRYSH_SKIP_SUB_CHECK:
+            await self._send_text(peer_id, "Команда недоступна.", replace_nav=False)
+            return
+
+        stats = reset_raffle_for_user(vk_id=int(vk_id))
+        vk_booking.clear_session(self.booking_sessions, vk_id)
+        vk_mb.clear_manage_session(self.manage_sessions, vk_id)
+        self._clear_raffle_screenshot_wait(int(vk_id))
+        self._raffle_photo_burst.pop(int(vk_id), None)
+        self.raffle_msg_attachment.pop(int(peer_id), None)
+
+        link = (self.settings.community_link or "https://vk.com/").rstrip("/")
+        await self._send_text(
+            peer_id,
+            (
+                "Розыгрыш сброшен для тебя ✅\n\n"
+                "• флаг использован: сброшен\n"
+                f"• отменено броней: {stats.get('bookings_cancelled', 0)}\n"
+                f"• снято заявок на модерации: {stats.get('submissions_cancelled', 0)}\n\n"
+                "Можно снова открыть словом «розыгрыш» или по ссылке:\n"
+                f"{link}?ref=standup_rozygr"
+            ),
+            replace_nav=False,
+        )
 
     def _resolve_raffle_screenshot_kind(self, vk_id: int) -> str | None:
         """kind из памяти или БД (после отказа модератором / рестарта VK-бота)."""
