@@ -911,8 +911,7 @@ async def _after_vk_screen_accepted(vk_id: int):
             settings = load_vk_settings()
             await vk_raffle.send_vk_text(
                 vk_id,
-                "Не удалось автоматически проверить подписку. "
-                "Подпишись на сообщество и нажми кнопку ниже 👇",
+                "Не видим вашей подписки. Подпишись на сообщество и нажми кнопку ниже 👇",
                 keyboard=vk_raffle.subscribe_keyboard(settings.community_link),
             )
         except Exception:

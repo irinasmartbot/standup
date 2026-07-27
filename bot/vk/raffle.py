@@ -464,8 +464,7 @@ async def continue_after_subscribe_check(vk_id: int, *, manual_attempts: int = 0
         logger.exception("track sub failed vk_id=%s", vk_id)
     await send_vk_text(
         vk_id,
-        "Кажется, вы всё ещё не подписаны на наше сообщество. "
-        "Для участия в розыгрыше нужно подписаться.",
+        "Не видим вашей подписки. Подпишись на сообщество и нажми кнопку ниже 👇",
         keyboard=subscribe_keyboard(
             settings.community_link,
             manual_attempts=manual_attempts,
