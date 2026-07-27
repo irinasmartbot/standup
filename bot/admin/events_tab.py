@@ -295,7 +295,15 @@ def render_events_tab(
     if show_tickets and tickets_event_id:
         rows = []
         for h in holders:
-            tid = h.get("telegram_id") or "—"
+            tid = h.get("telegram_id")
+            vid = h.get("vk_id")
+            source = (h.get("booking_source") or "").strip().lower()
+            if source in {"vk", "vkontakte"} or (vid and not tid):
+                channel = f"VK {_h(vid)}" if vid else "VK"
+            elif tid:
+                channel = f"TG {_h(tid)}"
+            else:
+                channel = "—"
             uname = f"@{h.get('username')}" if h.get("username") else "—"
             got = "да" if h.get("has_ticket_msg") else "нет msg id"
             is_raffle = (h.get("booking_format") or "") == "rozygrysh"
@@ -306,7 +314,7 @@ def render_events_tab(
                 "<tr>"
                 f"<td>{_h(h.get('booking_id'))}</td>"
                 f"<td>{guest}<br><span class='muted'>{_h(uname)}</span></td>"
-                f"<td>{_h(tid)}</td>"
+                f"<td>{channel}</td>"
                 f"<td>{_h(h.get('phone') or '—')}</td>"
                 f"<td>{_h(h.get('guests'))}</td>"
                 f"<td>{_h(got)}</td>"
@@ -326,7 +334,8 @@ def render_events_tab(
       <h2>Билеты по шоу #{_h(tickets_event_id)}</h2>
       <p class="muted">Показаны только брони со статусом «подтверждено» (билет получен).
       Метка «розыгрыш» — билет выдан в рамках розыгрыша BEST.
-      Переотправка шлёт новый билет с текущими датой/временем/местом из афиши.</p>
+      Переотправка шлёт новый билет с текущими датой/временем/местом из афиши
+      (Telegram или VK — по каналу брони).</p>
       <div class="events-toolbar">
         <form method="post" action="/admin/events/resend-ticket">
           <input type="hidden" name="ef" value="{_h(fmt)}">
@@ -341,7 +350,7 @@ def render_events_tab(
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th>booking</th><th>Гость</th><th>telegram_id</th><th>Телефон</th>
+          <th>booking</th><th>Гость</th><th>Канал</th><th>Телефон</th>
           <th>Гости</th><th>Уже слали</th><th></th>
         </tr></thead>
         <tbody>{body}</tbody>

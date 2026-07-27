@@ -76,6 +76,8 @@ def after_booking_keyboard(booking_id: int, *, offer_ticket: bool) -> str:
 
 def manage_ticket_keyboard(booking_id: int, settings_manager_link: str) -> str:
     kb = VKKeyboardBuilder()
+    kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id), color="negative")
+    kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
     kb.button("Задать вопрос менеджеру", link=settings_manager_link)
     kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)

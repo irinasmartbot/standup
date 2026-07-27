@@ -37,6 +37,9 @@ EVENT_BOOKING_CREATED = "booking_created"
 EVENT_BOOKING_CONFIRMED = "booking_confirmed"
 EVENT_BOOKING_CANCELLED = "booking_cancelled"
 EVENT_BOOKING_ANNULLED = "booking_annulled"
+EVENT_BOOKING_START = "booking_start"
+EVENT_BROWSE_DATES = "browse_dates"
+EVENT_BROWSE_VENUES = "browse_venues"
 EVENT_BOT_BLOCKED = "bot_blocked"
 EVENT_BOT_UNBLOCKED = "bot_unblocked"
 # Menu / slash commands (Telegram command menu — 5 items)
@@ -264,6 +267,16 @@ def _metric_map(rows) -> dict:
     return result
 
 
+# Count unique people across Telegram and VK (telegram_id-only misses VK).
+_UNIQUE_PERSON_SQL = """
+COUNT(DISTINCT COALESCE(
+    user_id::text,
+    CASE WHEN telegram_id IS NOT NULL THEN 'tg:' || telegram_id::text END,
+    CASE WHEN vk_id IS NOT NULL THEN 'vk:' || vk_id::text END
+))::int
+""".strip()
+
+
 def fetch_analytics_report(
     *,
     date_from: Optional[str] = None,
@@ -352,7 +365,7 @@ def fetch_analytics_report(
                     SELECT
                         name,
                         COUNT(*)::int AS events,
-                        COUNT(DISTINCT telegram_id)::int AS uniques
+                        {_UNIQUE_PERSON_SQL} AS uniques
                     FROM analytics_events
                     WHERE {where_sql}
                     GROUP BY name
@@ -366,7 +379,7 @@ def fetch_analytics_report(
                     SELECT
                         COALESCE(props->>'payload', '') AS payload,
                         COUNT(*)::int AS events,
-                        COUNT(DISTINCT telegram_id)::int AS uniques
+                        {_UNIQUE_PERSON_SQL} AS uniques
                     FROM analytics_events
                     WHERE {where_sql} AND name = 'bot_start'
                     GROUP BY 1
@@ -389,7 +402,7 @@ def fetch_analytics_report(
                         COALESCE(props->>'format', 'unknown') AS format,
                         COALESCE(props->>'browse', '') AS browse,
                         COUNT(*)::int AS events,
-                        COUNT(DISTINCT telegram_id)::int AS uniques
+                        {_UNIQUE_PERSON_SQL} AS uniques
                     FROM analytics_events
                     WHERE {where_sql} AND name = 'show_card'
                     GROUP BY 1, 2
@@ -404,7 +417,7 @@ def fetch_analytics_report(
                     SELECT
                         COALESCE(props->>'kind', 'unknown') AS kind,
                         COUNT(*)::int AS events,
-                        COUNT(DISTINCT telegram_id)::int AS uniques
+                        {_UNIQUE_PERSON_SQL} AS uniques
                     FROM analytics_events
                     WHERE {where_sql} AND name = 'raffle_branch'
                     GROUP BY 1
@@ -420,7 +433,7 @@ def fetch_analytics_report(
                         COALESCE(props->>'kind', 'unknown') AS kind,
                         name,
                         COUNT(*)::int AS events,
-                        COUNT(DISTINCT telegram_id)::int AS uniques
+                        {_UNIQUE_PERSON_SQL} AS uniques
                     FROM analytics_events
                     WHERE {where_sql}
                       AND name IN (
@@ -605,38 +618,67 @@ def fetch_analytics_report(
         return empty
 
 
-def fetch_user_activity(telegram_id: int, limit: int = 40) -> list[dict]:
-    """Recent analytics events for one Telegram user (admin user card)."""
-    if not _use_postgres() or not telegram_id:
+def fetch_user_activity(
+    *,
+    user_id: Optional[int] = None,
+    telegram_id: Optional[int] = None,
+    vk_id: Optional[int] = None,
+    limit: int = 40,
+) -> list[dict]:
+    """Recent analytics events for one guest (admin user card)."""
+    if not _use_postgres():
+        return []
+    where = None
+    params: dict[str, Any] = {"limit": limit}
+    if user_id is not None:
+        where = "user_id = %(user_id)s"
+        params["user_id"] = int(user_id)
+    elif telegram_id is not None:
+        where = "telegram_id = %(telegram_id)s"
+        params["telegram_id"] = int(telegram_id)
+    elif vk_id is not None:
+        where = "vk_id = %(vk_id)s"
+        params["vk_id"] = int(vk_id)
+    else:
         return []
     try:
         with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT name, props, created_at, channel
                     FROM analytics_events
-                    WHERE telegram_id = %(telegram_id)s
+                    WHERE {where}
                     ORDER BY created_at DESC
                     LIMIT %(limit)s
                     """,
-                    {"telegram_id": telegram_id, "limit": limit},
+                    params,
                 )
                 return [dict(row) for row in cur.fetchall()]
     except Exception:
-        logger.exception("fetch_user_activity failed for %s", telegram_id)
+        logger.exception(
+            "fetch_user_activity failed user_id=%s telegram_id=%s vk_id=%s",
+            user_id,
+            telegram_id,
+            vk_id,
+        )
         return []
 
 
-def fetch_user_last_event(telegram_id: int) -> dict | None:
-    """Latest analytics event for one Telegram user, or None."""
-    rows = fetch_user_activity(telegram_id, limit=1)
+def fetch_user_last_event(
+    *,
+    user_id: Optional[int] = None,
+    telegram_id: Optional[int] = None,
+    vk_id: Optional[int] = None,
+) -> dict | None:
+    """Latest analytics event for one guest, or None."""
+    rows = fetch_user_activity(user_id=user_id, telegram_id=telegram_id, vk_id=vk_id, limit=1)
     return rows[0] if rows else None
 
 
-def fetch_users_last_events(telegram_ids: list[int]) -> dict[int, dict]:
-    """Latest analytics event per telegram_id for Users table «Этап»."""
-    ids = sorted({int(tid) for tid in telegram_ids if tid})
+def fetch_users_last_events(user_ids: list[int]) -> dict[int, dict]:
+    """Latest analytics event per users.id for Users table «Этап»."""
+    ids = sorted({int(uid) for uid in user_ids if uid})
     if not _use_postgres() or not ids:
         return {}
     try:
@@ -644,42 +686,90 @@ def fetch_users_last_events(telegram_ids: list[int]) -> dict[int, dict]:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT DISTINCT ON (telegram_id)
-                        telegram_id, name, props, created_at, channel
-                    FROM analytics_events
-                    WHERE telegram_id = ANY(%(ids)s)
-                    ORDER BY telegram_id, created_at DESC
+                    SELECT DISTINCT ON (resolved_user_id)
+                        resolved_user_id AS user_id,
+                        name,
+                        props,
+                        created_at,
+                        channel
+                    FROM (
+                        SELECT
+                            COALESCE(
+                                ae.user_id,
+                                u_tg.id,
+                                u_vk.id
+                            ) AS resolved_user_id,
+                            ae.name,
+                            ae.props,
+                            ae.created_at,
+                            ae.channel
+                        FROM analytics_events ae
+                        LEFT JOIN users u_tg
+                            ON ae.user_id IS NULL
+                           AND ae.telegram_id IS NOT NULL
+                           AND u_tg.telegram_id = ae.telegram_id
+                        LEFT JOIN users u_vk
+                            ON ae.user_id IS NULL
+                           AND ae.vk_id IS NOT NULL
+                           AND u_vk.vk_id = ae.vk_id
+                        WHERE COALESCE(ae.user_id, u_tg.id, u_vk.id) = ANY(%(ids)s)
+                    ) t
+                    WHERE resolved_user_id IS NOT NULL
+                    ORDER BY resolved_user_id, created_at DESC
                     """,
                     {"ids": ids},
                 )
                 return {
-                    int(row["telegram_id"]): dict(row)
+                    int(row["user_id"]): dict(row)
                     for row in cur.fetchall()
-                    if row.get("telegram_id") is not None
+                    if row.get("user_id") is not None
                 }
     except Exception:
         logger.exception("fetch_users_last_events failed")
         return {}
 
 
-def fetch_user_activity_counts(telegram_id: int) -> list[dict]:
-    """Per-event counts for one Telegram user (compact admin summary)."""
-    if not _use_postgres() or not telegram_id:
+def fetch_user_activity_counts(
+    *,
+    user_id: Optional[int] = None,
+    telegram_id: Optional[int] = None,
+    vk_id: Optional[int] = None,
+) -> list[dict]:
+    """Per-event counts for one guest (compact admin summary)."""
+    if not _use_postgres():
+        return []
+    where = None
+    params: dict[str, Any] = {}
+    if user_id is not None:
+        where = "user_id = %(user_id)s"
+        params["user_id"] = int(user_id)
+    elif telegram_id is not None:
+        where = "telegram_id = %(telegram_id)s"
+        params["telegram_id"] = int(telegram_id)
+    elif vk_id is not None:
+        where = "vk_id = %(vk_id)s"
+        params["vk_id"] = int(vk_id)
+    else:
         return []
     try:
         with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT name, COUNT(*)::int AS events
                     FROM analytics_events
-                    WHERE telegram_id = %(telegram_id)s
+                    WHERE {where}
                     GROUP BY name
                     ORDER BY events DESC, name
                     """,
-                    {"telegram_id": telegram_id},
+                    params,
                 )
                 return [dict(row) for row in cur.fetchall()]
     except Exception:
-        logger.exception("fetch_user_activity_counts failed for %s", telegram_id)
+        logger.exception(
+            "fetch_user_activity_counts failed user_id=%s telegram_id=%s vk_id=%s",
+            user_id,
+            telegram_id,
+            vk_id,
+        )
         return []

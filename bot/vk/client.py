@@ -64,16 +64,101 @@ class VKClient:
         response = await self.api("messages.send", **params)
         return int(response)
 
+    async def delete_messages(self, peer_id: int, message_ids: list[int], *, delete_for_all: bool = True) -> None:
+        ids = [int(mid) for mid in message_ids if mid]
+        if not ids:
+            return
+        params: dict[str, Any] = {
+            "message_ids": ",".join(str(mid) for mid in ids),
+            "delete_for_all": 1 if delete_for_all else 0,
+        }
+        if self.settings.group_id:
+            params["group_id"] = self.settings.group_id
+        try:
+            await self.api("messages.delete", **params)
+            return
+        except VKAPIError:
+            logger.warning(
+                "messages.delete by message_ids failed for peer_id=%s ids=%s, trying cmids",
+                peer_id,
+                ids,
+                exc_info=True,
+            )
+        # Fallback: conversation message ids are more reliable in community dialogs.
+        try:
+            history = await self.api("messages.getHistory", peer_id=peer_id, count=30)
+        except VKAPIError:
+            logger.exception("Failed to load VK history for delete peer_id=%s", peer_id)
+            return
+        wanted = set(ids)
+        cmids: list[int] = []
+        for item in history.get("items") or []:
+            if int(item.get("id") or 0) in wanted:
+                cmid = item.get("conversation_message_id")
+                if cmid:
+                    cmids.append(int(cmid))
+        if not cmids:
+            return
+        cmid_params: dict[str, Any] = {
+            "peer_id": peer_id,
+            "cmids": ",".join(str(cid) for cid in cmids),
+            "delete_for_all": 1 if delete_for_all else 0,
+        }
+        if self.settings.group_id:
+            cmid_params["group_id"] = self.settings.group_id
+        try:
+            await self.api("messages.delete", **cmid_params)
+        except VKAPIError:
+            logger.exception("Failed to delete VK cmids %s for peer_id=%s", cmids, peer_id)
+
+    async def collect_recent_nav_message_ids(
+        self,
+        peer_id: int,
+        *,
+        also_ids: list[int] | None = None,
+        limit: int = 8,
+    ) -> list[int]:
+        """Find recent bot/nav messages (and optional button-click ids) to clean the chat."""
+        try:
+            history = await self.api("messages.getHistory", peer_id=peer_id, count=20)
+        except VKAPIError:
+            logger.exception("Failed to load VK history for peer_id=%s", peer_id)
+            return list(also_ids or [])
+        also = {int(mid) for mid in (also_ids or []) if mid}
+        found: list[int] = []
+        for item in history.get("items") or []:
+            mid = int(item.get("id") or 0)
+            if not mid:
+                continue
+            is_out = int(item.get("out") or 0) == 1
+            has_keyboard = bool(item.get("keyboard"))
+            if mid in also or (is_out and has_keyboard):
+                if mid not in found:
+                    found.append(mid)
+            if len(found) >= limit:
+                break
+        for mid in also:
+            if mid not in found:
+                found.append(mid)
+        return found
+
     async def upload_message_photo(self, peer_id: int, image_bytes: bytes, *, filename: str = "photo.jpg") -> str:
         """Upload image bytes and return VK attachment id for messages.send."""
         server = await self.api("photos.getMessagesUploadServer", peer_id=peer_id)
         upload_url = server["upload_url"]
+        lower = filename.lower()
+        if lower.endswith(".png"):
+            content_type = "image/png"
+        elif lower.endswith(".webp"):
+            content_type = "image/webp"
+        else:
+            content_type = "image/jpeg"
         form = aiohttp.FormData()
         form.add_field(
             "photo",
             image_bytes,
             filename=filename,
-            content_type="image/jpeg",
+            content_type=content_type,
         )
         async with aiohttp.ClientSession(connector=_connector()) as session:
             async with session.post(upload_url, data=form) as resp:

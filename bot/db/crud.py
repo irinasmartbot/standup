@@ -44,7 +44,9 @@ SELECT
     b.guests,
     b.created_at::text,
     b.reminder_24h_sent::int,
-    b.reminder_day_sent::int
+    b.reminder_day_sent::int,
+    u.vk_id,
+    b.source
 FROM bookings b
 JOIN users u ON u.id = b.user_id
 JOIN events e ON e.id = b.event_id
@@ -713,7 +715,8 @@ def get_booked_for_reminders(booking_format: str = "proverka"):
     c = conn.cursor()
     c.execute("""
         SELECT id, telegram_id, name, event_date, event_time, event_address, event_location,
-               guests, created_at, reminder_24h_sent, reminder_day_sent
+               guests, created_at, reminder_24h_sent, reminder_day_sent,
+               NULL AS vk_id, 'telegram' AS source
         FROM bookings
         WHERE status='booked'
     """)
@@ -791,21 +794,30 @@ def get_active_raffle_booking(telegram_id):
             return _fetchone_tuple(cur)
 
 
-def get_user_bookings_for_commands(telegram_id, status=None):
+def get_user_bookings_for_commands(telegram_id=None, status=None, *, vk_id=None):
     """Активные бесплатные брони для /my_bookings (proverka + rozygrysh).
 
     status=None — и booked, и confirmed.
     status='booked'|'confirmed' — фильтр (для совместимости со старыми вызовами).
+    Передайте telegram_id или vk_id.
     """
     if not _use_postgres():
         return []
     if status is not None and status not in {"booked", "confirmed"}:
         return []
+    if telegram_id is None and vk_id is None:
+        return []
 
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             status_sql = "AND b.status = %s" if status else "AND b.status IN ('booked', 'confirmed')"
-            params = (telegram_id, status) if status else (telegram_id,)
+            if vk_id is not None:
+                user_sql = "u.vk_id = %s"
+                user_param = int(vk_id)
+            else:
+                user_sql = "u.telegram_id = %s"
+                user_param = telegram_id
+            params = (user_param, status) if status else (user_param,)
             cur.execute(
                 f"""
                 SELECT
@@ -823,7 +835,7 @@ def get_user_bookings_for_commands(telegram_id, status=None):
                 FROM bookings b
                 JOIN users u ON u.id = b.user_id
                 JOIN events e ON e.id = b.event_id
-                WHERE u.telegram_id = %s
+                WHERE {user_sql}
                   AND b.format IN ('proverka', 'rozygrysh')
                   {status_sql}
                   AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date

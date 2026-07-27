@@ -33,6 +33,11 @@ DEFAULT_IMAGE_NAMES = [
     "rozygrysh_otzyv_2.jpg",
 ]
 
+# Extra default uploads with explicit cache keys (filename stem may differ).
+DEFAULT_IMAGE_KEYS = {
+    "show_cover": "фото/IMG_20220511_201818.jpg",
+}
+
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -90,6 +95,7 @@ def collect_images(args) -> list[tuple[str, Path]]:
     else:
         photos_dir = root / args.photos_dir
         items = [(Path(name).stem, photos_dir / name) for name in DEFAULT_IMAGE_NAMES]
+        items.extend((key, Path(path)) for key, path in DEFAULT_IMAGE_KEYS.items())
 
     result = []
     for key, path in items:

@@ -41,7 +41,10 @@ ACTIVITY_SHORT_LABELS = {
     "branch_proverka": "Ветка · Проверка",
     "branch_best": "Ветка · BEST",
     "branch_hitloto": "Ветка · Hit Loto",
+    "browse_dates": "Выбор по дате",
+    "browse_venues": "Выбор по площадке",
     "show_card": "Карточка концерта",
+    "booking_start": "Начал бронь (имя)",
     "cmd_my_bookings": "Команда · /my_bookings",
     "cmd_main_menu": "Команда · /main_menu",
     "cmd_buy_ticket": "Команда · /buy_ticket",
@@ -76,7 +79,10 @@ LAST_PLACE_LABELS = {
     "branch_proverka": "Ветка «Проверка»",
     "branch_best": "Ветка BEST",
     "branch_hitloto": "Ветка Hit Loto",
+    "browse_dates": "Выбор даты",
+    "browse_venues": "Выбор площадки",
     "show_card": "Карточка концерта",
+    "booking_start": "Оформляет бронь",
     "buy_click": "Нажал «Купить»",
     "raffle_enter": "Розыгрыш",
     "raffle_branch": "Розыгрыш · выбор ветки",
@@ -1099,6 +1105,23 @@ def _user_stage_line(user: dict, last_event: dict | None = None) -> str:
     if last_event:
         name = last_event.get("name") or ""
         place = LAST_PLACE_LABELS.get(name) or ACTIVITY_SHORT_LABELS.get(name) or name or "событие"
+        props = last_event.get("props") or {}
+        if isinstance(props, str):
+            props = {}
+        extras = []
+        if props.get("format"):
+            extras.append(str(props["format"]))
+        if props.get("browse") == "venue":
+            extras.append("площадка")
+        elif props.get("browse") == "date":
+            extras.append("дата")
+        if props.get("location"):
+            extras.append(str(props["location"]))
+        if extras:
+            place = f"{place} · {', '.join(extras)}"
+        channel = last_event.get("channel") or ""
+        if channel == "vkontakte":
+            place = f"VK · {place}"
         when = _fmt_msk(last_event.get("created_at"))
         return f"{place} ({when})"
     return _user_stage(user)
@@ -1176,8 +1199,8 @@ def _user_reminders_html(bookings: list[dict]) -> str:
     return "".join(lines) if lines else '<p class="muted">Нет броней для напоминаний.</p>'
 
 
-def _user_activity_html(activity_counts: list[dict]) -> str:
-    if not activity_counts:
+def _user_activity_html(activity_counts: list[dict], recent: list[dict] | None = None) -> str:
+    if not activity_counts and not recent:
         return '<p class="muted">Пока нет событий аналитики по этому гостю.</p>'
 
     order = [
@@ -1190,7 +1213,10 @@ def _user_activity_html(activity_counts: list[dict]) -> str:
         "branch_proverka",
         "branch_best",
         "branch_hitloto",
+        "browse_dates",
+        "browse_venues",
         "show_card",
+        "booking_start",
         "raffle_enter",
         "raffle_branch",
         "raffle_screenshot",
@@ -1237,11 +1263,49 @@ def _user_activity_html(activity_counts: list[dict]) -> str:
             f"<td><b>{n}</b> <span class='muted'>{word}</span></td>"
             "</tr>"
         )
-    return (
-        '<div class="table-wrap"><table class="user-extra user-activity-summary">'
-        "<thead><tr><th>Событие</th><th>Сколько раз</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></div>"
-    )
+    counts_html = ""
+    if rows:
+        counts_html = (
+            '<div class="table-wrap"><table class="user-extra user-activity-summary">'
+            "<thead><tr><th>Событие</th><th>Сколько раз</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table></div>"
+        )
+    recent_html = ""
+    if recent:
+        recent_rows = []
+        for row in recent[:20]:
+            name = row.get("name") or ""
+            label = LAST_PLACE_LABELS.get(name) or short_labels.get(name) or name
+            channel = row.get("channel") or ""
+            channel_note = f" · {channel}" if channel and channel != "telegram" else ""
+            props = row.get("props") or {}
+            if isinstance(props, str):
+                props = {}
+            detail_bits = []
+            if props.get("format"):
+                detail_bits.append(str(props.get("format")))
+            if props.get("browse"):
+                detail_bits.append("по площадке" if props.get("browse") == "venue" else "по дате")
+            if props.get("location"):
+                detail_bits.append(str(props.get("location")))
+            if props.get("date"):
+                detail_bits.append(str(props.get("date")))
+            detail = f" ({', '.join(detail_bits)})" if detail_bits else ""
+            recent_rows.append(
+                "<tr>"
+                f"<td>{_h(_fmt_msk(row.get('created_at')))}</td>"
+                f"<td>{_h(label)}{_h(detail)}<span class='muted'>{_h(channel_note)}</span></td>"
+                "</tr>"
+            )
+        recent_html = (
+            '<p class="muted" style="margin:12px 0 6px">Последние шаги</p>'
+            '<div class="table-wrap"><table class="user-extra user-activity-summary">'
+            "<thead><tr><th>Когда</th><th>Куда зашёл</th></tr></thead>"
+            f"<tbody>{''.join(recent_rows)}</tbody></table></div>"
+        )
+    if not counts_html and not recent_html:
+        return '<p class="muted">Пока нет событий аналитики по этому гостю.</p>'
+    return counts_html + recent_html
 
 
 def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
@@ -1430,7 +1494,7 @@ def _users_tab(
     flash: str = "",
     *,
     can_resend_tickets: bool = True,
-    stage_by_tg: dict | None = None,
+    stage_by_user: dict | None = None,
 ) -> str:
     status = filters.get("status") or ""
     users = sorted(
@@ -1446,14 +1510,14 @@ def _users_tab(
             selected = dashboard["users"][selected_key]
             if all(user["key"] != selected_key for user in list_users):
                 list_users = [selected] + list_users
-    stage_by_tg = stage_by_tg or {}
+    stage_by_user = stage_by_user or {}
     rows = []
     for user in list_users:
-        tid = user.get("telegram_id")
         last_event = None
-        if tid is not None:
+        uid = user.get("user_id")
+        if uid is not None:
             try:
-                last_event = stage_by_tg.get(int(tid))
+                last_event = stage_by_user.get(int(uid))
             except (TypeError, ValueError):
                 last_event = None
         stage_text = _user_stage_line(user, last_event)
@@ -1510,7 +1574,7 @@ def _users_tab(
             f'<p class="user-stage"><b>Где сейчас:</b> {_h(stage_text)}</p>'
             f"{empty_note}"
             '<div class="user-extra-stack">'
-            f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or []), tone="activity")}'
+            f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or [], extras.get("activity_recent") or []), tone="activity")}'
             f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]), tone="reminders")}'
             f'{_user_extra_details("Билеты", _user_tickets_html(user["bookings"], user_key=user["key"], can_resend_tickets=can_resend_tickets), tone="tickets")}'
             f'{_user_extra_details("Скрины розыгрыша", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}), tone="raffle")}'
@@ -2147,7 +2211,7 @@ def _content(
     ticket_holders: list[dict] | None = None,
     *,
     can_resend_tickets: bool = True,
-    user_stage_by_tg: dict | None = None,
+    user_stage_by_user: dict | None = None,
 ) -> str:
     tab = filters.get("tab") or "date"
     if tab == "bookings":
@@ -2159,7 +2223,7 @@ def _content(
             user_extras=user_extras,
             flash=events_flash,
             can_resend_tickets=can_resend_tickets,
-            stage_by_tg=user_stage_by_tg,
+            stage_by_user=user_stage_by_user,
         )
     if tab == "analytics":
         return _analytics_tab(analytics or {}, filters)
@@ -2196,7 +2260,7 @@ def render_admin_html(
     *,
     can_view_ops: bool = True,
     can_resend_tickets: bool = True,
-    user_stage_by_tg: dict | None = None,
+    user_stage_by_user: dict | None = None,
 ) -> str:
     totals = dashboard["totals"]
     tab = filters.get("tab") or "date"
@@ -2650,7 +2714,7 @@ def render_admin_html(
   <main>
     <nav class="tabs">{_tabs(filters, can_view_ops=can_view_ops, can_view_db=can_view_db)}</nav>
     {summary_html}
-    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors, ticket_holders, can_resend_tickets=can_resend_tickets, user_stage_by_tg=user_stage_by_tg)}
+    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors, ticket_holders, can_resend_tickets=can_resend_tickets, user_stage_by_user=user_stage_by_user)}
   </main>
   <script>
     (function () {{
@@ -2989,41 +3053,46 @@ async def admin_page(request: web.Request) -> web.Response:
                 else f"Не удалось переотправить билет{': ' + err[:200] if err else '.'}"
             )
     user_extras = None
-    user_stage_by_tg: dict = {}
+    user_stage_by_user: dict = {}
     if filters.get("tab") == "users":
-        tg_ids = []
+        user_ids = []
         for u in (dashboard.get("users") or {}).values():
-            tid = u.get("telegram_id")
-            if tid:
+            uid = u.get("user_id")
+            if uid:
                 try:
-                    tg_ids.append(int(tid))
+                    user_ids.append(int(uid))
                 except (TypeError, ValueError):
                     pass
 
         def _load_user_stages():
             from bot.db.analytics import fetch_users_last_events
 
-            return fetch_users_last_events(tg_ids)
+            return fetch_users_last_events(user_ids)
 
-        user_stage_by_tg = await loop.run_in_executor(None, _load_user_stages)
+        user_stage_by_user = await loop.run_in_executor(None, _load_user_stages)
 
         if filters.get("u"):
             selected = (dashboard.get("users") or {}).get(filters.get("u") or "")
             if selected:
                 telegram_id = selected.get("telegram_id")
+                vk_id = selected.get("vk_id")
                 user_id = selected.get("user_id")
 
                 def _load_user_extras():
-                    from bot.db.analytics import fetch_user_activity_counts
+                    from bot.db.analytics import fetch_user_activity, fetch_user_activity_counts
                     from bot.db.crud import get_raffle_submissions_for_telegram, get_user_raffle_flags
 
                     tid = int(telegram_id) if telegram_id else None
+                    vid = int(vk_id) if vk_id else None
                     uid = int(user_id) if user_id else None
-                    last_event = None
-                    if tid is not None:
-                        last_event = user_stage_by_tg.get(tid)
+                    last_event = user_stage_by_user.get(uid) if uid is not None else None
                     return {
-                        "activity_counts": fetch_user_activity_counts(tid) if tid else [],
+                        "activity_counts": fetch_user_activity_counts(
+                            user_id=uid, telegram_id=tid, vk_id=vid
+                        ),
+                        "activity_recent": fetch_user_activity(
+                            user_id=uid, telegram_id=tid, vk_id=vid, limit=20
+                        ),
                         "submissions": get_raffle_submissions_for_telegram(tid) if tid else [],
                         "flags": get_user_raffle_flags(telegram_id=tid, user_id=uid),
                         "last_event": last_event,
@@ -3045,7 +3114,7 @@ async def admin_page(request: web.Request) -> web.Response:
             ticket_holders,
             can_view_ops=can_view_ops,
             can_resend_tickets=can_resend,
-            user_stage_by_tg=user_stage_by_tg,
+            user_stage_by_user=user_stage_by_user,
         ),
         content_type="text/html",
     )

@@ -40,8 +40,10 @@ def list_event_ticket_holders(event_id: int) -> list[dict]:
                         b.ticket_message_id,
                         b.confirmed_at,
                         b.format AS booking_format,
+                        b.source AS booking_source,
                         u.id AS user_id,
                         u.telegram_id,
+                        u.vk_id,
                         u.name,
                         u.username,
                         u.phone,
@@ -80,8 +82,10 @@ def get_booking_for_ticket_resend(booking_id: int) -> dict | None:
                         b.ticket_message_id,
                         b.confirmed_at,
                         b.format AS booking_format,
+                        b.source AS booking_source,
                         u.id AS user_id,
                         u.telegram_id,
+                        u.vk_id,
                         u.name,
                         u.username,
                         u.phone,
@@ -114,8 +118,10 @@ def _serialize(row: dict) -> dict:
         "ticket_message_id": row.get("ticket_message_id"),
         "confirmed_at": row.get("confirmed_at"),
         "booking_format": row.get("booking_format") or "",
+        "booking_source": row.get("booking_source") or "",
         "user_id": row.get("user_id"),
         "telegram_id": row.get("telegram_id"),
+        "vk_id": row.get("vk_id"),
         "name": row.get("name") or "",
         "username": row.get("username") or "",
         "phone": row.get("phone") or "",
@@ -161,20 +167,18 @@ def _caption(row: dict, *, updated: bool) -> str:
     )
 
 
-async def resend_ticket_async(booking_id: int, *, updated: bool = True) -> dict:
-    """Send ticket photo to the guest. Returns {ok, error, booking_id}."""
+def _is_vk_booking(row: dict) -> bool:
+    source = (row.get("booking_source") or "").strip().lower()
+    if source in {"vk", "vkontakte"}:
+        return True
+    return bool(row.get("vk_id")) and not row.get("telegram_id")
+
+
+async def _resend_ticket_telegram(row: dict, *, updated: bool) -> dict:
+    booking_id = int(row["booking_id"])
     token = _bot_token()
     if not token:
         return {"ok": False, "error": "BOT_TOKEN не задан", "booking_id": booking_id}
-    row = get_booking_for_ticket_resend(booking_id)
-    if not row:
-        return {"ok": False, "error": "бронь не найдена", "booking_id": booking_id}
-    if row.get("status") != "confirmed":
-        return {
-            "ok": False,
-            "error": f"статус «{row.get('status')}», нужен confirmed",
-            "booking_id": booking_id,
-        }
     telegram_id = row.get("telegram_id")
     if not telegram_id:
         return {"ok": False, "error": "нет telegram_id", "booking_id": booking_id}
@@ -197,11 +201,74 @@ async def resend_ticket_async(booking_id: int, *, updated: bool = True) -> dict:
         )
         save_ticket_message_id(booking_id, msg.message_id)
         return {"ok": True, "error": "", "booking_id": booking_id}
+    finally:
+        await bot.session.close()
+
+
+async def _resend_ticket_vk(row: dict, *, updated: bool) -> dict:
+    booking_id = int(row["booking_id"])
+    vk_id = row.get("vk_id")
+    if not vk_id:
+        return {"ok": False, "error": "нет vk_id", "booking_id": booking_id}
+
+    from bot.db.crud import save_ticket_message_id
+    from bot.vk.client import VKClient
+    from bot.vk.config import load_vk_settings
+    from bot.vk.keyboards import format_vk_text
+
+    settings = load_vk_settings()
+    if not settings.is_configured:
+        return {
+            "ok": False,
+            "error": "VK_GROUP_TOKEN/VK_GROUP_ID не заданы в .env админки",
+            "booking_id": booking_id,
+        }
+
+    place = f"{row.get('location') or ''}, {row.get('address') or ''}".strip(", ")
+    head = (
+        "Обновлённый билет\n\nДанные мероприятия изменились — актуальный билет ниже.\n\n"
+        if updated
+        else "Билет\n\n"
+    )
+    caption = format_vk_text(
+        f"{head}"
+        f"<b>Данные по билету:</b>\n\n"
+        f"<b>Ваше имя:</b> {row.get('name') or ''}\n"
+        f"<b>Дата:</b> {row.get('event_date') or ''}\n"
+        f"<b>Время:</b> {row.get('event_time') or ''}\n"
+        f"<b>Место:</b> {place}\n"
+        f"<b>Количество гостей:</b> {guests_word(int(row.get('guests') or 1))}"
+    )
+    client = VKClient(settings)
+    peer_id = int(vk_id)
+    attachment = await client.upload_message_photo(
+        peer_id,
+        _ticket_bytes(row),
+        filename=f"ticket_{booking_id}.jpg",
+    )
+    msg_id = await client.send_message(peer_id, caption, attachment=attachment)
+    save_ticket_message_id(booking_id, msg_id)
+    return {"ok": True, "error": "", "booking_id": booking_id}
+
+
+async def resend_ticket_async(booking_id: int, *, updated: bool = True) -> dict:
+    """Send ticket photo to the guest (Telegram or VK). Returns {ok, error, booking_id}."""
+    row = get_booking_for_ticket_resend(booking_id)
+    if not row:
+        return {"ok": False, "error": "бронь не найдена", "booking_id": booking_id}
+    if row.get("status") != "confirmed":
+        return {
+            "ok": False,
+            "error": f"статус «{row.get('status')}», нужен confirmed",
+            "booking_id": booking_id,
+        }
+    try:
+        if _is_vk_booking(row):
+            return await _resend_ticket_vk(row, updated=updated)
+        return await _resend_ticket_telegram(row, updated=updated)
     except Exception as exc:
         logger.exception("resend_ticket failed for booking %s", booking_id)
         return {"ok": False, "error": str(exc), "booking_id": booking_id}
-    finally:
-        await bot.session.close()
 
 
 def resend_ticket(booking_id: int, *, updated: bool = True) -> dict:

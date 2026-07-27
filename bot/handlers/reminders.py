@@ -51,6 +51,9 @@ def booking_manage_kb(booking_id, include_ticket=True):
 
 async def send_booking_reminder(row, reminder_type):
     booking_id, telegram_id, name, event_date, event_time, event_address, event_location, guests, *_ = row
+    if not telegram_id:
+        logger.warning("Skip TG reminder for booking %s: no telegram_id", booking_id)
+        return
     date_str = format_date(event_date)
 
     if reminder_type == "day":
@@ -77,6 +80,10 @@ async def send_booking_reminder(row, reminder_type):
 
 async def send_annulled_message(row):
     booking_id, telegram_id, *_ = row
+    if not telegram_id:
+        logger.warning("Annul booking %s without telegram notify (no telegram_id)", booking_id)
+        annul_booking(booking_id)
+        return
     await _clear_prev_buttons(booking_id, telegram_id)
     await delete_my_bookings_messages(bot, telegram_id)
     kb = InlineKeyboardBuilder()
@@ -94,9 +101,21 @@ async def send_annulled_message(row):
     await refresh_user_commands(bot, telegram_id)
 
 
+def _is_telegram_reminder_row(row) -> bool:
+    telegram_id = row[1]
+    source = (row[12] if len(row) > 12 else "") or ""
+    if source == "vkontakte":
+        return False
+    if source == "telegram":
+        return bool(telegram_id)
+    return bool(telegram_id)
+
+
 async def process_due_reminders():
     now = now_msk().replace(tzinfo=None)
     for row in get_booked_for_reminders():
+        if not _is_telegram_reminder_row(row):
+            continue
         booking_id = row[0]
         event_date = row[3]
         event_time = row[4]

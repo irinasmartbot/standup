@@ -6,6 +6,7 @@ from bot.db.analytics import ensure_analytics_tables
 from bot.vk.app import VKBotApp
 from bot.vk.client import VKClient
 from bot.vk.config import load_vk_settings
+from bot.vk.reminders import vk_reminder_loop
 
 
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +27,15 @@ async def main():
 
     ensure_analytics_tables()
     logger.info("VK events source=%s", EVENTS_SOURCE)
-    app = VKBotApp(VKClient(settings), settings)
+    client = VKClient(settings)
+    asyncio.create_task(
+        vk_reminder_loop(
+            client,
+            community_link=settings.community_link,
+            manager_link=settings.manager_link,
+        )
+    )
+    app = VKBotApp(client, settings)
     await app.run()
 
 
