@@ -1022,7 +1022,11 @@ class VKBotApp:
         return prev is not None and (now - prev) < 1.5
 
     async def handle_update(self, update: dict[str, Any]) -> None:
-        if update.get("type") != "message_new":
+        utype = update.get("type")
+        if utype == "message_event":
+            await self._handle_message_event(update)
+            return
+        if utype != "message_new":
             return
         obj = update.get("object") or {}
         message = obj.get("message") if isinstance(obj.get("message"), dict) else obj
@@ -1051,6 +1055,49 @@ class VKBotApp:
             return
         async with self._peer_lock(peer_id):
             await self._dispatch_message(message, int(peer_id))
+
+    async def _handle_message_event(self, update: dict[str, Any]) -> None:
+        """Callback-кнопки: без сообщения «➡️» в чате."""
+        obj = update.get("object") or {}
+        if not isinstance(obj, dict):
+            return
+        dedupe_key = str(update.get("event_id") or obj.get("event_id") or "").strip()
+        if dedupe_key:
+            now = time.monotonic()
+            self._prune_seen(now)
+            if dedupe_key in self._seen_event_ids:
+                return
+            self._seen_event_ids[dedupe_key] = now
+
+        event_id = str(obj.get("event_id") or "").strip()
+        try:
+            peer_id = int(obj.get("peer_id") or 0)
+            user_id = int(obj.get("user_id") or peer_id)
+        except (TypeError, ValueError):
+            return
+        if not peer_id or not event_id:
+            return
+
+        # Always answer quickly so VK stops the loading animation on the button.
+        try:
+            await self.client.send_message_event_answer(event_id, user_id, peer_id)
+        except Exception:
+            logger.exception("sendMessageEventAnswer failed peer_id=%s", peer_id)
+
+        raw_payload = obj.get("payload")
+        if isinstance(raw_payload, dict):
+            payload = raw_payload
+        else:
+            payload = _parse_payload(raw_payload if isinstance(raw_payload, str) else None)
+        message = {
+            "peer_id": peer_id,
+            "from_id": user_id,
+            "text": "",
+            "payload": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            "id": None,
+        }
+        async with self._peer_lock(peer_id):
+            await self._dispatch_message(message, peer_id)
 
     async def _dispatch_message(self, message: dict[str, Any], peer_id: int) -> None:
         vk_id = self._vk_id(message, peer_id)
@@ -1727,6 +1774,7 @@ class VKBotApp:
                 "VK bot requires EVENTS_SOURCE=postgres and DATABASE_URL. "
                 "Google Sheets is not used for VK."
             )
+        await self.client.ensure_long_poll_events()
         logger.info(
             "VK bot long polling started for group_id=%s events_source=%s",
             self.settings.group_id,

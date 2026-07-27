@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import random
 import ssl
@@ -95,6 +96,40 @@ class VKClient:
                 message_id,
             )
             return False
+
+    async def send_message_event_answer(
+        self,
+        event_id: str,
+        user_id: int,
+        peer_id: int,
+        *,
+        event_data: dict[str, Any] | None = None,
+    ) -> None:
+        params: dict[str, Any] = {
+            "event_id": event_id,
+            "user_id": int(user_id),
+            "peer_id": int(peer_id),
+        }
+        if event_data is not None:
+            params["event_data"] = json.dumps(event_data, ensure_ascii=False, separators=(",", ":"))
+        await self.api("messages.sendMessageEventAnswer", **params)
+
+    async def ensure_long_poll_events(self) -> None:
+        """Включает message_new + message_event для Bots Long Poll."""
+        if not self.settings.group_id:
+            return
+        try:
+            await self.api(
+                "groups.setLongPollSettings",
+                group_id=self.settings.group_id,
+                enabled=1,
+                api_version=self.settings.api_version,
+                message_new=1,
+                message_event=1,
+                message_reply=0,
+            )
+        except VKAPIError:
+            logger.exception("Failed to set VK long poll event types")
 
     async def delete_messages(self, peer_id: int, message_ids: list[int], *, delete_for_all: bool = True) -> None:
         ids = [int(mid) for mid in message_ids if mid]

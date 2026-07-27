@@ -18,6 +18,7 @@ class VKButton:
     payload: dict[str, Any] | None = None
     link: str | None = None
     color: ButtonColor = "secondary"
+    callback: bool = False
 
     def as_vk(self) -> dict[str, Any]:
         if self.link:
@@ -32,9 +33,11 @@ class VKButton:
         payload = json.dumps(self.payload or {}, ensure_ascii=False, separators=(",", ":"))
         if len(payload.encode("utf-8")) > VK_MAX_PAYLOAD_BYTES:
             raise ValueError(f"VK button payload is too long: {self.label}")
+        # callback — без сообщения в чат; text — пишет label в диалог.
+        action_type = "callback" if self.callback else "text"
         return {
             "action": {
-                "type": "text",
+                "type": action_type,
                 "label": self.label,
                 "payload": payload,
             },
@@ -61,12 +64,25 @@ class VKKeyboardBuilder:
         *,
         link: str | None = None,
         color: ButtonColor = "secondary",
+        callback: bool | None = None,
     ) -> "VKKeyboardBuilder":
         if self.total_buttons >= VK_MAX_BUTTONS:
             raise ValueError("VK keyboard cannot contain more than 10 buttons")
         if len(self._rows[-1]) >= VK_MAX_BUTTONS_PER_ROW:
             self.row()
-        self._rows[-1].append(VKButton(label=label, payload=payload, link=link, color=color))
+        # Inline payload-кнопки по умолчанию callback — не засоряют чат «➡️».
+        use_callback = bool(self.inline) if callback is None else bool(callback)
+        if link:
+            use_callback = False
+        self._rows[-1].append(
+            VKButton(
+                label=label,
+                payload=payload,
+                link=link,
+                color=color,
+                callback=use_callback,
+            )
+        )
         return self
 
     def row(self) -> "VKKeyboardBuilder":
