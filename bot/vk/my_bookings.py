@@ -112,17 +112,16 @@ def bookings_keyboard(row, *, page: int = 0, total: int = 1) -> str:
 
     nav_count = 0
     if total > 1:
-        # Фиксированный ряд из 3 кнопок — меньше «прыжков» при листании.
+        # Как в TG: на первой — только «Далее», на последней — только «Назад»,
+        # в середине — обе стрелки. Пустых кнопок по краям нет.
         if page > 0:
-            kb.button("⬅️", _payload("mb_page", page=page - 1), color="primary")
-        else:
-            kb.button("·", _payload("mb_noop"))
+            kb.button("⬅️ Назад", _payload("mb_page", page=page - 1))
+            nav_count += 1
         kb.button(f"{page + 1}/{total}", _payload("mb_noop"))
+        nav_count += 1
         if page < total - 1:
-            kb.button("➡️", _payload("mb_page", page=page + 1), color="primary")
-        else:
-            kb.button("·", _payload("mb_noop"))
-        nav_count = 3
+            kb.button("Далее ➡️", _payload("mb_page", page=page + 1))
+            nav_count += 1
 
     kb.button("⬅️ В главное меню", _payload("main_menu"))
     if total > 1:
