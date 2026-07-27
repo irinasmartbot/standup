@@ -766,52 +766,88 @@ def ensure_user(telegram_id=None, username=None, name=None, phone=None, *, vk_id
     return user_id
 
 
-def get_rozygrysh_used(telegram_id) -> bool:
+def get_rozygrysh_used(telegram_id=None, *, vk_id=None) -> bool:
     if not _use_postgres():
+        return False
+    if telegram_id is None and vk_id is None:
         return False
     with _pg_connect() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT COALESCE(rozygrysh_used, false) FROM users WHERE telegram_id = %s",
-                (telegram_id,),
-            )
+            if vk_id is not None:
+                cur.execute(
+                    "SELECT COALESCE(rozygrysh_used, false) FROM users WHERE vk_id = %s",
+                    (int(vk_id),),
+                )
+            else:
+                cur.execute(
+                    "SELECT COALESCE(rozygrysh_used, false) FROM users WHERE telegram_id = %s",
+                    (telegram_id,),
+                )
             row = cur.fetchone()
             return bool(row[0]) if row else False
 
 
-def set_rozygrysh_used(telegram_id, used: bool):
+def set_rozygrysh_used(telegram_id=None, used: bool = True, *, vk_id=None):
     if not _use_postgres():
         return
+    if telegram_id is None and vk_id is None:
+        raise ValueError("telegram_id or vk_id required")
     with _pg_connect() as conn:
         with conn.cursor() as cur:
-            _upsert_user(cur, telegram_id, None, None, None)
-            cur.execute(
-                """
-                UPDATE users
-                SET rozygrysh_used = %s, last_active_at = %s
-                WHERE telegram_id = %s
-                """,
-                (used, datetime.now(), telegram_id),
-            )
+            if vk_id is not None:
+                _upsert_user(cur, None, None, None, None, vk_id=int(vk_id))
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET rozygrysh_used = %s, last_active_at = %s
+                    WHERE vk_id = %s
+                    """,
+                    (used, datetime.now(), int(vk_id)),
+                )
+            else:
+                _upsert_user(cur, telegram_id, None, None, None)
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET rozygrysh_used = %s, last_active_at = %s
+                    WHERE telegram_id = %s
+                    """,
+                    (used, datetime.now(), telegram_id),
+                )
         conn.commit()
 
 
-def get_active_raffle_booking(telegram_id):
+def get_active_raffle_booking(telegram_id=None, *, vk_id=None):
     if not _use_postgres():
+        return None
+    if telegram_id is None and vk_id is None:
         return None
     with _pg_connect() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                BOOKING_SELECT_SQL
-                + """
-                WHERE u.telegram_id = %s
-                  AND b.format = 'rozygrysh'
-                  AND b.status IN ('booked', 'confirmed')
-                ORDER BY e.event_date, e.event_time
-                LIMIT 1
-                """,
-                (telegram_id,),
-            )
+            if vk_id is not None:
+                cur.execute(
+                    BOOKING_SELECT_SQL
+                    + """
+                    WHERE u.vk_id = %s
+                      AND b.format = 'rozygrysh'
+                      AND b.status IN ('booked', 'confirmed')
+                    ORDER BY e.event_date, e.event_time
+                    LIMIT 1
+                    """,
+                    (int(vk_id),),
+                )
+            else:
+                cur.execute(
+                    BOOKING_SELECT_SQL
+                    + """
+                    WHERE u.telegram_id = %s
+                      AND b.format = 'rozygrysh'
+                      AND b.status IN ('booked', 'confirmed')
+                    ORDER BY e.event_date, e.event_time
+                    LIMIT 1
+                    """,
+                    (telegram_id,),
+                )
             return _fetchone_tuple(cur)
 
 
@@ -867,7 +903,7 @@ def get_user_bookings_for_commands(telegram_id=None, status=None, *, vk_id=None)
             return _fetchall_tuples(cur)
 
 
-def reset_raffle_for_user(telegram_id) -> dict:
+def reset_raffle_for_user(telegram_id=None, *, vk_id=None) -> dict:
     """Сброс ветки розыгрыша для теста: флаг, pending, активные брони, nav."""
     result = {
         "rozygrysh_used_cleared": False,
@@ -877,51 +913,95 @@ def reset_raffle_for_user(telegram_id) -> dict:
     }
     if not _use_postgres():
         return result
+    if telegram_id is None and vk_id is None:
+        return result
 
     with _pg_connect() as conn:
         with conn.cursor() as cur:
-            _upsert_user(cur, telegram_id, None, None, None)
-            cur.execute(
-                """
-                UPDATE users
-                SET rozygrysh_used = false, last_active_at = %s
-                WHERE telegram_id = %s
-                """,
-                (datetime.now(), telegram_id),
-            )
-            result["rozygrysh_used_cleared"] = cur.rowcount > 0
+            if vk_id is not None:
+                vk_id = int(vk_id)
+                _upsert_user(cur, None, None, None, None, vk_id=vk_id)
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET rozygrysh_used = false, last_active_at = %s
+                    WHERE vk_id = %s
+                    """,
+                    (datetime.now(), vk_id),
+                )
+                result["rozygrysh_used_cleared"] = cur.rowcount > 0
 
-            cur.execute(
-                """
-                UPDATE bookings b
-                SET status = 'cancelled',
-                    cancelled_at = %s,
-                    updated_at = now()
-                FROM users u
-                WHERE b.user_id = u.id
-                  AND u.telegram_id = %s
-                  AND b.format = 'rozygrysh'
-                  AND b.status IN ('booked', 'confirmed')
-                """,
-                (datetime.now(), telegram_id),
-            )
-            result["bookings_cancelled"] = cur.rowcount or 0
+                cur.execute(
+                    """
+                    UPDATE bookings b
+                    SET status = 'cancelled',
+                        cancelled_at = %s,
+                        updated_at = now()
+                    FROM users u
+                    WHERE b.user_id = u.id
+                      AND u.vk_id = %s
+                      AND b.format = 'rozygrysh'
+                      AND b.status IN ('booked', 'confirmed')
+                    """,
+                    (datetime.now(), vk_id),
+                )
+                result["bookings_cancelled"] = cur.rowcount or 0
 
-            cur.execute(
-                """
-                UPDATE raffle_submissions
-                SET status = 'rejected',
-                    reject_reason = 'test_reset',
-                    reviewed_at = %s
-                WHERE telegram_id = %s
-                  AND status = 'pending'
-                """,
-                (datetime.now(), telegram_id),
-            )
-            result["submissions_cancelled"] = cur.rowcount or 0
+                cur.execute(
+                    """
+                    UPDATE raffle_submissions
+                    SET status = 'rejected',
+                        reject_reason = 'test_reset',
+                        reviewed_at = %s
+                    WHERE vk_id = %s
+                      AND status = 'pending'
+                    """,
+                    (datetime.now(), vk_id),
+                )
+                result["submissions_cancelled"] = cur.rowcount or 0
+            else:
+                _upsert_user(cur, telegram_id, None, None, None)
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET rozygrysh_used = false, last_active_at = %s
+                    WHERE telegram_id = %s
+                    """,
+                    (datetime.now(), telegram_id),
+                )
+                result["rozygrysh_used_cleared"] = cur.rowcount > 0
 
-            cur.execute("DELETE FROM raffle_nav WHERE telegram_id = %s", (telegram_id,))
-            result["nav_cleared"] = cur.rowcount > 0
+                cur.execute(
+                    """
+                    UPDATE bookings b
+                    SET status = 'cancelled',
+                        cancelled_at = %s,
+                        updated_at = now()
+                    FROM users u
+                    WHERE b.user_id = u.id
+                      AND u.telegram_id = %s
+                      AND b.format = 'rozygrysh'
+                      AND b.status IN ('booked', 'confirmed')
+                    """,
+                    (datetime.now(), telegram_id),
+                )
+                result["bookings_cancelled"] = cur.rowcount or 0
+
+                cur.execute(
+                    """
+                    UPDATE raffle_submissions
+                    SET status = 'rejected',
+                        reject_reason = 'test_reset',
+                        reviewed_at = %s
+                    WHERE telegram_id = %s
+                      AND status = 'pending'
+                    """,
+                    (datetime.now(), telegram_id),
+                )
+                result["submissions_cancelled"] = cur.rowcount or 0
+
+                cur.execute("DELETE FROM raffle_nav WHERE telegram_id = %s", (telegram_id,))
+                result["nav_cleared"] = cur.rowcount > 0
         conn.commit()
     return result
 
@@ -1055,7 +1135,8 @@ def ensure_raffle_tables():
                 CREATE TABLE IF NOT EXISTS raffle_submissions (
                     id BIGSERIAL PRIMARY KEY,
                     user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
-                    telegram_id BIGINT NOT NULL,
+                    telegram_id BIGINT,
+                    vk_id BIGINT,
                     username TEXT,
                     full_name TEXT,
                     kind TEXT NOT NULL CHECK (kind IN ('post', 'review')),
@@ -1070,7 +1151,8 @@ def ensure_raffle_tables():
                     moderation_message_id BIGINT,
                     reject_reason TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    reviewed_at TIMESTAMPTZ
+                    reviewed_at TIMESTAMPTZ,
+                    CHECK (telegram_id IS NOT NULL OR vk_id IS NOT NULL)
                 )
                 """
             )
@@ -1080,11 +1162,19 @@ def ensure_raffle_tables():
                 ON raffle_submissions (telegram_id, status)
                 """
             )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_raffle_submissions_vk_status
+                ON raffle_submissions (vk_id, status)
+                """
+            )
             for ddl in (
                 "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS photo_file_unique_id TEXT",
                 "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS source_chat_id BIGINT",
                 "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS source_message_id BIGINT",
                 "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS source_message_at TIMESTAMPTZ",
+                "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS vk_id BIGINT",
+                "ALTER TABLE raffle_submissions ALTER COLUMN telegram_id DROP NOT NULL",
             ):
                 cur.execute(ddl)
             cur.execute(
@@ -1112,31 +1202,46 @@ def ensure_raffle_tables():
         conn.commit()
 
 
-def get_pending_raffle_submission(telegram_id):
+def get_pending_raffle_submission(telegram_id=None, *, vk_id=None):
     if not _use_postgres():
+        return None
+    if telegram_id is None and vk_id is None:
         return None
     with _pg_connect() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, kind, status, photo_file_id, moderation_message_id
-                FROM raffle_submissions
-                WHERE telegram_id = %s AND status = 'pending'
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (telegram_id,),
-            )
+            if vk_id is not None:
+                cur.execute(
+                    """
+                    SELECT id, kind, status, photo_file_id, moderation_message_id
+                    FROM raffle_submissions
+                    WHERE vk_id = %s AND status = 'pending'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (int(vk_id),),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, kind, status, photo_file_id, moderation_message_id
+                    FROM raffle_submissions
+                    WHERE telegram_id = %s AND status = 'pending'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (telegram_id,),
+                )
             return _fetchone_tuple(cur)
 
 
 def create_raffle_submission(
-    telegram_id,
-    username,
-    full_name,
-    kind,
-    photo_file_id,
+    telegram_id=None,
+    username=None,
+    full_name=None,
+    kind=None,
+    photo_file_id=None,
     *,
+    vk_id=None,
     photo_file_unique_id=None,
     source_chat_id=None,
     source_message_id=None,
@@ -1144,20 +1249,30 @@ def create_raffle_submission(
 ):
     if not _use_postgres():
         raise RuntimeError("Raffle submissions require PostgreSQL")
+    if telegram_id is None and vk_id is None:
+        raise ValueError("telegram_id or vk_id required")
+    if not kind or not photo_file_id:
+        raise ValueError("kind and photo_file_id required")
     with _pg_connect() as conn:
         with conn.cursor() as cur:
-            user_id = _upsert_user(cur, telegram_id, username, full_name, None)
+            if vk_id is not None:
+                user_id = _upsert_user(
+                    cur, None, username, full_name, None, vk_id=int(vk_id)
+                )
+            else:
+                user_id = _upsert_user(cur, telegram_id, username, full_name, None)
             cur.execute(
                 """
                 INSERT INTO raffle_submissions
-                    (user_id, telegram_id, username, full_name, kind, status, photo_file_id,
+                    (user_id, telegram_id, vk_id, username, full_name, kind, status, photo_file_id,
                      photo_file_unique_id, source_chat_id, source_message_id, source_message_at)
-                VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
                     user_id,
                     telegram_id,
+                    int(vk_id) if vk_id is not None else None,
                     username,
                     full_name,
                     kind,
@@ -1184,7 +1299,7 @@ def get_raffle_submissions_for_telegram(telegram_id: int, limit: int = 20) -> li
                     id, kind, status, photo_file_id, photo_file_unique_id,
                     source_chat_id, source_message_id, source_message_at,
                     moderation_chat_id, moderation_message_id, reject_reason,
-                    created_at, reviewed_at
+                    created_at, reviewed_at, vk_id, telegram_id
                 FROM raffle_submissions
                 WHERE telegram_id = %s
                 ORDER BY id DESC
@@ -1196,8 +1311,33 @@ def get_raffle_submissions_for_telegram(telegram_id: int, limit: int = 20) -> li
             return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
-def get_user_raffle_flags(telegram_id: int = None, user_id: int = None) -> dict:
-    if not _use_postgres() or (not telegram_id and not user_id):
+def get_raffle_submissions_for_vk(vk_id: int, limit: int = 20) -> list[dict]:
+    if not _use_postgres() or not vk_id:
+        return []
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, kind, status, photo_file_id, photo_file_unique_id,
+                    source_chat_id, source_message_id, source_message_at,
+                    moderation_chat_id, moderation_message_id, reject_reason,
+                    created_at, reviewed_at, vk_id, telegram_id
+                FROM raffle_submissions
+                WHERE vk_id = %s
+                ORDER BY id DESC
+                LIMIT %s
+                """,
+                (int(vk_id), limit),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def get_user_raffle_flags(
+    telegram_id: int = None, user_id: int = None, *, vk_id: int = None
+) -> dict:
+    if not _use_postgres() or (not telegram_id and not user_id and not vk_id):
         return {"rozygrysh_used": False, "is_blocked": False}
     with _pg_connect() as conn:
         with conn.cursor() as cur:
@@ -1209,6 +1349,14 @@ def get_user_raffle_flags(telegram_id: int = None, user_id: int = None) -> dict:
                         FROM users WHERE id = %s
                         """,
                         (user_id,),
+                    )
+                elif vk_id is not None:
+                    cur.execute(
+                        """
+                        SELECT COALESCE(rozygrysh_used, false), COALESCE(is_blocked, false)
+                        FROM users WHERE vk_id = %s
+                        """,
+                        (int(vk_id),),
                     )
                 else:
                     cur.execute(
@@ -1224,6 +1372,11 @@ def get_user_raffle_flags(telegram_id: int = None, user_id: int = None) -> dict:
                     cur.execute(
                         "SELECT COALESCE(rozygrysh_used, false) FROM users WHERE id = %s",
                         (user_id,),
+                    )
+                elif vk_id is not None:
+                    cur.execute(
+                        "SELECT COALESCE(rozygrysh_used, false) FROM users WHERE vk_id = %s",
+                        (int(vk_id),),
                     )
                 else:
                     cur.execute(
@@ -1263,7 +1416,7 @@ def get_raffle_submission(submission_id):
             cur.execute(
                 """
                 SELECT id, telegram_id, username, full_name, kind, status, photo_file_id,
-                       moderation_chat_id, moderation_message_id, reject_reason
+                       moderation_chat_id, moderation_message_id, reject_reason, vk_id
                 FROM raffle_submissions
                 WHERE id = %s
                 """,
@@ -1280,7 +1433,7 @@ def get_raffle_submission_by_mod_message(moderation_chat_id, moderation_message_
             cur.execute(
                 """
                 SELECT id, telegram_id, username, full_name, kind, status, photo_file_id,
-                       moderation_chat_id, moderation_message_id, reject_reason
+                       moderation_chat_id, moderation_message_id, reject_reason, vk_id
                 FROM raffle_submissions
                 WHERE moderation_chat_id = %s
                   AND moderation_message_id = %s

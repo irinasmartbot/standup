@@ -90,25 +90,33 @@ def ticket_bytes(row) -> bytes:
 
 def bookings_keyboard(row, *, page: int = 0, total: int = 1) -> str:
     """Клавиатура карточки — как в Telegram (карусель + билет при confirmed)."""
-    booking_id, _format_name, status, *_ = row
+    booking_id, format_name, status, *_ = row
     kb = VKKeyboardBuilder(inline=True)
     action_count = 0
+    is_raffle = format_name == "rozygrysh"
 
     # «Получить билет» только из напоминания; в карточке — «Билет по брони», если confirmed
     if status == "confirmed":
         kb.button("🎟 Билет по брони", _payload("mb_ticket", page=page), color="primary")
         action_count += 1
         kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
-        kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
-        action_count += 2
+        action_count += 1
+        if not is_raffle:
+            kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
+            action_count += 1
     else:
         kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
-        kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
-        kb.button(
-            "Изменить количество гостей",
-            _payload("mb_change_guests_confirm", booking_id=booking_id),
-        )
-        action_count += 3
+        action_count += 1
+        if not is_raffle:
+            kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
+            kb.button(
+                "Изменить количество гостей",
+                _payload("mb_change_guests_confirm", booking_id=booking_id),
+            )
+            action_count += 2
+        else:
+            # Розыгрыш: 1 гость, дату после брони не меняем (как в TG).
+            pass
 
     nav_count = 0
     if total > 1:

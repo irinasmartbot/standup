@@ -708,7 +708,16 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
     await message.answer("Можешь отправить скрин ещё раз 👇", reply_markup=kb.as_markup())
 
 
-async def _send_to_moderation(submission_id, telegram_id, username, full_name, kind, file_id) -> bool:
+async def _send_to_moderation(
+    submission_id,
+    telegram_id,
+    username,
+    full_name,
+    kind,
+    photo,
+    *,
+    vk_id=None,
+) -> bool:
     chat_id = _mod_chat_id()
     if not chat_id:
         logger.error("MODERATION_CHAT_ID is not set or invalid")
@@ -717,9 +726,12 @@ async def _send_to_moderation(submission_id, telegram_id, username, full_name, k
         logger.error("Refusing moderation post with invalid kind=%s", kind)
         return False
     kind_label = "отзыва" if kind == "review" else "поста"
-    uname = f"@{username}" if username else f"id {telegram_id}"
+    if vk_id is not None:
+        uname = f"vk_id:{vk_id}"
+    else:
+        uname = f"@{username}" if username else f"id {telegram_id}"
     caption = (
-        f"{escape(full_name)} {escape(uname)} прислал СКРИН {kind_label}\n"
+        f"{escape(full_name or 'Гость')} {escape(uname)} прислал СКРИН {kind_label}\n"
         f"Заявка #{submission_id}"
     )
     kb = InlineKeyboardBuilder()
@@ -738,7 +750,7 @@ async def _send_to_moderation(submission_id, telegram_id, username, full_name, k
         # Только наша карточка модерации — без forward произвольных сообщений клиента
         sent = await bot.send_photo(
             chat_id=chat_id,
-            photo=file_id,
+            photo=photo,
             caption=caption,
             reply_markup=kb.as_markup(),
             parse_mode="HTML",
@@ -753,8 +765,33 @@ async def _send_to_moderation(submission_id, telegram_id, username, full_name, k
 # ─── модерация ────────────────────────────────────────────────────────────────
 
 
+def _submission_vk_id(row) -> int | None:
+    if not row or len(row) < 11:
+        return None
+    value = row[10]
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _submission_telegram_id(row) -> int | None:
+    if not row or row[1] is None:
+        return None
+    try:
+        return int(row[1])
+    except (TypeError, ValueError):
+        return None
+
+
 def _client_label(row) -> str:
-    uname = f"@{row[2]}" if row[2] else f"tg_id:{row[1]}"
+    vk_id = _submission_vk_id(row)
+    if vk_id is not None and not row[1]:
+        uname = f"vk_id:{vk_id}"
+    else:
+        uname = f"@{row[2]}" if row[2] else f"tg_id:{row[1]}"
     name = (row[3] or "").strip()
     return f"{name} {uname}".strip()
 
@@ -828,13 +865,23 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
     )
 
     # только клиент из этой заявки
-    telegram_id = int(row[1])
+    telegram_id = _submission_telegram_id(row)
+    vk_id = _submission_vk_id(row)
     track_event(
         EVENT_RAFFLE_APPROVED,
         telegram_id=telegram_id,
+        vk_id=vk_id,
+        channel="vkontakte" if vk_id and not telegram_id else "telegram",
         props={"kind": row[4], "submission_id": submission_id},
     )
     await call.answer()
+    if vk_id and not telegram_id:
+        from bot.vk import raffle as vk_raffle
+
+        await vk_raffle.send_vk_text(vk_id, vk_raffle.SCREEN_ACCEPTED_TEXT)
+        await asyncio.sleep(2)
+        await vk_raffle.continue_after_subscribe_check(vk_id)
+        return
     await bot.send_message(
         telegram_id,
         "Класс, скрин принят. Теперь проверим подписку на канал 👌",
@@ -853,10 +900,14 @@ async def _after_screen_accepted(telegram_id: int):
 async def _reject_submission(row, reason: str | None, card_ref, cleanup_chat_id=None, *cleanup_ids):
     """Отклоняет заявку, обновляет карточку, пишет клиенту, чистит служебные сообщения."""
     submission_id = int(row[0])
+    telegram_id = _submission_telegram_id(row)
+    vk_id = _submission_vk_id(row)
     update_raffle_submission_status(submission_id, "rejected", reject_reason=reason or None)
     track_event(
         EVENT_RAFFLE_REJECTED,
-        telegram_id=int(row[1]),
+        telegram_id=telegram_id,
+        vk_id=vk_id,
+        channel="vkontakte" if vk_id and not telegram_id else "telegram",
         props={"kind": row[4], "submission_id": submission_id, "reason": reason or None},
     )
     now = now_msk().strftime("%d.%m.%Y в %H:%M")
@@ -868,7 +919,24 @@ async def _reject_submission(row, reason: str | None, card_ref, cleanup_chat_id=
         await _delete_mod_chat_messages(cleanup_chat_id, *cleanup_ids)
 
     kind = row[4]
-    telegram_id = int(row[1])
+    if vk_id and not telegram_id:
+        from bot.vk import raffle as vk_raffle
+
+        if kind == "review":
+            text = "К сожалению скрин не прошел модерацию. 😔\nОтправь скрин отзыва еще раз 👇"
+            if reason:
+                text += f"\n\nКомментарий менеджера: {reason}"
+        else:
+            text = vk_raffle.POST_REJECT_TEXT
+            if reason:
+                text += f"\n\nКомментарий менеджера: {reason}"
+        await vk_raffle.send_vk_text(
+            vk_id,
+            text,
+            keyboard=vk_raffle.retry_screenshot_keyboard(kind),
+        )
+        return
+
     if kind == "review":
         text = "К сожалению скрин не прошел модерацию. 😔\nОтправь скрин отзыва еще раз 👇"
         if reason:

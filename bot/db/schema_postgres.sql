@@ -88,7 +88,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_booking_per_user_event
 CREATE TABLE IF NOT EXISTS raffle_submissions (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
-    telegram_id BIGINT NOT NULL,
+    telegram_id BIGINT,
+    vk_id BIGINT,
     username TEXT,
     full_name TEXT,
     kind TEXT NOT NULL CHECK (kind IN ('post', 'review')),
@@ -103,11 +104,15 @@ CREATE TABLE IF NOT EXISTS raffle_submissions (
     moderation_message_id BIGINT,
     reject_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    reviewed_at TIMESTAMPTZ
+    reviewed_at TIMESTAMPTZ,
+    CHECK (telegram_id IS NOT NULL OR vk_id IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS idx_raffle_submissions_user_status
     ON raffle_submissions (telegram_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_raffle_submissions_vk_status
+    ON raffle_submissions (vk_id, status);
 
 
 CREATE TABLE IF NOT EXISTS raffle_nav (

@@ -255,6 +255,30 @@ class VKClient:
             attachment = f"{attachment}_{photo['access_key']}"
         return attachment
 
+    async def get_user_display_name(self, user_id: int) -> str:
+        response = await self.api("users.get", user_ids=int(user_id))
+        if not response:
+            return ""
+        user = response[0] if isinstance(response, list) else response
+        parts = [user.get("first_name") or "", user.get("last_name") or ""]
+        return " ".join(p for p in parts if p).strip()
+
+    async def is_group_member(self, user_id: int) -> bool:
+        """True if user is a member of VK_GROUP_ID (groups.isMember)."""
+        if not self.settings.group_id:
+            raise VKAPIError("VK_GROUP_ID is not set")
+        response = await self.api(
+            "groups.isMember",
+            group_id=self.settings.group_id,
+            user_id=int(user_id),
+        )
+        if isinstance(response, dict):
+            return bool(int(response.get("member") or 0))
+        try:
+            return bool(int(response))
+        except (TypeError, ValueError):
+            return bool(response)
+
     async def get_long_poll_server(self) -> dict[str, Any]:
         if not self.settings.group_id:
             raise VKAPIError("VK_GROUP_ID is not set")

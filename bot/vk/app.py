@@ -20,6 +20,9 @@ from bot.db.analytics import (
     EVENT_CMD_MAIN_MENU,
     EVENT_CMD_MY_BOOKINGS,
     EVENT_HELP_QUESTION,
+    EVENT_RAFFLE_BRANCH,
+    EVENT_RAFFLE_ENTER,
+    EVENT_RAFFLE_SCREENSHOT,
     EVENT_SHOW_CARD,
     track_event,
 )
@@ -47,6 +50,7 @@ from bot.utils.phone import normalize_phone
 from bot.utils.ticket import MONTHS, format_date, now_msk
 from bot.vk import booking as vk_booking
 from bot.vk import my_bookings as vk_mb
+from bot.vk import raffle as vk_raffle
 from bot.vk.client import VKClient
 from bot.vk.config import VKSettings
 from bot.vk.formatting import format_vk_text
@@ -111,6 +115,7 @@ def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) 
     kb = VKKeyboardBuilder(inline=True)
     kb.button("Забронировать места", _payload("book"), color="primary")
     kb.button("Купить билет", _payload("buy_ticket"), color="primary")
+    kb.button("Розыгрыш", _payload("raffle"), color="primary")
     if show_my_bookings:
         kb.button("Мои брони", _payload("my_bookings"))
     kb.button("Наши форматы ШОУ", _payload("formats"))
@@ -118,12 +123,13 @@ def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) 
     kb.button("Правила посещения шоу", _payload("rules"))
     kb.button("Задать вопрос менеджеру", link=settings.manager_link)
     kb.button("Канал анонсов", link=settings.community_link)
-    # Как на скрине TG/VK: площадки|правила и менеджер|канал в рядах по 2.
     # VK: max 6 rows / 10 buttons
     if show_my_bookings:
-        kb.adjust(1, 1, 1, 1, 2, 2)
+        # book|buy, raffle, my_bookings, formats, venues|rules, manager|channel
+        kb.adjust(2, 1, 1, 1, 2, 2)
     else:
-        kb.adjust(1, 1, 1, 2, 2)
+        # book, buy, raffle, formats, venues|rules, manager|channel
+        kb.adjust(1, 1, 1, 1, 2, 2)
     return kb.as_json()
 
 
@@ -345,6 +351,8 @@ class VKBotApp:
         self.peer_browse: dict[int, str] = {}
         self.booking_sessions: dict[int, dict] = {}
         self.manage_sessions: dict[int, dict] = {}
+        # Розыгрыш: kind / awaiting screenshot (до шага модерации).
+        self.raffle_sessions: dict[int, dict[str, Any]] = {}
         self._ticket_in_progress: set[int] = set()
         self.peer_nav_message_ids: dict[int, list[int]] = {}
         self._pending_delete_ids: dict[int, list[int]] = {}
@@ -616,6 +624,7 @@ class VKBotApp:
         self._ensure_user(user_id)
         vk_booking.clear_session(self.booking_sessions, user_id)
         vk_mb.clear_manage_session(self.manage_sessions, user_id)
+        self.raffle_sessions.pop(int(user_id), None)
         self.peer_carousel_message_ids.pop(int(peer_id), None)
         self.peer_my_bookings_message_ids.pop(int(peer_id), None)
         self.peer_dates_message_ids.pop(int(peer_id), None)
@@ -967,6 +976,14 @@ class VKBotApp:
                 return True
             await vk_mb.delete_ticket_message(self.client, peer_id, booking_id)
             update_booking_status(booking_id, "cancelled")
+            try:
+                from bot.db.crud import get_active_raffle_booking, set_rozygrysh_used
+
+                # Если отменили розыгрыш — снова можно участвовать.
+                if not get_active_raffle_booking(vk_id=vk_id):
+                    set_rozygrysh_used(vk_id=vk_id, used=False)
+            except Exception:
+                logger.exception("Failed to clear raffle flag after cancel vk_id=%s", vk_id)
             vk_mb.clear_manage_session(self.manage_sessions, vk_id)
             await self._send_text(
                 peer_id,
@@ -1139,7 +1156,10 @@ class VKBotApp:
                 session["step"] = vk_booking.STEP_PHONE
                 return True
             session["phone"] = phone
-            await self._ask_guests(peer_id, session)
+            if session.get("guests_fixed") == 1 or session.get("booking_format") == "rozygrysh":
+                await self._finish_booking(peer_id, vk_id, session, 1)
+            else:
+                await self._ask_guests(peer_id, session)
             return True
         if cmd == "booking_phone_change":
             session["phone"] = ""
@@ -1175,7 +1195,10 @@ class VKBotApp:
                 )
                 return True
             session["phone"] = phone
-            await self._ask_guests(peer_id, session)
+            if session.get("guests_fixed") == 1 or session.get("booking_format") == "rozygrysh":
+                await self._finish_booking(peer_id, vk_id, session, 1)
+            else:
+                await self._ask_guests(peer_id, session)
             return True
         if step == vk_booking.STEP_GUESTS and text:
             if not text.isdigit():
@@ -1400,6 +1423,7 @@ class VKBotApp:
                 "в главное меню": "main_menu",
                 "⬅️ в главное меню": "main_menu",
                 "мои брони": "my_bookings",
+                "розыгрыш": "raffle",
             }
             cmd = text_commands.get(text_key)
             if not cmd and text_key in {"📅 выбрать по дате", "выбрать по дате"}:
@@ -1423,6 +1447,11 @@ class VKBotApp:
             cmd=cmd,
             payload=payload,
         ):
+            return
+
+        session = self.raffle_sessions.get(int(vk_id)) or {}
+        if session.get("screen_requested") and not cmd:
+            await self._handle_raffle_screenshot(peer_id, vk_id, message)
             return
 
         if text.lower() in {"/start", "start", "начать"} or cmd == "main_menu":
@@ -1613,12 +1642,434 @@ class VKBotApp:
             await self._send_hitloto_event(peer_id, payload.get("event_id"), vk_id=vk_id)
             return
 
+        if await self._handle_raffle_flow(peer_id, vk_id, cmd=cmd, payload=payload):
+            return
+
         # Как в TG unknown_message:
         # — абракадабра / короткий спам → молчим
         # — осмысленный текст → в техподдержку + «Спасибо!»
         if text and not cmd:
             await self._handle_unknown_free_text(peer_id, vk_id, text)
             return
+
+    async def _handle_raffle_flow(
+        self,
+        peer_id: int,
+        vk_id: int,
+        *,
+        cmd: str | None,
+        payload: dict[str, Any] | None = None,
+    ) -> bool:
+        payload = payload or {}
+        if cmd not in {
+            "raffle",
+            "rz_post",
+            "rz_review",
+            "rz_post_cross",
+            "rz_post_screen",
+            "rz_review_send",
+            "rz_sub_check",
+            "rz_dates",
+            "rz_dates_page",
+            "rz_date",
+            "rz_event",
+            "rz_book",
+            "rz_rules",
+        }:
+            return False
+
+        self._ensure_user(vk_id)
+
+        if cmd == "raffle":
+            await self._send_raffle_start(peer_id, vk_id)
+            return True
+
+        if cmd == "rz_sub_check":
+            attempts = int(payload.get("attempts") or 0)
+            await vk_raffle.continue_after_subscribe_check(
+                vk_id,
+                manual_attempts=attempts + 1,
+            )
+            return True
+
+        if cmd == "rz_rules":
+            await self._send_text(peer_id, vk_raffle.RAFFLE_RULES_TEXT)
+            return True
+
+        if cmd in {"rz_dates", "rz_dates_page"}:
+            if not await vk_raffle.is_community_member(vk_id):
+                await vk_raffle.continue_after_subscribe_check(vk_id)
+                return True
+            page = int(payload.get("page") or 0)
+            await self._send_raffle_dates(peer_id, vk_id, page=page, edit=cmd == "rz_dates_page")
+            return True
+
+        if cmd == "rz_date":
+            if not vk_raffle.guard_raffle_action(vk_id):
+                await self._send_text(peer_id, vk_raffle.USED_RAFFLE_TEXT)
+                return True
+            if vk_raffle.get_active_raffle_booking_safe(vk_id):
+                await self._send_text(
+                    peer_id,
+                    vk_raffle.ACTIVE_BOOKING_TEXT,
+                    keyboard=vk_raffle.blocked_keyboard(
+                        (vk_raffle.get_active_raffle_booking_safe(vk_id) or [None])[0]
+                    ),
+                )
+                return True
+            await self._send_raffle_date(peer_id, vk_id, payload.get("date") or "")
+            return True
+
+        if cmd == "rz_event":
+            await self._send_raffle_event(peer_id, vk_id, payload.get("event_id"))
+            return True
+
+        if cmd == "rz_book":
+            await self._start_raffle_booking(peer_id, vk_id, payload.get("event_id"))
+            return True
+
+        if not vk_raffle.guard_raffle_action(vk_id):
+            await self._send_text(
+                peer_id,
+                vk_raffle.USED_RAFFLE_TEXT,
+                keyboard=vk_raffle.blocked_keyboard(),
+            )
+            return True
+
+        ok, reason, booking_id = vk_raffle.can_enter_raffle(vk_id)
+        if not ok and cmd in {"rz_post", "rz_review"}:
+            await self._send_text(
+                peer_id,
+                reason,
+                keyboard=vk_raffle.blocked_keyboard(booking_id),
+            )
+            return True
+
+        if cmd == "rz_post":
+            self.raffle_sessions[vk_id] = {"kind": "post", "screen_requested": False}
+            self._track(vk_id, EVENT_RAFFLE_BRANCH, props={"kind": "post"})
+            await self._send_text(
+                peer_id,
+                vk_raffle.POST_TEXT,
+                keyboard=vk_raffle.post_keyboard(),
+                attachment=self._random_cover_attachment(),
+            )
+            return True
+
+        if cmd == "rz_review":
+            self.raffle_sessions[vk_id] = {"kind": "review", "screen_requested": False}
+            self._track(vk_id, EVENT_RAFFLE_BRANCH, props={"kind": "review"})
+            await self._send_raffle_review(peer_id)
+            return True
+
+        if cmd == "rz_post_cross":
+            self._arm_raffle_screenshot(vk_id, "post")
+            await self._send_text(
+                peer_id,
+                "Спасибо, но ждём скрин поста (одним фото) 😉 Кидай ниже 👇",
+            )
+            return True
+
+        if cmd == "rz_post_screen":
+            self._arm_raffle_screenshot(vk_id, "post")
+            await self._send_text(peer_id, "Супер, кидай сюда скрин (одним фото) 👇")
+            return True
+
+        if cmd == "rz_review_send":
+            self._arm_raffle_screenshot(vk_id, "review")
+            await self._send_text(peer_id, "Супер, кидай сюда скрин (одним фото) 👇")
+            return True
+
+        return False
+
+    def _arm_raffle_screenshot(self, vk_id: int, kind: str) -> None:
+        self.raffle_sessions[int(vk_id)] = {
+            "kind": kind,
+            "screen_requested": True,
+        }
+
+    async def _send_raffle_dates(
+        self,
+        peer_id: int,
+        vk_id: int,
+        *,
+        page: int = 0,
+        edit: bool = False,
+    ) -> None:
+        events = await vk_raffle.future_best_events()
+        dates = sorted(
+            {e["date"] for e in events},
+            key=lambda d: datetime.strptime(d, "%d.%m.%Y"),
+        )
+        if not dates:
+            await self._send_text(
+                peer_id,
+                "Пока нет доступных дат для бесплатного билета 😔 Загляни позже!",
+                keyboard=self._main_menu_kb(vk_id),
+            )
+            return
+        text = "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉"
+        keyboard = vk_raffle.dates_keyboard(dates, page=page)
+        attachment = self._random_cover_attachment()
+        peer = int(peer_id)
+        existing = self.peer_dates_message_ids.get(peer)
+        if edit and existing:
+            ok = await self._edit_card(
+                peer_id,
+                text,
+                stored_message_id=existing,
+                keyboard=keyboard,
+                attachment=None,
+            )
+            if ok:
+                return
+        mid = await self._send_text(
+            peer_id,
+            text,
+            keyboard=keyboard,
+            attachment=attachment,
+        )
+        if mid:
+            self.peer_dates_message_ids[peer] = int(mid)
+
+    async def _send_raffle_date(self, peer_id: int, vk_id: int, date: str) -> None:
+        events = [e for e in await vk_raffle.future_best_events() if e.get("date") == date]
+        if not events:
+            await self._send_text(peer_id, "Эта дата уже недоступна. Выбери другую 👇")
+            await self._send_raffle_dates(peer_id, vk_id, edit=False)
+            return
+        self.peer_dates_message_ids.pop(int(peer_id), None)
+        if len(events) == 1:
+            await self._send_raffle_event(peer_id, vk_id, events[0]["id"])
+            return
+        await self._send_text(
+            peer_id,
+            f"Шоу на {format_date(date)} 👇",
+            keyboard=vk_raffle.events_keyboard(events, date),
+        )
+
+    async def _send_raffle_event(self, peer_id: int, vk_id: int, event_id: Any) -> None:
+        try:
+            eid = int(event_id)
+        except (TypeError, ValueError):
+            await self._send_text(peer_id, "Мероприятие недоступно.")
+            return
+        event = next(
+            (e for e in await vk_raffle.future_best_events() if int(e.get("id") or 0) == eid),
+            None,
+        )
+        if not event:
+            await self._send_text(peer_id, "Мероприятие недоступно.")
+            return
+        attachment = await self._event_poster_attachment(peer_id, event)
+        await self._send_text(
+            peer_id,
+            vk_raffle.event_card_text(event),
+            keyboard=vk_raffle.event_card_keyboard(eid),
+            attachment=attachment,
+        )
+
+    async def _start_raffle_booking(self, peer_id: int, vk_id: int, event_id: Any) -> None:
+        ok, reason, booking_id = vk_raffle.can_enter_raffle(vk_id)
+        if not ok:
+            await self._send_text(
+                peer_id,
+                reason,
+                keyboard=vk_raffle.blocked_keyboard(booking_id),
+            )
+            return
+        try:
+            eid = int(event_id)
+        except (TypeError, ValueError):
+            await self._send_text(peer_id, "Мероприятие недоступно.")
+            return
+        event = next(
+            (e for e in await vk_raffle.future_best_events() if int(e.get("id") or 0) == eid),
+            None,
+        )
+        if not event:
+            await self._send_text(peer_id, "Мероприятие недоступно.")
+            return
+
+        warn = same_day_booking_warning(
+            event_date=event.get("date") or "",
+            vk_id=vk_id,
+        )
+        if warn:
+            await self._send_text(peer_id, format_vk_text(warn))
+
+        session = vk_booking.start_session(self.booking_sessions, vk_id, event)
+        session["booking_format"] = "rozygrysh"
+        session["event_format"] = "best"
+        session["guests_fixed"] = 1
+        self._track(vk_id, EVENT_BOOKING_START, props={"format": "rozygrysh"})
+        await self._ask_name_or_phone_raffle(peer_id, vk_id, session)
+
+    async def _ask_name_or_phone_raffle(self, peer_id: int, vk_id: int, session: dict) -> None:
+        # Имя из VK профиля, дальше телефон как в проверке.
+        try:
+            name = await self.client.get_user_display_name(vk_id)
+        except Exception:
+            name = ""
+        if name:
+            session["name"] = name
+            await self._ask_phone(peer_id, vk_id, session)
+            return
+        session["step"] = vk_booking.STEP_NAME
+        await self._send_text(peer_id, "Как вас зовут? Напишите имя 👇")
+
+    async def _send_raffle_start(self, peer_id: int, vk_id: int) -> None:
+        self._track(vk_id, EVENT_RAFFLE_ENTER)
+        ok, reason, booking_id = vk_raffle.can_enter_raffle(vk_id)
+        if not ok:
+            await self._send_text(
+                peer_id,
+                reason,
+                keyboard=vk_raffle.blocked_keyboard(booking_id),
+            )
+            return
+        self.raffle_sessions.pop(int(vk_id), None)
+        await self._send_text(
+            peer_id,
+            vk_raffle.start_text(self.settings.community_link),
+            keyboard=vk_raffle.start_keyboard(),
+            attachment=self._random_cover_attachment(),
+        )
+
+    async def _send_raffle_review(self, peer_id: int) -> None:
+        attachments: list[str] = []
+        for key in ("rozygrysh_otzyv_1", "rozygrysh_otzyv_2"):
+            att = self._cover_attachment(key)
+            if att:
+                attachments.append(att)
+        if attachments:
+            await self._send_text(
+                peer_id,
+                vk_raffle.REVIEW_TEXT,
+                keyboard=vk_raffle.review_keyboard(),
+                attachment=",".join(attachments),
+            )
+            return
+        await self._send_text(
+            peer_id,
+            vk_raffle.REVIEW_TEXT,
+            keyboard=vk_raffle.review_keyboard(),
+        )
+
+    async def _handle_raffle_screenshot(
+        self,
+        peer_id: int,
+        vk_id: int,
+        message: dict[str, Any],
+    ) -> None:
+        from aiogram.types import BufferedInputFile
+
+        from bot.db.crud import (
+            cancel_raffle_submission,
+            create_raffle_submission,
+            ensure_raffle_tables,
+            get_pending_raffle_submission,
+        )
+        from bot.handlers.rozygrysh import _send_to_moderation
+
+        session = self.raffle_sessions.get(int(vk_id)) or {}
+        kind = session.get("kind")
+        if kind not in {"post", "review"}:
+            self.raffle_sessions.pop(int(vk_id), None)
+            return
+
+        url, ref = vk_raffle.extract_photo_from_message(message)
+        if ref == "album":
+            text = (
+                vk_raffle.ALBUM_TEXT_REVIEW
+                if kind == "review"
+                else vk_raffle.ALBUM_TEXT_POST
+            )
+            await self._send_text(peer_id, text)
+            return
+        if not url:
+            # Нет фото — если есть осмысленный текст, пусть уйдёт в help; иначе подсказка.
+            text = (message.get("text") or "").strip()
+            if text and is_meaningful_free_text(text):
+                await self._handle_unknown_free_text(peer_id, vk_id, text)
+            else:
+                await self._send_text(peer_id, vk_raffle.NOT_IMAGE_TEXT)
+            return
+
+        ensure_raffle_tables()
+        pending = get_pending_raffle_submission(vk_id=vk_id)
+        if pending:
+            if not pending[4]:
+                cancel_raffle_submission(pending[0], reason="stale_undelivered")
+            else:
+                self.raffle_sessions.pop(int(vk_id), None)
+                await self._send_text(peer_id, vk_raffle.PENDING_SCREEN_TEXT)
+                return
+
+        # Сразу снимаем ожидание — повтор/гонка не отправят второй скрин.
+        self.raffle_sessions.pop(int(vk_id), None)
+
+        try:
+            image_bytes = await vk_raffle.download_screenshot_bytes(url)
+        except Exception:
+            logger.exception("Failed to download VK raffle screenshot vk_id=%s", vk_id)
+            self._arm_raffle_screenshot(vk_id, kind)
+            await self._send_text(
+                peer_id,
+                "Не удалось скачать скрин. Пришли фото ещё раз 👇",
+                keyboard=vk_raffle.retry_screenshot_keyboard(kind),
+            )
+            return
+
+        photo_ref = ref or f"vk_bytes:{vk_id}"
+        try:
+            submission_id = create_raffle_submission(
+                None,
+                None,
+                "Гость",
+                kind,
+                photo_ref,
+                vk_id=vk_id,
+                source_chat_id=peer_id,
+                source_message_id=message.get("id"),
+            )
+        except Exception:
+            logger.exception("Failed to create VK raffle submission vk_id=%s", vk_id)
+            self._arm_raffle_screenshot(vk_id, kind)
+            await self._send_text(
+                peer_id,
+                "Не удалось отправить скрин на проверку. Попробуй позже или напиши менеджеру.",
+                keyboard=vk_raffle.retry_screenshot_keyboard(kind),
+            )
+            return
+
+        self._track(
+            vk_id,
+            EVENT_RAFFLE_SCREENSHOT,
+            props={"kind": kind, "submission_id": submission_id},
+        )
+
+        photo = BufferedInputFile(image_bytes, filename=f"raffle_{submission_id}.jpg")
+        sent_ok = await _send_to_moderation(
+            submission_id,
+            None,
+            None,
+            "Гость",
+            kind,
+            photo,
+            vk_id=vk_id,
+        )
+        if sent_ok:
+            await self._send_text(peer_id, vk_raffle.SCREEN_OK_TEXT)
+            return
+
+        cancel_raffle_submission(submission_id, reason="moderation_send_failed")
+        self._arm_raffle_screenshot(vk_id, kind)
+        await self._send_text(
+            peer_id,
+            "Не удалось отправить скрин менеджеру 😔\nПопробуй ещё раз через кнопку ниже.",
+            keyboard=vk_raffle.retry_screenshot_keyboard(kind),
+        )
 
     async def _handle_unknown_free_text(self, peer_id: int, vk_id: int, text: str) -> None:
         if not is_meaningful_free_text(text):

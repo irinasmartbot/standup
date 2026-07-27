@@ -86,7 +86,14 @@ def manage_ticket_keyboard(booking_id: int, settings_manager_link: str) -> str:
 
 
 async def find_event(event_id: Any) -> dict[str, Any] | None:
-    return next((e for e in await load_events("proverka") if str(e["id"]) == str(event_id)), None)
+    for fmt in ("proverka", "best"):
+        found = next(
+            (e for e in await load_events(fmt) if str(e["id"]) == str(event_id)),
+            None,
+        )
+        if found:
+            return found
+    return None
 
 
 def start_session(sessions: dict[int, dict], vk_id: int, event: dict[str, Any]) -> dict:
@@ -144,8 +151,8 @@ async def complete_booking(
         session.get("event_address") or "",
         session.get("event_location") or "",
         guests,
-        booking_format="proverka",
-        event_format="proverka",
+        booking_format=session.get("booking_format") or "proverka",
+        event_format=session.get("event_format") or "proverka",
         event_id=session.get("event_id"),
         vk_id=vk_id,
         source="vkontakte",
@@ -218,6 +225,12 @@ async def issue_ticket(
         (e for e in events if e.get("date") == event_date and e.get("time") == event_time),
         None,
     )
+    if not event:
+        events = await load_events("best")
+        event = next(
+            (e for e in events if e.get("date") == event_date and e.get("time") == event_time),
+            None,
+        )
     if event:
         confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
         if confirmed_guests + guests > event["max_seats"]:
@@ -237,6 +250,13 @@ async def issue_ticket(
     place = f"{event_location}, {event_address}".strip(", ") if event_location else event_address
     ticket_buf = generate_ticket(name or "", event_date, event_time, short_address, guests)
     update_booking_status(booking_id, "confirmed")
+    try:
+        from bot.db.crud import get_active_raffle_booking, set_rozygrysh_used
+
+        if get_active_raffle_booking(vk_id=int(peer_id)):
+            set_rozygrysh_used(vk_id=int(peer_id), used=True)
+    except Exception:
+        pass
 
     caption = format_vk_text(
         "Отлично!\n\n"
