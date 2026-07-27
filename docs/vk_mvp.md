@@ -26,6 +26,8 @@ VK_SYSTEM_IMAGES_CACHE=data/storage/vk_system_images.json
 
 Telegram-переменные остаются как есть. `main.py` продолжает запускать только Telegram-бота.
 
+Для VK обязательны `DATABASE_URL` и `EVENTS_SOURCE=postgres`. Google Sheets для афиши VK не используется.
+
 ## Первый тестовый запуск
 
 ```bash

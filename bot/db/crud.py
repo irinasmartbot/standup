@@ -82,12 +82,40 @@ def _fetchall_tuples(cur):
     return [tuple(row) for row in cur.fetchall()]
 
 
-def _upsert_user(cur, telegram_id, username, name, phone):
+def _upsert_user(cur, telegram_id, username, name, phone, *, vk_id=None, source=None):
     now = datetime.now()
+    if vk_id is not None and telegram_id is None:
+        cur.execute(
+            """
+            INSERT INTO users (vk_id, username, name, phone, source, created_at, last_active_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (vk_id)
+            DO UPDATE SET
+                username = COALESCE(EXCLUDED.username, users.username),
+                name = COALESCE(EXCLUDED.name, users.name),
+                phone = COALESCE(EXCLUDED.phone, users.phone),
+                last_active_at = EXCLUDED.last_active_at
+            RETURNING id
+            """,
+            (
+                vk_id,
+                username or None,
+                name or None,
+                phone or None,
+                source or "vkontakte",
+                now,
+                now,
+            ),
+        )
+        return cur.fetchone()[0]
+
+    if telegram_id is None:
+        raise ValueError("telegram_id or vk_id is required for user upsert")
+
     cur.execute(
         """
         INSERT INTO users (telegram_id, username, name, phone, source, created_at, last_active_at)
-        VALUES (%s, %s, %s, %s, 'telegram', %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (telegram_id)
         DO UPDATE SET
             username = COALESCE(EXCLUDED.username, users.username),
@@ -96,7 +124,15 @@ def _upsert_user(cur, telegram_id, username, name, phone):
             last_active_at = EXCLUDED.last_active_at
         RETURNING id
         """,
-        (telegram_id, username or None, name or None, phone or None, now, now),
+        (
+            telegram_id,
+            username or None,
+            name or None,
+            phone or None,
+            source or "telegram",
+            now,
+            now,
+        ),
     )
     return cur.fetchone()[0]
 
@@ -203,11 +239,23 @@ def create_booking(
     booking_format: str = "proverka",
     event_format: str = "proverka",
     event_id: Optional[int] = None,
+    *,
+    vk_id=None,
+    source: Optional[str] = None,
 ):
+    booking_source = source or ("vkontakte" if vk_id is not None and telegram_id is None else "telegram")
     if _use_postgres():
         with _pg_connect() as conn:
             with conn.cursor() as cur:
-                user_id = _upsert_user(cur, telegram_id, username, name, phone)
+                user_id = _upsert_user(
+                    cur,
+                    telegram_id,
+                    username,
+                    name,
+                    phone,
+                    vk_id=vk_id,
+                    source=booking_source,
+                )
                 found_event_id = _find_event_id(
                     cur,
                     event_date,
@@ -224,17 +272,18 @@ def create_booking(
                 cur.execute(
                     """
                     INSERT INTO bookings (user_id, event_id, guests, format, source, status, created_at)
-                    VALUES (%s, %s, %s, %s, 'telegram', 'booked', %s)
+                    VALUES (%s, %s, %s, %s, %s, 'booked', %s)
                     ON CONFLICT (user_id, event_id)
                     WHERE status IN ('booked', 'confirmed')
                     DO UPDATE SET
                         guests = EXCLUDED.guests,
                         status = 'booked',
                         format = EXCLUDED.format,
+                        source = EXCLUDED.source,
                         updated_at = now()
                     RETURNING id
                     """,
-                    (user_id, found_event_id, guests, booking_format, datetime.now()),
+                    (user_id, found_event_id, guests, booking_format, booking_source, datetime.now()),
                 )
                 booking_id = cur.fetchone()[0]
             conn.commit()
@@ -244,7 +293,9 @@ def create_booking(
                 track_event(
                     EVENT_BOOKING_CREATED,
                     telegram_id=telegram_id,
+                    vk_id=vk_id,
                     user_id=user_id,
+                    channel=booking_source if booking_source in {"telegram", "vkontakte"} else "unknown",
                     event_id=found_event_id,
                     booking_id=booking_id,
                     props={
@@ -259,6 +310,9 @@ def create_booking(
             except Exception:
                 pass
             return booking_id
+
+    if telegram_id is None:
+        raise RuntimeError("SQLite bookings require telegram_id")
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -340,34 +394,52 @@ def get_same_day_bookings_summary(telegram_id, event_date, exclude_time=None):
     return rows
 
 
-def get_last_phone(telegram_id):
-    """Возвращает последний номер телефона пользователя из его броней."""
-    if _use_postgres():
-        with _pg_connect() as conn:
-            with conn.cursor() as cur:
+def get_last_phone(telegram_id=None, *, vk_id=None):
+    """Возвращает последний номер телефона пользователя из users."""
+    if not _use_postgres():
+        if telegram_id is None:
+            return None
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "SELECT phone FROM bookings WHERE telegram_id=? AND phone IS NOT NULL AND phone != '' ORDER BY id DESC LIMIT 1",
+            (telegram_id,),
+        )
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else None
+
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            if vk_id is not None:
                 cur.execute(
                     """
                     SELECT phone
                     FROM users
-                    WHERE telegram_id = %s
+                    WHERE vk_id = %s
                       AND phone IS NOT NULL
                       AND phone != ''
                     LIMIT 1
                     """,
-                    (telegram_id,),
+                    (vk_id,),
                 )
                 row = cur.fetchone()
                 return row[0] if row else None
-
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        "SELECT phone FROM bookings WHERE telegram_id=? AND phone IS NOT NULL AND phone != '' ORDER BY id DESC LIMIT 1",
-        (telegram_id,),
-    )
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else None
+            if telegram_id is None:
+                return None
+            cur.execute(
+                """
+                SELECT phone
+                FROM users
+                WHERE telegram_id = %s
+                  AND phone IS NOT NULL
+                  AND phone != ''
+                LIMIT 1
+                """,
+                (telegram_id,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
 
 
 def get_booking_by_id(booking_id):
@@ -441,7 +513,7 @@ def update_booking_status(booking_id, status):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT u.telegram_id, b.format, b.event_id, b.user_id
+                    SELECT u.telegram_id, u.vk_id, b.format, b.event_id, b.user_id, b.source
                     FROM bookings b
                     JOIN users u ON u.id = b.user_id
                     WHERE b.id = %s
@@ -460,17 +532,20 @@ def update_booking_status(booking_id, status):
                     track_event,
                 )
 
-                telegram_id, booking_format, event_id, user_id = meta
+                telegram_id, vk_id, booking_format, event_id, user_id, booking_source = meta
                 event_name = {
                     "confirmed": EVENT_BOOKING_CONFIRMED,
                     "cancelled": EVENT_BOOKING_CANCELLED,
                     "annulled": EVENT_BOOKING_ANNULLED,
                 }.get(status)
                 if event_name:
+                    channel = booking_source if booking_source in {"telegram", "vkontakte"} else "unknown"
                     track_event(
                         event_name,
                         telegram_id=telegram_id,
+                        vk_id=vk_id,
                         user_id=user_id,
+                        channel=channel,
                         event_id=event_id,
                         booking_id=booking_id,
                         props={"format": booking_format},
@@ -573,7 +648,7 @@ def annul_booking(booking_id):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT u.telegram_id, b.format, b.event_id, b.user_id
+                    SELECT u.telegram_id, u.vk_id, b.format, b.event_id, b.user_id, b.source
                     FROM bookings b
                     JOIN users u ON u.id = b.user_id
                     WHERE b.id = %s AND b.status = 'booked'
@@ -595,11 +670,14 @@ def annul_booking(booking_id):
             try:
                 from bot.db.analytics import EVENT_BOOKING_ANNULLED, track_event
 
-                telegram_id, booking_format, event_id, user_id = meta
+                telegram_id, vk_id, booking_format, event_id, user_id, booking_source = meta
+                channel = booking_source if booking_source in {"telegram", "vkontakte"} else "unknown"
                 track_event(
                     EVENT_BOOKING_ANNULLED,
                     telegram_id=telegram_id,
+                    vk_id=vk_id,
                     user_id=user_id,
+                    channel=channel,
                     event_id=event_id,
                     booking_id=booking_id,
                     props={"format": booking_format, "source": "annul_booking"},
@@ -644,12 +722,22 @@ def get_booked_for_reminders(booking_format: str = "proverka"):
     return rows
 
 
-def ensure_user(telegram_id, username=None, name=None, phone=None):
+def ensure_user(telegram_id=None, username=None, name=None, phone=None, *, vk_id=None, source=None):
     if not _use_postgres():
+        return None
+    if telegram_id is None and vk_id is None:
         return None
     with _pg_connect() as conn:
         with conn.cursor() as cur:
-            user_id = _upsert_user(cur, telegram_id, username, name, phone)
+            user_id = _upsert_user(
+                cur,
+                telegram_id,
+                username,
+                name,
+                phone,
+                vk_id=vk_id,
+                source=source,
+            )
         conn.commit()
     return user_id
 

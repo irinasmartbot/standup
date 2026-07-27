@@ -97,6 +97,13 @@ def ensure_analytics_tables() -> None:
             )
             cur.execute(
                 """
+                CREATE INDEX IF NOT EXISTS idx_analytics_events_vk_created
+                    ON analytics_events (vk_id, created_at DESC)
+                    WHERE vk_id IS NOT NULL
+                """
+            )
+            cur.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_analytics_events_channel_created
                     ON analytics_events (channel, created_at DESC)
                 """
@@ -154,7 +161,7 @@ def track_event(
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 resolved_user_id = user_id or _resolve_user_id(cur, telegram_id, vk_id)
-                # Lightweight touch: ensure TG user exists for start/branch events
+                # Lightweight touch: ensure user exists for start/branch events
                 if resolved_user_id is None and telegram_id is not None:
                     now = datetime.now()
                     cur.execute(
@@ -166,6 +173,19 @@ def track_event(
                         RETURNING id
                         """,
                         (telegram_id, now, now),
+                    )
+                    resolved_user_id = cur.fetchone()[0]
+                if resolved_user_id is None and vk_id is not None:
+                    now = datetime.now()
+                    cur.execute(
+                        """
+                        INSERT INTO users (vk_id, source, created_at, last_active_at)
+                        VALUES (%s, 'vkontakte', %s, %s)
+                        ON CONFLICT (vk_id)
+                        DO UPDATE SET last_active_at = EXCLUDED.last_active_at
+                        RETURNING id
+                        """,
+                        (vk_id, now, now),
                     )
                     resolved_user_id = cur.fetchone()[0]
                 cur.execute(

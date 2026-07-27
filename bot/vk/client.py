@@ -64,6 +64,34 @@ class VKClient:
         response = await self.api("messages.send", **params)
         return int(response)
 
+    async def upload_message_photo(self, peer_id: int, image_bytes: bytes, *, filename: str = "photo.jpg") -> str:
+        """Upload image bytes and return VK attachment id for messages.send."""
+        server = await self.api("photos.getMessagesUploadServer", peer_id=peer_id)
+        upload_url = server["upload_url"]
+        form = aiohttp.FormData()
+        form.add_field(
+            "photo",
+            image_bytes,
+            filename=filename,
+            content_type="image/jpeg",
+        )
+        async with aiohttp.ClientSession(connector=_connector()) as session:
+            async with session.post(upload_url, data=form) as resp:
+                uploaded = await resp.json(content_type=None)
+        saved = await self.api(
+            "photos.saveMessagesPhoto",
+            photo=uploaded["photo"],
+            server=uploaded["server"],
+            hash=uploaded["hash"],
+        )
+        if not saved:
+            raise VKAPIError("VK did not return saved photo")
+        photo = saved[0]
+        attachment = f"photo{photo['owner_id']}_{photo['id']}"
+        if photo.get("access_key"):
+            attachment = f"{attachment}_{photo['access_key']}"
+        return attachment
+
     async def get_long_poll_server(self) -> dict[str, Any]:
         if not self.settings.group_id:
             raise VKAPIError("VK_GROUP_ID is not set")
