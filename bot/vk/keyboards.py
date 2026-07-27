@@ -121,4 +121,8 @@ class VKKeyboardBuilder:
 
 
 def empty_keyboard() -> str:
-    return json.dumps({"buttons": [], "one_time": True}, separators=(",", ":"))
+    return json.dumps(
+        {"buttons": [], "one_time": True, "inline": False},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )

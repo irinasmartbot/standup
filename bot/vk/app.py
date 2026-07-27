@@ -137,7 +137,7 @@ def event_search_keyboard(
     dates_label: str = "📅 Выбрать по дате",
     venues_label: str = "📍 Выбор по площадке",
 ) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button(dates_label, _payload(dates_cmd), color="primary")
     kb.button(venues_label, _payload(venues_cmd), color="primary")
     kb.button("В главное меню", _payload("main_menu"))
@@ -155,7 +155,7 @@ def _dates_keyboard(
     start = page * DATES_PAGE_SIZE
     end = start + DATES_PAGE_SIZE
     shown = dates[start:end]
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     for date in shown:
         kb.button(_date_label(date), _payload(command_prefix, date=date), color="primary")
     if page > 0:
@@ -178,6 +178,21 @@ def _dates_keyboard(
     return kb.as_json()
 
 
+def _venue_dates_keyboard(dates: list[str], command: str, venue: str, back_cmd: str) -> str:
+    shown = dates[:8]
+    kb = VKKeyboardBuilder(inline=True)
+    for date in shown:
+        kb.button(_date_label(date), _payload(command, venue=venue, date=date), color="primary")
+    kb.button("Назад к площадкам", _payload(back_cmd))
+    kb.button("В главное меню", _payload("main_menu"))
+    widths = [2] * (len(shown) // 2)
+    if len(shown) % 2:
+        widths.append(1)
+    widths.extend([1, 1])
+    kb.adjust(*widths)
+    return kb.as_json()
+
+
 def _events_keyboard(
     events: list[dict[str, Any]],
     command: str,
@@ -185,7 +200,7 @@ def _events_keyboard(
     **back_extra: Any,
 ) -> str:
     """Кнопки выбора шоу, когда на одну дату несколько слотов."""
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     dates = {e.get("date") for e in events[:8]}
     multi_date = len(dates) > 1
     for event in events[:8]:
@@ -211,22 +226,8 @@ def _events_keyboard(
     return kb.as_json()
 
 
-def _venue_dates_keyboard(dates: list[str], command: str, venue: str, back_cmd: str) -> str:
-    shown = dates[:8]
-    kb = VKKeyboardBuilder()
-    for date in shown:
-        kb.button(_date_label(date), _payload(command, venue=venue, date=date), color="primary")
-    kb.button("Назад к площадкам", _payload(back_cmd))
-    widths = [2] * (len(shown) // 2)
-    if len(shown) % 2:
-        widths.append(1)
-    widths.append(1)
-    kb.adjust(*widths)
-    return kb.as_json()
-
-
-def _venues_keyboard(venues: list[str], command: str, back_cmd: str) -> str:
-    kb = VKKeyboardBuilder()
+def _venues_keyboard(venues: list[str], command: str, back_cmd: str, *, inline: bool = True) -> str:
+    kb = VKKeyboardBuilder(inline=inline)
     for venue in venues[:8]:
         kb.button(venue, _payload(command, venue=venue), color="primary")
     kb.button("Назад к датам", _payload(back_cmd))
@@ -291,7 +292,8 @@ def _best_carousel_keyboard(
         nav_count += 1
 
     kb.button("Назад", _payload("best_venues"))
-    kb.adjust(1, nav_count, 1)
+    kb.button("В главное меню", _payload("main_menu"))
+    kb.adjust(1, nav_count, 1, 1)
     return kb.as_json()
 
 
@@ -413,8 +415,11 @@ class VKBotApp:
                 "\u2060",
                 keyboard=empty_keyboard(),
             )
-            if mid:
-                await self.client.delete_messages(peer_id, [int(mid)])
+            if not mid:
+                return
+            # Даём клиенту VK применить сброс клавиатуры, потом убираем служебное сообщение.
+            await asyncio.sleep(0.4)
+            await self.client.delete_messages(peer_id, [int(mid)])
         except Exception:
             logger.exception("Failed to clear VK reply keyboard peer_id=%s", peer_id)
 
