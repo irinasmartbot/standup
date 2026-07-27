@@ -420,7 +420,7 @@ def events_keyboard(events: list[dict], date: str) -> str:
 def event_card_keyboard(event_id: int) -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("🎟 Забронировать билет", _payload("rz_book", event_id=event_id), color="primary")
-    kb.button("📋 Правила бронирования", _payload("rz_rules"))
+    kb.button("📋 Правила бронирования", _payload("rz_rules", event_id=event_id))
     kb.button("◀️ Назад", _payload("rz_dates"))
     kb.adjust(1)
     return kb.as_json()

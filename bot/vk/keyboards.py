@@ -142,3 +142,12 @@ def empty_keyboard() -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def empty_inline_keyboard() -> str:
+    """Снять inline-кнопки с сообщения, не удаляя само сообщение."""
+    return json.dumps(
+        {"buttons": [], "inline": True},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )

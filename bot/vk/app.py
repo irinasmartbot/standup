@@ -56,7 +56,7 @@ from bot.vk import raffle as vk_raffle
 from bot.vk.client import VKClient
 from bot.vk.config import VKSettings
 from bot.vk.formatting import format_vk_text
-from bot.vk.keyboards import VKKeyboardBuilder, empty_keyboard
+from bot.vk.keyboards import VKKeyboardBuilder, empty_inline_keyboard, empty_keyboard
 from bot.vk.media import VKRemoteImageCache, VKSystemImageCache, resolve_image_attachment
 
 import aiohttp
@@ -462,6 +462,16 @@ class VKBotApp:
     def _callback_cmid(self, peer_id: int) -> int | None:
         value = self._peer_event_cmid.get(int(peer_id))
         return int(value) if value else None
+
+    async def _disable_callback_buttons(self, peer_id: int, text: str) -> bool:
+        """Оставляет сообщение, но убирает inline-кнопки (повторный клик невозможен)."""
+        return await self._edit_card(
+            peer_id,
+            text,
+            stored_message_id=None,
+            keyboard=empty_inline_keyboard(),
+            attachment=None,
+        )
 
     async def _edit_card(
         self,
@@ -1729,7 +1739,20 @@ class VKBotApp:
             return True
 
         if cmd == "rz_rules":
-            await self._send_text(peer_id, vk_raffle.RAFFLE_RULES_TEXT)
+            # Как booking_rules: карточку шоу не удаляем.
+            kb = VKKeyboardBuilder(inline=True)
+            event_id = payload.get("event_id")
+            if event_id is not None:
+                kb.button("◀️ Назад к карточке", _payload("rz_event", event_id=event_id))
+            else:
+                kb.button("◀️ Назад к датам", _payload("rz_dates"))
+            kb.adjust(1)
+            await self._send_text(
+                peer_id,
+                vk_raffle.RAFFLE_RULES_TEXT,
+                keyboard=kb.as_json(),
+                replace_nav=False,
+            )
             return True
 
         if cmd in {"rz_dates", "rz_dates_page"}:
@@ -1784,37 +1807,55 @@ class VKBotApp:
 
         if cmd == "rz_post":
             self._track(vk_id, EVENT_RAFFLE_BRANCH, props={"kind": "post"})
+            await self._disable_callback_buttons(
+                peer_id,
+                vk_raffle.start_text(self.settings.community_link),
+            )
             await self._send_text(
                 peer_id,
                 vk_raffle.POST_TEXT,
                 keyboard=vk_raffle.post_keyboard(),
                 attachment=self._random_cover_attachment(),
+                replace_nav=False,
             )
             return True
 
         if cmd == "rz_review":
             self._track(vk_id, EVENT_RAFFLE_BRANCH, props={"kind": "review"})
+            await self._disable_callback_buttons(
+                peer_id,
+                vk_raffle.start_text(self.settings.community_link),
+            )
             await self._send_raffle_review(peer_id)
             return True
 
         if cmd == "rz_post_cross":
             self._arm_raffle_screenshot(vk_id, "post")
+            await self._disable_callback_buttons(peer_id, vk_raffle.POST_TEXT)
             await self._send_text(
                 peer_id,
                 "Спасибо, но ждём скрин поста (одним фото) 😉 Кидай ниже 👇",
+                replace_nav=False,
             )
             return True
 
         if cmd == "rz_post_screen":
             self._arm_raffle_screenshot(vk_id, "post")
-            await self._send_text(peer_id, "Супер, кидай сюда скрин (одним фото) 👇")
+            await self._disable_callback_buttons(peer_id, vk_raffle.POST_TEXT)
+            await self._send_text(
+                peer_id,
+                "Супер, кидай сюда скрин (одним фото) 👇",
+                replace_nav=False,
+            )
             return True
 
         if cmd == "rz_review_send":
             self._arm_raffle_screenshot(vk_id, "review")
+            await self._disable_callback_buttons(peer_id, vk_raffle.REVIEW_TEXT)
             await self._send_text(
                 peer_id,
                 "Супер, кидай сюда скрин отзыва (одним фото) 👇",
+                replace_nav=False,
             )
             return True
 
@@ -2021,6 +2062,7 @@ class VKBotApp:
             vk_raffle.start_text(self.settings.community_link),
             keyboard=vk_raffle.start_keyboard(),
             attachment=self._random_cover_attachment(),
+            replace_nav=False,
         )
 
     async def _send_raffle_review(self, peer_id: int) -> None:
@@ -2035,12 +2077,14 @@ class VKBotApp:
                 vk_raffle.REVIEW_TEXT,
                 keyboard=vk_raffle.review_keyboard(),
                 attachment=",".join(attachments),
+                replace_nav=False,
             )
             return
         await self._send_text(
             peer_id,
             vk_raffle.REVIEW_TEXT,
             keyboard=vk_raffle.review_keyboard(),
+            replace_nav=False,
         )
 
     async def _handle_raffle_screenshot(
