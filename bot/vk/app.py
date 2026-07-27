@@ -526,7 +526,8 @@ class VKBotApp:
             text,
             stored_message_id=existing_id,
             keyboard=keyboard,
-            attachment=attachment or "",
+            # Не трогаем вложение: повторная картинка/пустой attachment даёт мигание.
+            attachment=None,
         ):
             if existing_id:
                 self.peer_dates_message_ids[peer] = int(existing_id)
@@ -1839,7 +1840,8 @@ class VKBotApp:
             text,
             stored_message_id=existing_id,
             keyboard=keyboard,
-            attachment=attachment or "",
+            # Пустой attachment снимает картинку и даёт мигание; None — не трогаем.
+            attachment=attachment or None,
         ):
             if existing_id:
                 self.peer_carousel_message_ids[peer] = int(existing_id)
