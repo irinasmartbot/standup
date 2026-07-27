@@ -44,7 +44,7 @@ def guests_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     for n in (1, 2, 3, 4):
         kb.button(str(n), _payload("booking_guests", guests=n), color="primary")
-    kb.button("Отмена", _payload("booking_cancel"))
+    kb.button("В главное меню", _payload("booking_cancel"))
     kb.adjust(4, 1)
     return kb.as_json()
 
@@ -53,14 +53,14 @@ def phone_saved_keyboard(phone: str) -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("Да, использовать", _payload("booking_phone_use"), color="primary")
     kb.button("Ввести другой номер", _payload("booking_phone_change"))
-    kb.button("Отмена", _payload("booking_cancel"))
     kb.adjust(1)
     return kb.as_json()
 
 
 def booking_cancel_keyboard() -> str:
+    # Оставлено для совместимости; на шагах имя/телефон больше не показываем.
     kb = VKKeyboardBuilder(inline=True)
-    kb.button("Отмена", _payload("booking_cancel"))
+    kb.button("В главное меню", _payload("booking_cancel"))
     kb.adjust(1)
     return kb.as_json()
 

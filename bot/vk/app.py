@@ -517,7 +517,6 @@ class VKBotApp:
         await self._send_text(
             peer_id,
             "Напишите, пожалуйста, ваше имя.",
-            keyboard=vk_booking.booking_cancel_keyboard(),
         )
 
     async def _ask_phone(self, peer_id: int, vk_id: int, session: dict) -> None:
@@ -535,7 +534,6 @@ class VKBotApp:
         await self.client.send_message(
             peer_id,
             vk_booking.PHONE_ASK_TEXT,
-            keyboard=vk_booking.booking_cancel_keyboard(),
         )
 
     async def _ask_guests(self, peer_id: int, session: dict) -> None:
