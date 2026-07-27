@@ -355,6 +355,8 @@ class VKBotApp:
         self.manage_sessions: dict[int, dict] = {}
         # Розыгрыш: kind / awaiting screenshot (до шага модерации).
         self.raffle_sessions: dict[int, dict[str, Any]] = {}
+        # attachment последнего сообщения с кнопками розыгрыша (чтобы edit не стирал фото).
+        self.raffle_msg_attachment: dict[int, str] = {}
         # Антиспам: несколько фото подряд после «кидай скрин».
         self._raffle_photo_burst: dict[int, float] = {}
         self._ticket_in_progress: set[int] = set()
@@ -463,15 +465,33 @@ class VKBotApp:
         value = self._peer_event_cmid.get(int(peer_id))
         return int(value) if value else None
 
-    async def _disable_callback_buttons(self, peer_id: int, text: str) -> bool:
-        """Оставляет сообщение, но убирает inline-кнопки (повторный клик невозможен)."""
+    async def _disable_callback_buttons(
+        self,
+        peer_id: int,
+        text: str,
+        *,
+        attachment: str | None = None,
+    ) -> bool:
+        """Оставляет сообщение и вложения, убирает только inline-кнопки."""
+        peer = int(peer_id)
+        if attachment is None:
+            keep_att = self.raffle_msg_attachment.get(peer)
+        else:
+            keep_att = attachment or None
         return await self._edit_card(
             peer_id,
             text,
             stored_message_id=None,
             keyboard=empty_inline_keyboard(),
-            attachment=None,
+            attachment=keep_att,
         )
+
+    def _remember_raffle_attachment(self, peer_id: int, attachment: str | None) -> None:
+        peer = int(peer_id)
+        if attachment:
+            self.raffle_msg_attachment[peer] = attachment
+        else:
+            self.raffle_msg_attachment.pop(peer, None)
 
     async def _edit_card(
         self,
@@ -1815,11 +1835,13 @@ class VKBotApp:
                 peer_id,
                 vk_raffle.start_text(self.settings.community_link),
             )
+            post_att = self._random_cover_attachment()
+            self._remember_raffle_attachment(peer_id, post_att)
             await self._send_text(
                 peer_id,
                 vk_raffle.POST_TEXT,
                 keyboard=vk_raffle.post_keyboard(),
-                attachment=self._random_cover_attachment(),
+                attachment=post_att,
                 replace_nav=False,
             )
             return True
@@ -1855,6 +1877,7 @@ class VKBotApp:
 
         if cmd == "rz_review_send":
             self._arm_raffle_screenshot(vk_id, "review")
+            # Примеры отзыва — отдельным сообщением выше; тут только текст с кнопкой.
             await self._disable_callback_buttons(peer_id, vk_raffle.REVIEW_TEXT)
             await self._send_text(
                 peer_id,
@@ -2053,11 +2076,13 @@ class VKBotApp:
             )
             return
         self._clear_raffle_screenshot_wait(vk_id)
+        start_att = self._random_cover_attachment()
+        self._remember_raffle_attachment(peer_id, start_att)
         await self._send_text(
             peer_id,
             vk_raffle.start_text(self.settings.community_link),
             keyboard=vk_raffle.start_keyboard(),
-            attachment=self._random_cover_attachment(),
+            attachment=start_att,
             replace_nav=False,
         )
 
@@ -2067,15 +2092,15 @@ class VKBotApp:
             att = self._cover_attachment(key)
             if att:
                 attachments.append(att)
+        # Картинки-примеры отдельным сообщением — не пропадают при снятии кнопок с текста.
         if attachments:
             await self._send_text(
                 peer_id,
-                vk_raffle.REVIEW_TEXT,
-                keyboard=vk_raffle.review_keyboard(),
+                "Пример, какие кнопочки нажать на отзыве 👇",
                 attachment=",".join(attachments),
                 replace_nav=False,
             )
-            return
+        self._remember_raffle_attachment(peer_id, None)
         await self._send_text(
             peer_id,
             vk_raffle.REVIEW_TEXT,
