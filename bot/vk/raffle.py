@@ -60,7 +60,7 @@ def start_text(community_link: str) -> str:
 POST_TEXT = format_vk_text(
     f"Выкладываем в соцсети пост со ссылкой на наш сайт <b>MoscowStandUpshow.ru</b> 😊\n\n"
     "Если в Instagram* — обязательно сделай ссылку в сторис кликабельной 😉\n\n"
-    "Затем нажимай кнопку ниже, отправляй скрин поста и выбирай любую дату ☺️ "
+    "Затем отправь сюда скрин поста <b>одним фото</b> и выбирай любую дату ☺️ "
     "(после выбора даты билеты переносу не подлежат)\n\n"
     "🎫 За 1 пост полагается 1 билет\n\n"
     "____________________\n"
@@ -70,8 +70,8 @@ POST_TEXT = format_vk_text(
 REVIEW_TEXT = format_vk_text(
     f"Оставляем отзыв по ссылке:\n{AFISHA_REVIEW_URL}\n\n"
     "И обязательно нажать на вот эти кнопочки как на фото 😻\n\n"
-    "Затем нажимайте кнопку ниже, отправляйте скрин отзыва одним фото "
-    "и выбирайте любую дату 😻\n\n"
+    "Затем отправь сюда скрин отзыва <b>одним фото</b> "
+    "и выбирай любую дату 😻\n\n"
     "🎟️ После выбора даты билеты переносу не подлежат\n"
     "🎫 За 1 отзыв полагается 1 билет"
 )
@@ -97,37 +97,23 @@ def start_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("Билет за пост", _payload("rz_post"), color="primary")
     kb.button("Билет за отзыв", _payload("rz_review"), color="primary")
-    kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
 
 
-def post_keyboard() -> str:
-    kb = VKKeyboardBuilder(inline=True)
-    kb.button("Я выложил, вот те крест", _payload("rz_post_cross"), color="positive")
-    kb.button("Я выложил, вот те скрин", _payload("rz_post_screen"), color="negative")
-    kb.button("В главное меню", _payload("main_menu"))
-    kb.adjust(1)
-    return kb.as_json()
+def post_keyboard() -> str | None:
+    """После выбора поста кнопки не нужны — сразу ждём одно фото."""
+    return None
 
 
-def review_keyboard() -> str:
-    kb = VKKeyboardBuilder(inline=True)
-    kb.button("Отправить скрин", _payload("rz_review_send"), color="primary")
-    kb.button("В главное меню", _payload("main_menu"))
-    kb.adjust(1)
-    return kb.as_json()
+def review_keyboard() -> str | None:
+    """После выбора отзыва кнопки не нужны — сразу ждём одно фото."""
+    return None
 
 
-def retry_screenshot_keyboard(kind: str) -> str:
-    kb = VKKeyboardBuilder(inline=True)
-    if kind == "review":
-        kb.button("Отправить скрин", _payload("rz_review_send"), color="primary")
-    else:
-        kb.button("Я выложил, вот те скрин", _payload("rz_post_screen"), color="primary")
-    kb.button("В главное меню", _payload("main_menu"))
-    kb.adjust(1)
-    return kb.as_json()
+def retry_screenshot_keyboard(kind: str) -> str | None:
+    """После отказа — без кнопок, просто ждём новое фото."""
+    return None
 
 
 def blocked_keyboard(booking_id: int | None = None) -> str:
@@ -138,9 +124,40 @@ def blocked_keyboard(booking_id: int | None = None) -> str:
             _payload("mb_cancel_confirm", booking_id=int(booking_id)),
             color="negative",
         )
-    kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
+
+
+def subscribe_keyboard(community_link: str, *, manual_attempts: int = 0) -> str:
+    kb = VKKeyboardBuilder(inline=True)
+    link = (community_link or "").strip()
+    if link:
+        kb.button("Подписаться", link=link)
+    if manual_attempts < 1:
+        kb.button("Подписка есть 🤝", _payload("rz_sub_check", attempts=manual_attempts))
+    kb.adjust(1)
+    return kb.as_json()
+
+
+async def send_raffle_dates_message(vk_id: int) -> bool:
+    """Сразу список дат BEST после успешной проверки подписки (как в TG)."""
+    events = await future_best_events()
+    dates = sorted(
+        {e["date"] for e in events},
+        key=lambda d: datetime.strptime(d, "%d.%m.%Y"),
+    )
+    if not dates:
+        return await send_vk_text(
+            vk_id,
+            "Отлично, подписка на сообщество есть 🙌\n\n"
+            "Пока нет доступных дат для бесплатного билета 😔 Загляни позже!",
+        )
+    return await send_vk_text(
+        vk_id,
+        "Отлично, подписка на сообщество есть 🙌\n\n"
+        "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉",
+        keyboard=dates_keyboard(dates, page=0),
+    )
 
 
 def _raffle_event_passed(booking_row) -> bool:
@@ -188,27 +205,42 @@ def largest_photo_url(photo: dict[str, Any]) -> str | None:
     return url or None
 
 
+def _is_image_doc(doc: dict[str, Any]) -> bool:
+    if doc.get("type") == 4:
+        return True
+    return str(doc.get("ext") or "").lower() in {"jpg", "jpeg", "png", "webp", "gif"}
+
+
+def count_image_attachments(message: dict[str, Any]) -> int:
+    attachments = message.get("attachments") or []
+    total = 0
+    for att in attachments:
+        if not isinstance(att, dict):
+            continue
+        if att.get("type") == "photo":
+            total += 1
+        elif att.get("type") == "doc" and _is_image_doc(att.get("doc") or {}):
+            total += 1
+    return total
+
+
 def extract_photo_from_message(message: dict[str, Any]) -> tuple[str | None, str | None]:
     """Returns (download_url, photo_ref) or (None, None / 'album')."""
+    if count_image_attachments(message) > 1:
+        return None, "album"
     attachments = message.get("attachments") or []
     photos = [a for a in attachments if isinstance(a, dict) and a.get("type") == "photo"]
-    if len(photos) > 1:
-        return None, "album"
     if not photos:
         for att in attachments:
             if not isinstance(att, dict) or att.get("type") != "doc":
                 continue
             doc = att.get("doc") or {}
-            if (doc.get("type") == 4) or str(doc.get("ext") or "").lower() in {
-                "jpg",
-                "jpeg",
-                "png",
-                "webp",
-            }:
-                url = (doc.get("url") or "").strip()
-                if url:
-                    ref = f"vk_doc:{doc.get('owner_id')}_{doc.get('id')}"
-                    return url, ref
+            if not _is_image_doc(doc):
+                continue
+            url = (doc.get("url") or "").strip()
+            if url:
+                ref = f"vk_doc:{doc.get('owner_id')}_{doc.get('id')}"
+                return url, ref
         return None, None
     photo = photos[0].get("photo") or {}
     url = largest_photo_url(photo)
@@ -233,27 +265,6 @@ async def send_vk_text(vk_id: int, text: str, *, keyboard: str | None = None) ->
     client = VKClient(settings)
     await client.send_message(int(vk_id), text, keyboard=keyboard)
     return True
-
-
-def subscribe_keyboard(community_link: str, *, manual_attempts: int = 0) -> str:
-    kb = VKKeyboardBuilder(inline=True)
-    link = (community_link or "").strip()
-    if link:
-        kb.button("Подписаться", link=link)
-    if manual_attempts < 1:
-        kb.button("Подписка есть 🤝", _payload("rz_sub_check", attempts=manual_attempts))
-    kb.button("В главное меню", _payload("main_menu"))
-    kb.adjust(1)
-    return kb.as_json()
-
-
-def dates_ready_keyboard() -> str:
-    """Кнопка перехода к датам BEST (шаг 5)."""
-    kb = VKKeyboardBuilder(inline=True)
-    kb.button("Выбрать дату", _payload("rz_dates"), color="primary")
-    kb.button("В главное меню", _payload("main_menu"))
-    kb.adjust(1)
-    return kb.as_json()
 
 
 RAFFLE_DATES_PAGE_SIZE = 6
@@ -311,9 +322,8 @@ def dates_keyboard(dates: list[str], page: int = 0) -> str:
     if end < len(dates):
         kb.button("➡️", _payload("rz_dates_page", page=page + 1))
         nav += 1
-    kb.button("В главное меню", _payload("main_menu"))
     if nav:
-        kb.adjust(1, nav, 1)
+        kb.adjust(1, nav)
     else:
         kb.adjust(1)
     return kb.as_json()
@@ -325,7 +335,6 @@ def events_keyboard(events: list[dict], date: str) -> str:
         label = f"{event.get('time') or ''} · {event.get('location') or 'шоу'}".strip(" ·")
         kb.button(label or "Шоу", _payload("rz_event", event_id=event["id"]), color="primary")
     kb.button("◀️ Назад к датам", _payload("rz_dates"))
-    kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
 
@@ -387,11 +396,8 @@ async def continue_after_subscribe_check(vk_id: int, *, manual_attempts: int = 0
             channel="vkontakte",
             props={"manual_attempts": manual_attempts},
         )
-        await send_vk_text(
-            vk_id,
-            "Отлично, подписка на сообщество есть 🙌\n\nТеперь выбери дату BEST-шоу 👇",
-            keyboard=dates_ready_keyboard(),
-        )
+        # Сразу даты — без промежуточной кнопки «Выбрать дату» (в TG так же).
+        await send_raffle_dates_message(int(vk_id))
         return
 
     track_event(

@@ -125,6 +125,12 @@ CREATE TABLE IF NOT EXISTS raffle_nav (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS raffle_vk_awaiting (
+    vk_id BIGINT PRIMARY KEY,
+    awaiting_kind TEXT NOT NULL CHECK (awaiting_kind IN ('post', 'review')),
+    awaiting_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 
 -- Product analytics (funnel / admin dashboard)
 CREATE TABLE IF NOT EXISTS analytics_events (

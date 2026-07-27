@@ -1200,6 +1200,15 @@ def ensure_raffle_tables():
             cur.execute(
                 "ALTER TABLE raffle_nav ADD COLUMN IF NOT EXISTS awaiting_at TIMESTAMPTZ"
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS raffle_vk_awaiting (
+                    vk_id BIGINT PRIMARY KEY,
+                    awaiting_kind TEXT NOT NULL CHECK (awaiting_kind IN ('post', 'review')),
+                    awaiting_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
         conn.commit()
 
 
@@ -1570,6 +1579,53 @@ def clear_raffle_awaiting_screenshot(telegram_id: int):
                 WHERE telegram_id = %s
                 """,
                 (datetime.now(), telegram_id),
+            )
+        conn.commit()
+
+
+def set_raffle_vk_awaiting_screenshot(vk_id: int, kind: str):
+    """Ждём скрин от VK-пользователя (TG-модерация и VK-бот — разные процессы)."""
+    if not _use_postgres() or kind not in {"post", "review"}:
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO raffle_vk_awaiting (vk_id, awaiting_kind, awaiting_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (vk_id) DO UPDATE SET
+                    awaiting_kind = EXCLUDED.awaiting_kind,
+                    awaiting_at = EXCLUDED.awaiting_at
+                """,
+                (int(vk_id), kind, datetime.now()),
+            )
+        conn.commit()
+
+
+def get_raffle_vk_awaiting_screenshot(vk_id: int):
+    if not _use_postgres():
+        return None
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT awaiting_kind FROM raffle_vk_awaiting WHERE vk_id = %s",
+                (int(vk_id),),
+            )
+            row = _fetchone_tuple(cur)
+            if not row or not row[0]:
+                return None
+            kind = row[0]
+            return kind if kind in {"post", "review"} else None
+
+
+def clear_raffle_vk_awaiting_screenshot(vk_id: int):
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM raffle_vk_awaiting WHERE vk_id = %s",
+                (int(vk_id),),
             )
         conn.commit()
 

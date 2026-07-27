@@ -727,13 +727,18 @@ async def _send_to_moderation(
         return False
     kind_label = "отзыва" if kind == "review" else "поста"
     if vk_id is not None:
-        uname = f"vk_id:{vk_id}"
+        name = escape(full_name or "Гость")
+        caption = (
+            f'{name} · <a href="https://vk.com/id{int(vk_id)}">профиль VK</a> '
+            f"(id {int(vk_id)}) прислал СКРИН {kind_label}\n"
+            f"Заявка #{submission_id}"
+        )
     else:
         uname = f"@{username}" if username else f"id {telegram_id}"
-    caption = (
-        f"{escape(full_name or 'Гость')} {escape(uname)} прислал СКРИН {kind_label}\n"
-        f"Заявка #{submission_id}"
-    )
+        caption = (
+            f"{escape(full_name or 'Гость')} {escape(uname)} прислал СКРИН {kind_label}\n"
+            f"Заявка #{submission_id}"
+        )
     kb = InlineKeyboardBuilder()
     kb.button(text="ПРИНЯТЬ", callback_data=f"rz_mod_ok_{submission_id}", style="success")
     kb.button(
@@ -788,12 +793,15 @@ def _submission_telegram_id(row) -> int | None:
 
 def _client_label(row) -> str:
     vk_id = _submission_vk_id(row)
+    name = (row[3] or "").strip() or "Гость"
     if vk_id is not None and not row[1]:
-        uname = f"vk_id:{vk_id}"
-    else:
-        uname = f"@{row[2]}" if row[2] else f"tg_id:{row[1]}"
-    name = (row[3] or "").strip()
-    return f"{name} {uname}".strip()
+        # Имя из VK API + ссылка на профиль (диалог открывается из профиля/сообщества).
+        return (
+            f'{escape(name)} · <a href="https://vk.com/id{vk_id}">профиль VK</a> '
+            f"(id {vk_id})"
+        )
+    uname = f"@{row[2]}" if row[2] else f"tg_id:{row[1]}"
+    return f"{escape(name)} {escape(uname)}".strip()
 
 
 async def _mod_caption_fallback(row) -> str:
@@ -814,6 +822,7 @@ async def _set_mod_card_status(message_or_ids, row, status_block: str):
             await edit(
                 caption=(await _mod_caption_fallback(row)) + status_block,
                 reply_markup=None,
+                parse_mode="HTML",
             )
             return
         except Exception:
@@ -826,6 +835,7 @@ async def _set_mod_card_status(message_or_ids, row, status_block: str):
             message_id=message_id,
             caption=(await _mod_caption_fallback(row)) + status_block,
             reply_markup=None,
+            parse_mode="HTML",
         )
     except Exception:
         try:
@@ -930,11 +940,11 @@ async def _reject_submission(row, reason: str | None, card_ref, cleanup_chat_id=
             text = vk_raffle.POST_REJECT_TEXT
             if reason:
                 text += f"\n\nКомментарий менеджера: {reason}"
-        await vk_raffle.send_vk_text(
-            vk_id,
-            text,
-            keyboard=vk_raffle.retry_screenshot_keyboard(kind),
-        )
+        from bot.db.crud import set_raffle_vk_awaiting_screenshot
+
+        # Без кнопок: ждём новое фото; флаг в БД — VK-бот подхватит после рестарта.
+        set_raffle_vk_awaiting_screenshot(int(vk_id), kind)
+        await vk_raffle.send_vk_text(vk_id, text)
         return
 
     if kind == "review":

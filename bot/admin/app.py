@@ -104,6 +104,7 @@ DB_VIEW_TABLES = (
     "bookings",
     "raffle_submissions",
     "raffle_nav",
+    "raffle_vk_awaiting",
     "help_requests",
     "analytics_events",
 )

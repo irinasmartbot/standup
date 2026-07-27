@@ -353,6 +353,8 @@ class VKBotApp:
         self.manage_sessions: dict[int, dict] = {}
         # Розыгрыш: kind / awaiting screenshot (до шага модерации).
         self.raffle_sessions: dict[int, dict[str, Any]] = {}
+        # Антиспам: несколько фото подряд после «кидай скрин».
+        self._raffle_photo_burst: dict[int, float] = {}
         self._ticket_in_progress: set[int] = set()
         self.peer_nav_message_ids: dict[int, list[int]] = {}
         self._pending_delete_ids: dict[int, list[int]] = {}
@@ -624,7 +626,7 @@ class VKBotApp:
         self._ensure_user(user_id)
         vk_booking.clear_session(self.booking_sessions, user_id)
         vk_mb.clear_manage_session(self.manage_sessions, user_id)
-        self.raffle_sessions.pop(int(user_id), None)
+        self._clear_raffle_screenshot_wait(int(user_id))
         self.peer_carousel_message_ids.pop(int(peer_id), None)
         self.peer_my_bookings_message_ids.pop(int(peer_id), None)
         self.peer_dates_message_ids.pop(int(peer_id), None)
@@ -1449,10 +1451,17 @@ class VKBotApp:
         ):
             return
 
-        session = self.raffle_sessions.get(int(vk_id)) or {}
-        if session.get("screen_requested") and not cmd:
-            await self._handle_raffle_screenshot(peer_id, vk_id, message)
-            return
+        if not cmd:
+            kind = self._resolve_raffle_screenshot_kind(vk_id)
+            if kind:
+                await self._handle_raffle_screenshot(peer_id, vk_id, message)
+                return
+            # VK часто шлёт альбом отдельными message_new — после первого скрина
+            # остальные в окне 8с просто игнорируем (уже ответили / на модерации).
+            if vk_raffle.count_image_attachments(message) > 0:
+                last_burst = self._raffle_photo_burst.get(int(vk_id)) or 0.0
+                if time.monotonic() - last_burst < 8.0:
+                    return
 
         # Запуск розыгрыша по ссылке: ?ref=standup_rozygr (или слово «розыгрыш»).
         ref = str(message.get("ref") or payload.get("ref") or "").strip().casefold()
@@ -1752,31 +1761,32 @@ class VKBotApp:
             return True
 
         if cmd == "rz_post":
-            self.raffle_sessions[vk_id] = {"kind": "post", "screen_requested": False}
+            self._arm_raffle_screenshot(vk_id, "post")
             self._track(vk_id, EVENT_RAFFLE_BRANCH, props={"kind": "post"})
             await self._send_text(
                 peer_id,
                 vk_raffle.POST_TEXT,
-                keyboard=vk_raffle.post_keyboard(),
+                keyboard=None,
                 attachment=self._random_cover_attachment(),
+            )
+            await self._send_text(
+                peer_id,
+                "Супер, кидай сюда скрин поста (одним фото) 👇",
             )
             return True
 
         if cmd == "rz_review":
-            self.raffle_sessions[vk_id] = {"kind": "review", "screen_requested": False}
+            self._arm_raffle_screenshot(vk_id, "review")
             self._track(vk_id, EVENT_RAFFLE_BRANCH, props={"kind": "review"})
             await self._send_raffle_review(peer_id)
-            return True
-
-        if cmd == "rz_post_cross":
-            self._arm_raffle_screenshot(vk_id, "post")
             await self._send_text(
                 peer_id,
-                "Спасибо, но ждём скрин поста (одним фото) 😉 Кидай ниже 👇",
+                "Супер, кидай сюда скрин отзыва (одним фото) 👇",
             )
             return True
 
-        if cmd == "rz_post_screen":
+        # Старые кнопки «крест/скрин» — на случай старых сообщений в чате.
+        if cmd in {"rz_post_cross", "rz_post_screen"}:
             self._arm_raffle_screenshot(vk_id, "post")
             await self._send_text(peer_id, "Супер, кидай сюда скрин (одним фото) 👇")
             return True
@@ -1789,10 +1799,37 @@ class VKBotApp:
         return False
 
     def _arm_raffle_screenshot(self, vk_id: int, kind: str) -> None:
+        from bot.db.crud import ensure_raffle_tables, set_raffle_vk_awaiting_screenshot
+
+        ensure_raffle_tables()
+        set_raffle_vk_awaiting_screenshot(int(vk_id), kind)
         self.raffle_sessions[int(vk_id)] = {
             "kind": kind,
             "screen_requested": True,
         }
+
+    def _clear_raffle_screenshot_wait(self, vk_id: int) -> None:
+        from bot.db.crud import clear_raffle_vk_awaiting_screenshot
+
+        self.raffle_sessions.pop(int(vk_id), None)
+        clear_raffle_vk_awaiting_screenshot(int(vk_id))
+
+    def _resolve_raffle_screenshot_kind(self, vk_id: int) -> str | None:
+        """kind из памяти или БД (после отказа модератором / рестарта VK-бота)."""
+        from bot.db.crud import get_raffle_vk_awaiting_screenshot
+
+        session = self.raffle_sessions.get(int(vk_id)) or {}
+        kind = session.get("kind") if session.get("screen_requested") else None
+        if kind in {"post", "review"}:
+            return kind
+        kind = get_raffle_vk_awaiting_screenshot(int(vk_id))
+        if kind in {"post", "review"}:
+            self.raffle_sessions[int(vk_id)] = {
+                "kind": kind,
+                "screen_requested": True,
+            }
+            return kind
+        return None
 
     async def _send_raffle_dates(
         self,
@@ -1934,7 +1971,7 @@ class VKBotApp:
                 keyboard=vk_raffle.blocked_keyboard(booking_id),
             )
             return
-        self.raffle_sessions.pop(int(vk_id), None)
+        self._clear_raffle_screenshot_wait(vk_id)
         await self._send_text(
             peer_id,
             vk_raffle.start_text(self.settings.community_link),
@@ -1952,14 +1989,14 @@ class VKBotApp:
             await self._send_text(
                 peer_id,
                 vk_raffle.REVIEW_TEXT,
-                keyboard=vk_raffle.review_keyboard(),
+                keyboard=None,
                 attachment=",".join(attachments),
             )
             return
         await self._send_text(
             peer_id,
             vk_raffle.REVIEW_TEXT,
-            keyboard=vk_raffle.review_keyboard(),
+            keyboard=None,
         )
 
     async def _handle_raffle_screenshot(
@@ -1978,10 +2015,9 @@ class VKBotApp:
         )
         from bot.handlers.rozygrysh import _send_to_moderation
 
-        session = self.raffle_sessions.get(int(vk_id)) or {}
-        kind = session.get("kind")
+        kind = self._resolve_raffle_screenshot_kind(vk_id)
         if kind not in {"post", "review"}:
-            self.raffle_sessions.pop(int(vk_id), None)
+            self._clear_raffle_screenshot_wait(vk_id)
             return
 
         url, ref = vk_raffle.extract_photo_from_message(message)
@@ -2002,18 +2038,31 @@ class VKBotApp:
                 await self._send_text(peer_id, vk_raffle.NOT_IMAGE_TEXT)
             return
 
+        # Несколько сообщений с фото подряд (VK часто шлёт альбом отдельными message_new).
+        now = time.monotonic()
+        last_burst = self._raffle_photo_burst.get(int(vk_id)) or 0.0
+        if now - last_burst < 8.0:
+            text = (
+                vk_raffle.ALBUM_TEXT_REVIEW
+                if kind == "review"
+                else vk_raffle.ALBUM_TEXT_POST
+            )
+            await self._send_text(peer_id, text)
+            return
+        self._raffle_photo_burst[int(vk_id)] = now
+
         ensure_raffle_tables()
         pending = get_pending_raffle_submission(vk_id=vk_id)
         if pending:
             if not pending[4]:
                 cancel_raffle_submission(pending[0], reason="stale_undelivered")
             else:
-                self.raffle_sessions.pop(int(vk_id), None)
+                self._clear_raffle_screenshot_wait(vk_id)
                 await self._send_text(peer_id, vk_raffle.PENDING_SCREEN_TEXT)
                 return
 
         # Сразу снимаем ожидание — повтор/гонка не отправят второй скрин.
-        self.raffle_sessions.pop(int(vk_id), None)
+        self._clear_raffle_screenshot_wait(vk_id)
 
         try:
             image_bytes = await vk_raffle.download_screenshot_bytes(url)
@@ -2023,16 +2072,21 @@ class VKBotApp:
             await self._send_text(
                 peer_id,
                 "Не удалось скачать скрин. Пришли фото ещё раз 👇",
-                keyboard=vk_raffle.retry_screenshot_keyboard(kind),
             )
             return
+
+        try:
+            full_name = await self.client.get_user_display_name(vk_id) or "Гость"
+        except Exception:
+            logger.exception("Failed to load VK name for raffle vk_id=%s", vk_id)
+            full_name = "Гость"
 
         photo_ref = ref or f"vk_bytes:{vk_id}"
         try:
             submission_id = create_raffle_submission(
                 None,
                 None,
-                "Гость",
+                full_name,
                 kind,
                 photo_ref,
                 vk_id=vk_id,
@@ -2045,7 +2099,6 @@ class VKBotApp:
             await self._send_text(
                 peer_id,
                 "Не удалось отправить скрин на проверку. Попробуй позже или напиши менеджеру.",
-                keyboard=vk_raffle.retry_screenshot_keyboard(kind),
             )
             return
 
@@ -2060,7 +2113,7 @@ class VKBotApp:
             submission_id,
             None,
             None,
-            "Гость",
+            full_name,
             kind,
             photo,
             vk_id=vk_id,
@@ -2073,8 +2126,7 @@ class VKBotApp:
         self._arm_raffle_screenshot(vk_id, kind)
         await self._send_text(
             peer_id,
-            "Не удалось отправить скрин менеджеру 😔\nПопробуй ещё раз через кнопку ниже.",
-            keyboard=vk_raffle.retry_screenshot_keyboard(kind),
+            "Не удалось отправить скрин менеджеру 😔\nПришли скрин ещё раз одним фото.",
         )
 
     async def _handle_unknown_free_text(self, peer_id: int, vk_id: int, text: str) -> None:
