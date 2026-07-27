@@ -39,7 +39,7 @@ from bot.vk import my_bookings as vk_mb
 from bot.vk.client import VKClient
 from bot.vk.config import VKSettings
 from bot.vk.formatting import format_vk_text
-from bot.vk.keyboards import VKKeyboardBuilder
+from bot.vk.keyboards import VKKeyboardBuilder, empty_keyboard
 from bot.vk.media import VKRemoteImageCache, VKSystemImageCache, resolve_image_attachment
 
 logger = logging.getLogger(__name__)
@@ -274,7 +274,7 @@ def _best_carousel_keyboard(
     payment_url: str = "",
     manager_link: str = "",
 ) -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     if payment_url:
         kb.button("Купить билет", link=payment_url, color="primary")
     else:
@@ -405,6 +405,28 @@ class VKBotApp:
         if len(bucket) > 6:
             self.peer_nav_message_ids[peer] = bucket[-6:]
 
+    async def _clear_reply_keyboard(self, peer_id: int) -> None:
+        """Убирает нижнюю (не inline) клавиатуру, чтобы у карточки не двоились кнопки."""
+        try:
+            mid = await self.client.send_message(
+                peer_id,
+                "\u2060",
+                keyboard=empty_keyboard(),
+            )
+            if mid:
+                await self.client.delete_messages(peer_id, [int(mid)])
+        except Exception:
+            logger.exception("Failed to clear VK reply keyboard peer_id=%s", peer_id)
+
+    def _keyboard_is_inline(self, keyboard: str | None) -> bool:
+        if not keyboard:
+            return False
+        try:
+            data = json.loads(keyboard)
+        except (TypeError, json.JSONDecodeError):
+            return False
+        return bool(isinstance(data, dict) and data.get("inline"))
+
     async def _send_text(
         self,
         peer_id: int,
@@ -416,6 +438,8 @@ class VKBotApp:
     ) -> int | None:
         if replace_nav:
             await self._delete_nav(peer_id)
+        if self._keyboard_is_inline(keyboard):
+            await self._clear_reply_keyboard(peer_id)
         message_id: int | None = None
         try:
             message_id = await self.client.send_message(
@@ -1392,7 +1416,7 @@ class VKBotApp:
                 "location": event.get("location"),
             },
         )
-        kb = VKKeyboardBuilder()
+        kb = VKKeyboardBuilder(inline=True)
         kb.button("Забронировать", _payload("check_booking_start", event_id=event["id"]), color="primary")
         kb.button("Правила бронирования", _payload("booking_rules", event_id=event["id"]))
         kb.button("Назад к датам", _payload("check"))
@@ -1554,7 +1578,7 @@ class VKBotApp:
                 "has_payment": bool(payment_url),
             },
         )
-        kb = VKKeyboardBuilder()
+        kb = VKKeyboardBuilder(inline=True)
         if payment_url:
             kb.button("Купить билет", link=payment_url)
         else:
@@ -1637,7 +1661,7 @@ class VKBotApp:
                 "has_payment": bool(payment_url),
             },
         )
-        kb = VKKeyboardBuilder()
+        kb = VKKeyboardBuilder(inline=True)
         if payment_url:
             kb.button("Купить билет", link=payment_url)
         else:
