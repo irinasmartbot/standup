@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 import time
 from datetime import datetime
 from pathlib import Path
@@ -47,6 +48,8 @@ logger = logging.getLogger(__name__)
 
 DATES_PAGE_SIZE = 6
 VK_CHANNEL = "vkontakte"
+# Как в TG: не крутим в рандоме карточки площадок / хитлото / билет / отзывы.
+_EXCLUDED_RANDOM_COVER_KEYS = frozenset({"temple_bar", "escobar", "nebar", "hitloto_start"})
 
 WELCOME_TEXT = format_vk_text(TG_WELCOME_TEXT)
 FORMATS_TEXT = format_vk_text(TG_FORMATS_TEXT)
@@ -351,6 +354,24 @@ class VKBotApp:
                 return attachment
         return None
 
+    def _random_cover_attachment(self) -> str | None:
+        """Случайная обложка шоу (как в TG). Не трогает площадки / хитлото / билет."""
+        pool: list[str] = []
+        for img in self.images.all():
+            key = (img.key or "").strip().lower()
+            if not key or not img.attachment:
+                continue
+            if key in _EXCLUDED_RANDOM_COVER_KEYS:
+                continue
+            if key.startswith("hitloto") or key.startswith("rozygrysh_otzyv"):
+                continue
+            if "ticket" in key:
+                continue
+            pool.append(img.attachment)
+        if pool:
+            return random.choice(pool)
+        return self._cover_attachment("show_cover")
+
     async def _event_poster_attachment(self, peer_id: int, event: dict[str, Any]) -> str | None:
         poster = await resolve_image_attachment(
             self.client,
@@ -360,7 +381,7 @@ class VKBotApp:
         )
         if poster:
             return poster
-        return self._cover_attachment("show_cover", "hitloto_start")
+        return self._random_cover_attachment() or self._cover_attachment("hitloto_start")
 
     def _queue_delete(self, peer_id: int, *message_ids: Any) -> None:
         bucket = self._pending_delete_ids.setdefault(int(peer_id), [])
@@ -1394,7 +1415,7 @@ class VKBotApp:
                     dates_label="📅 Выбрать по дате",
                     venues_label="📍 Выбор по площадке",
                 ),
-                attachment=self._cover_attachment("show_cover"),
+                attachment=self._random_cover_attachment(),
             )
             return
         if cmd == "rules":
@@ -1434,7 +1455,7 @@ class VKBotApp:
                         dates_label="📅 Выбрать по дате",
                         venues_label="📍 Выбор по площадке",
                     ),
-                    attachment=self._cover_attachment("show_cover"),
+                    attachment=self._random_cover_attachment(),
                 )
                 return
             await self._send_check_dates(peer_id, page, edit="page" in payload)
@@ -1480,7 +1501,7 @@ class VKBotApp:
                         dates_label="📅 Выбрать по дате",
                         venues_label="📍 Выбор по локации",
                     ),
-                    attachment=self._cover_attachment("show_cover"),
+                    attachment=self._random_cover_attachment(),
                 )
                 return
             await self._send_best_dates(peer_id, page, edit="page" in payload)
@@ -1598,7 +1619,7 @@ class VKBotApp:
             peer_id,
             "Проверка материала. Выбирай дату:",
             keyboard=keyboard,
-            attachment=self._cover_attachment("show_cover"),
+            attachment=self._random_cover_attachment(),
             edit=edit,
         )
         logger.info("Sent check dates: %s items page=%s", len(dates), page)
@@ -1614,7 +1635,7 @@ class VKBotApp:
             peer_id,
             "Выбирай площадку:",
             keyboard=_venues_keyboard(venues, "check_venue", "check"),
-            attachment=self._cover_attachment("show_cover"),
+            attachment=self._random_cover_attachment(),
         )
         self._track(peer_id, EVENT_BROWSE_VENUES, props={"format": "proverka"})
 
@@ -1634,7 +1655,7 @@ class VKBotApp:
             peer_id,
             f"Мероприятия в {venue}",
             keyboard=_venue_dates_keyboard(dates, "check_venue_date", venue, "check_venues"),
-            attachment=self._cover_attachment("show_cover"),
+            attachment=self._random_cover_attachment(),
         )
 
     async def _send_check_venue_date(
@@ -1664,7 +1685,7 @@ class VKBotApp:
             peer_id,
             f"Шоу на {_date_label(date)}:",
             keyboard=_events_keyboard(events, "check_event", "check_venue", venue=venue),
-            attachment=self._cover_attachment("show_cover"),
+            attachment=self._random_cover_attachment(),
         )
 
     async def _send_check_date(self, peer_id: int, date: str, *, vk_id: int | None = None) -> None:
@@ -1679,7 +1700,7 @@ class VKBotApp:
             peer_id,
             f"Шоу на {_date_label(date)}:",
             keyboard=_events_keyboard(events, "check_event", "check"),
-            attachment=self._cover_attachment("show_cover"),
+            attachment=self._random_cover_attachment(),
         )
 
     async def _send_check_event(self, peer_id: int, event_id: Any, *, vk_id: int | None = None) -> None:
@@ -1745,7 +1766,7 @@ class VKBotApp:
             peer_id,
             "StandUp BEST. Выбирай дату:",
             keyboard=keyboard,
-            attachment=self._cover_attachment("show_cover"),
+            attachment=self._random_cover_attachment(),
             edit=edit,
         )
         logger.info("Sent BEST dates: %s items page=%s", len(dates), page)
@@ -1762,7 +1783,7 @@ class VKBotApp:
             peer_id,
             "BEST: выбирай площадку:",
             keyboard=_venues_keyboard(venues, "best_venue", "best"),
-            attachment=self._cover_attachment("show_cover"),
+            attachment=self._random_cover_attachment(),
         )
         self._track(peer_id, EVENT_BROWSE_VENUES, props={"format": "best"})
 
@@ -1875,7 +1896,7 @@ class VKBotApp:
             peer_id,
             f"BEST на {_date_label(date)}:",
             keyboard=_events_keyboard(events, "best_event", "best"),
-            attachment=self._cover_attachment("show_cover"),
+            attachment=self._random_cover_attachment(),
         )
 
     async def _send_best_event(self, peer_id: int, event_id: Any, *, vk_id: int | None = None) -> None:

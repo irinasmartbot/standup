@@ -7,6 +7,7 @@ from pathlib import Path
 
 import aiohttp
 
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from bot.vk.client import VKClient
@@ -24,6 +25,7 @@ def _connector() -> aiohttp.TCPConnector:
         return aiohttp.TCPConnector()
 
 
+# Always keep these keyed uploads (venues / hitloto / reviews / legacy cover).
 DEFAULT_IMAGE_NAMES = [
     "temple_bar.jpg",
     "escobar.jpg",
@@ -33,10 +35,18 @@ DEFAULT_IMAGE_NAMES = [
     "rozygrysh_otzyv_2.jpg",
 ]
 
-# Extra default uploads with explicit cache keys (filename stem may differ).
 DEFAULT_IMAGE_KEYS = {
     "show_cover": "фото/IMG_20220511_201818.jpg",
 }
+
+# Same exclusions as TG random covers: venues, ticket, hitloto, reviews.
+_EXCLUDED_RANDOM_NAMES = {
+    "temple_bar.jpg",
+    "escobar.jpg",
+    "nebar.jpg",
+    "ticket_template.jpg",
+}
+_MAX_RANDOM_PHOTO_SIZE = 10 * 1024 * 1024
 
 
 def _project_root() -> Path:
@@ -59,6 +69,24 @@ def _attachment_from_saved_photo(photo: dict) -> str:
     if access_key:
         attachment += f"_{access_key}"
     return attachment
+
+
+def _is_random_cover_candidate(path: Path) -> bool:
+    name = path.name.lower()
+    if path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+        return False
+    if name in _EXCLUDED_RANDOM_NAMES:
+        return False
+    if name.startswith("hitloto") or name.startswith("rozygrysh_otzyv"):
+        return False
+    if "ticket" in name:
+        return False
+    try:
+        if path.stat().st_size > _MAX_RANDOM_PHOTO_SIZE:
+            return False
+    except OSError:
+        return False
+    return True
 
 
 async def upload_image(client: VKClient, peer_id: int, path: Path) -> str:
@@ -96,6 +124,15 @@ def collect_images(args) -> list[tuple[str, Path]]:
         photos_dir = root / args.photos_dir
         items = [(Path(name).stem, photos_dir / name) for name in DEFAULT_IMAGE_NAMES]
         items.extend((key, Path(path)) for key, path in DEFAULT_IMAGE_KEYS.items())
+        # All other show photos → random cover pool (key = filename stem).
+        if photos_dir.is_dir():
+            known = {path.resolve() for _, path in items if path.exists()}
+            for path in sorted(photos_dir.iterdir()):
+                if not path.is_file() or not _is_random_cover_candidate(path):
+                    continue
+                if path.resolve() in known:
+                    continue
+                items.append((path.stem, path))
 
     result = []
     for key, path in items:
