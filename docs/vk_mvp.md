@@ -71,15 +71,16 @@ git push -u origin vk-mvp
 
 ### 2. На сервере — отдельная папка
 
+Быстрый вариант (рекомендуется):
+
 ```bash
-git clone https://github.com/irinasmartbot/standup.git /home/standup/vk-app
-cd /home/standup/vk-app
-git checkout vk-mvp
-python3 -m venv venv
-./venv/bin/pip install -r requirements.txt
+cd /home/standup
+# после git pull vk-mvp в локальной копии или:
+curl -fsSL https://raw.githubusercontent.com/irinasmartbot/standup/vk-mvp/scripts/bootstrap_vk_server.sh -o /tmp/bootstrap_vk_server.sh
+bash /tmp/bootstrap_vk_server.sh
 ```
 
-Скопировать `.env` с основного приложения (тот же `DATABASE_URL`) и добавить VK-переменные:
+Или вручную:
 
 ```bash
 cp /home/standup/app/.env /home/standup/vk-app/.env
