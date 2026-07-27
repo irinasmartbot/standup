@@ -30,7 +30,13 @@ def sync_sources(database_url, sources):
 
 def main():
     load_env_file()
-    parser = argparse.ArgumentParser(description="Sync Google Sheets events into PostgreSQL every hour.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "DEPRECATED: Google Sheets → PostgreSQL sync. "
+            "Afisha is managed in admin «Мероприятия». "
+            "This script exits unless --force is passed."
+        )
+    )
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--csv-url", default=os.getenv("CSV_URL", DEFAULT_CSV_URL))
     parser.add_argument("--best-csv-url", default=os.getenv("BEST_CSV_URL", DEFAULT_BEST_CSV_URL))
@@ -38,7 +44,18 @@ def main():
     parser.add_argument("--format", default="proverka", choices=["proverka", "1plus1", "best", "masterclass", "hitloto"])
     parser.add_argument("--source-sheet", default="Проверка материала")
     parser.add_argument("--interval-seconds", type=int, default=3600)
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run sync anyway (emergency only; overwrites admin edits).",
+    )
     args = parser.parse_args()
+
+    if not args.force:
+        raise SystemExit(
+            "Sheets sync disabled: edit afisha in admin tab «Мероприятия». "
+            "Pass --force only for emergency one-off import."
+        )
 
     if not args.database_url:
         raise SystemExit("DATABASE_URL is not set. Add it to .env or pass --database-url.")

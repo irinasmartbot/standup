@@ -1,6 +1,8 @@
 import os
 import random
 from datetime import datetime
+from html import escape
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, FSInputFile, BufferedInputFile
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
@@ -9,6 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import bot, MANAGER_LINK, CHANNEL_LINK, MANAGER_PHONE, TICKET_TEMPLATE
+from bot.db.analytics import EVENT_BRANCH_PROVERKA, EVENT_SHOW_CARD, browse_mode_from_callback, track_event
 from bot.db.crud import (
     get_booking, get_active_booking_by_id, get_booking_by_id, create_booking,
     update_booking_status, update_booking_guests, get_total_guests,
@@ -17,8 +20,15 @@ from bot.db.crud import (
 )
 from bot.services.sheets import load_events, get_event
 from bot.utils.bot_commands import refresh_user_commands
+from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
+from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
 from bot.utils.ticket import format_date, guests_word, generate_ticket, MONTHS, now_msk, parse_event_datetime
-from bot.utils.nav_messages import remember_booking_nav, forget_booking_nav, delete_booking_nav
+from bot.utils.nav_messages import (
+    remember_booking_nav,
+    forget_booking_nav,
+    delete_booking_nav,
+    delete_my_bookings_messages,
+)
 
 router = Router()
 
@@ -28,7 +38,7 @@ _TICKET_IN_PROGRESS: set[int] = set()
 # Корень проекта — два уровня выше bot/handlers/booking.py
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
-WELCOME_MARKER = "Здесь ты сможешь узнать о нас побольше и забронировать места:"
+WELCOME_MARKER = "Мы делаем шоу в различных заведениях в центре Москвы каждый день"
 VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
 MAX_RANDOM_PHOTO_SIZE = 10 * 1024 * 1024
 
@@ -180,7 +190,20 @@ async def check_dates_kb():
     return kb.as_markup()
 
 
-async def send_event_card(message, event, back_callback="check_dates"):
+async def send_event_card(message, event, back_callback="check_dates", *, telegram_id=None):
+    if telegram_id:
+        track_event(
+            EVENT_SHOW_CARD,
+            telegram_id=telegram_id,
+            event_id=event.get("id"),
+            props={
+                "format": "proverka",
+                "browse": browse_mode_from_callback(back_callback),
+                "date": event.get("date"),
+                "time": event.get("time"),
+                "location": event.get("location"),
+            },
+        )
     date_str = format_date(event["date"])
     text = f"{date_str}\n{event['weekday']}\n\n{event['time']}\n{event['address']}\n{event['description']}"
     kb = InlineKeyboardBuilder()
@@ -194,22 +217,28 @@ async def send_event_card(message, event, back_callback="check_dates"):
         await message.answer(text, reply_markup=kb.as_markup())
 
 
-@router.callback_query(lambda c: c.data == "check")
-async def check_format(call: CallbackQuery):
-    await _delete_previous_menu_message(call)
+async def check_format_entry(message):
+    """Экран бесплатной брони: Проверка материала (дата / площадка)."""
+    track_event(EVENT_BRANCH_PROVERKA, telegram_id=message.from_user.id)
     kb = InlineKeyboardBuilder()
     kb.button(text="📅 Выбрать по дате", callback_data="check_dates")
     kb.button(text="📍 Выбор по площадке", callback_data="by_venue")
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     kb.adjust(1)
     await _answer_with_check_photo(
-        call.message,
+        message,
         "Привет! 😊 Я помогу тебе забронировать места на <b>Проверку материала</b> "
         "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇",
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
         track_nav=True,
     )
+
+
+@router.callback_query(lambda c: c.data == "check")
+async def check_format(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    await check_format_entry(call.message)
     await call.answer()
 
 
@@ -251,7 +280,9 @@ async def venue_events(call: CallbackQuery):
         key=lambda x: datetime.strptime(x["date"], "%d.%m.%Y"),
     )
     if len(filtered) == 1:
-        await send_event_card(call.message, filtered[0], back_callback="by_venue")
+        await send_event_card(
+            call.message, filtered[0], back_callback="by_venue", telegram_id=call.from_user.id
+        )
         await call.answer()
         return
 
@@ -290,7 +321,12 @@ async def venue_date_events(call: CallbackQuery):
         await call.answer()
         return
     if len(day_events) == 1:
-        await send_event_card(call.message, day_events[0], back_callback=f"venue_{venue}")
+        await send_event_card(
+            call.message,
+            day_events[0],
+            back_callback=f"venue_{venue}",
+            telegram_id=call.from_user.id,
+        )
         await call.answer()
         return
 
@@ -317,7 +353,7 @@ async def show_event(call: CallbackQuery):
         await call.answer()
         return
     if len(day_events) == 1:
-        await send_event_card(call.message, day_events[0])
+        await send_event_card(call.message, day_events[0], telegram_id=call.from_user.id)
     else:
         kb = InlineKeyboardBuilder()
         for e in day_events:
@@ -334,7 +370,7 @@ async def show_specific_event(call: CallbackQuery):
     events = await load_events()
     event = next((e for e in events if e["date"] == event_date and e["time"] == event_time), None)
     if event:
-        await send_event_card(call.message, event)
+        await send_event_card(call.message, event, telegram_id=call.from_user.id)
     await call.answer()
 
 
@@ -351,7 +387,9 @@ async def show_specific_venue_event(call: CallbackQuery):
         None,
     )
     if event:
-        await send_event_card(call.message, event, back_callback=f"venue_{venue}")
+        await send_event_card(
+            call.message, event, back_callback=f"venue_{venue}", telegram_id=call.from_user.id
+        )
     await call.answer()
 
 
@@ -398,6 +436,10 @@ async def start_booking(call: CallbackQuery, state: FSMContext):
         name += f" {call.from_user.last_name}"
     await state.update_data(name=name)
 
+    same_day_alert = same_day_booking_warning(
+        call.from_user.id, event_date, exclude_time=event_time, for_alert=True
+    )
+
     kb = InlineKeyboardBuilder()
     kb.button(text="Все верно 👌", callback_data="name_confirm")
     kb.button(text="Изменить", callback_data="name_change")
@@ -407,7 +449,10 @@ async def start_booking(call: CallbackQuery, state: FSMContext):
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
     )
-    await call.answer()
+    if same_day_alert:
+        await call.answer(same_day_alert, show_alert=True)
+    else:
+        await call.answer()
 
 
 def _phone_kb():
@@ -422,7 +467,7 @@ def _phone_kb():
 
 @router.callback_query(lambda c: c.data == "name_confirm")
 async def name_confirmed(call: CallbackQuery, state: FSMContext):
-    saved_phone = get_last_phone(call.from_user.id)
+    saved_phone = normalize_phone(get_last_phone(call.from_user.id))
     if saved_phone:
         await state.update_data(phone=saved_phone)
         kb = InlineKeyboardBuilder()
@@ -454,9 +499,7 @@ async def process_name(message: Message, state: FSMContext):
     await state.set_state(BookingState.waiting_phone)
 
 
-@router.message(BookingState.waiting_phone, F.contact)
-async def process_phone_contact(message: Message, state: FSMContext):
-    await state.update_data(phone=message.contact.phone_number)
+async def _ask_guests_after_phone(message: Message, state: FSMContext):
     data = await state.get_data()
     await message.answer(
         f"{data.get('name', '')}, напишите пожалуйста цифрой, на какое количество человек бронируете?\n\n"
@@ -465,32 +508,40 @@ async def process_phone_contact(message: Message, state: FSMContext):
         parse_mode="HTML",
     )
     await state.set_state(BookingState.waiting_guests)
+
+
+@router.message(BookingState.waiting_phone, F.contact)
+async def process_phone_contact(message: Message, state: FSMContext):
+    phone = normalize_phone(message.contact.phone_number) or (message.contact.phone_number or "").strip()
+    await state.update_data(phone=phone)
+    await _ask_guests_after_phone(message, state)
 
 
 @router.message(BookingState.waiting_phone)
 async def process_phone_text(message: Message, state: FSMContext):
-    await state.update_data(phone=message.text)
-    data = await state.get_data()
-    await message.answer(
-        f"{data.get('name', '')}, напишите пожалуйста цифрой, на какое количество человек бронируете?\n\n"
-        f"<b>Внимание, бронь на один билет максимум 4 человека</b>",
-        reply_markup=ReplyKeyboardRemove(),
-        parse_mode="HTML",
-    )
-    await state.set_state(BookingState.waiting_guests)
+    phone = normalize_phone(message.text)
+    if not phone:
+        await message.answer(PHONE_INVALID_TEXT, reply_markup=_phone_kb(), parse_mode="HTML")
+        return
+    await state.update_data(phone=phone)
+    await _ask_guests_after_phone(message, state)
 
 
 @router.callback_query(lambda c: c.data == "phone_use_saved")
 async def phone_use_saved(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    name = data.get("name", "")
-    await call.message.answer(
-        f"{name}, напишите пожалуйста цифрой, на какое количество человек бронируете?\n\n"
-        f"<b>Внимание, бронь на один билет максимум 4 человека</b>",
-        reply_markup=ReplyKeyboardRemove(),
-        parse_mode="HTML",
-    )
-    await state.set_state(BookingState.waiting_guests)
+    phone = normalize_phone(data.get("phone"))
+    if not phone:
+        await call.message.answer(
+            PHONE_INVALID_TEXT,
+            reply_markup=_phone_kb(),
+            parse_mode="HTML",
+        )
+        await state.set_state(BookingState.waiting_phone)
+        await call.answer()
+        return
+    await state.update_data(phone=phone)
+    await _ask_guests_after_phone(call.message, state)
     await call.answer()
 
 
@@ -560,15 +611,19 @@ async def process_guests(message: Message, state: FSMContext):
     kb.button(text="📢 Заглянуть на наш канал анонсов", url=CHANNEL_LINK)
     kb.adjust(1)
 
+    location_line = f"📍 Локация {event_location}, {event_address}".strip(", ")
+    weekday = (event or {}).get("weekday") or ""
+    weekday_part = f" ({weekday})" if weekday else ""
     if days_until <= 1:
         text = (
-            f"Отлично! Мы внесли Вас в списки гостей:\n\n"
-            f"<b>Дата:</b> {date_str} ({event['weekday'] if event else ''})\n"
-            f"<b>Время:</b> {event_time}\n"
-            f"<b>Локация:</b> {event_address}\n"
-            f"<b>Количество гостей:</b> {guests} чел.\n\n"
-            f"<b>❗ Важная информация — для того чтобы мы окончательно закрепили за Вами место ОБЯЗАТЕЛЬНО подтвердите бронь, нажав на кнопку «Получить билет»</b>\n\n"
-            f"<b>❗ Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.</b>"
+            f"Отлично!\n\n"
+            f"❗ <b>Важная информация</b> — для того чтобы мы окончательно закрепили за Вами место "
+            f"на дату и время:\n"
+            f"<b>Дата:</b> {date_str}{weekday_part}\n"
+            f"<b>Время:</b> {event_time}\n\n"
+            f"<b>ОБЯЗАТЕЛЬНО подтвердите бронь, нажав на кнопку «Получить билет»</b>\n\n"
+            f"❗ Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.\n\n"
+            f"{reminder_details_cut(event_time=event_time, location_line=location_line, guests=guests)}"
         )
     else:
         text = (
@@ -627,21 +682,25 @@ async def get_ticket(call: CallbackQuery):
                 await call.answer()
                 return
 
-        date_str = format_date(event_date)
         short_address = f"{event_location}, {event_address.split(',')[1] if ',' in event_address else event_address}"
+        place = f"{event_location}, {event_address}".strip(", ") if event_location else (event_address or "")
         ticket_buf = generate_ticket(name, event_date, event_time, short_address, guests)
         update_booking_status(booking_id, "confirmed")
 
         caption = (
+            "Отлично!\n\n"
+            "<b>Данные по билету:</b>\n\n"
+            f"<b>Ваше имя:</b> {escape(name or '')}\n"
+            f"<b>Дата:</b> {escape(event_date or '')}\n"
+            f"<b>Время:</b> {escape(event_time or '')}\n"
+            f"<b>Место:</b> {escape(place)}\n"
+            f"<b>Количество гостей:</b> {guests_word(guests)}\n\n"
             "Ждем вас на мероприятии ❤️\n\n"
-            "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
-            "чтобы вас посадили вместе — напишите менеджеру, мы поможем с рассадкой.\n"
-            "<u>В противном случае вы будете сидеть на месте, которое предложит администратор рассадки.</u>\n\n"
             "Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
-            f"При возникновении вопросов — можно писать менеджеру @ccoverr "
-            f"(если срочно — звоните {MANAGER_PHONE})\n\n"
+            f"При возникновении вопросов - можно писать менеджеру @ccoverr "
+            f"(если срочно - звоните {MANAGER_PHONE})\n\n"
             f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
-            "(там часто дарят бесплатные билеты на платные шоу 😉)"
+            "(там часто дарят бесплатные билеты на платные шоу😉)"
         )
         ticket_msg = await call.message.answer_photo(
             photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
@@ -701,29 +760,16 @@ async def cancel_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
-    await _delete_previous_menu_message(call)
-    bookings = get_active_bookings_by_user(call.from_user.id)
-
-    if len(bookings) > 1:
-        kb = InlineKeyboardBuilder()
-        for b in bookings:
-            label = f"❌ {format_date(b[5])} {b[6]}"
-            kb.button(text=label, callback_data=f"cancel_select_{b[0]}")
-        kb.adjust(1)
-        await call.message.answer(
-            _multi_booking_text(bookings, "Уточните, какую бронь вы бы хотели отменить?"),
-            reply_markup=kb.as_markup(),
-        )
-    else:
-        date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
-        kb = InlineKeyboardBuilder()
-        kb.button(text="Подтверждаю", callback_data=f"cancel_do_{booking_id}")
-        kb.adjust(1)
-        await call.message.answer(
-            f"Для подтверждения отмены брони на <b>{date_label}</b> нажмите кнопку ниже",
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML",
-        )
+    # Карточку /my_bookings не удаляем — подтверждение отдельным сообщением
+    date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Подтверждаю", callback_data=f"cancel_do_{booking_id}")
+    kb.adjust(1)
+    await call.message.answer(
+        f"Для подтверждения отмены брони на <b>{date_label}</b> нажмите кнопку ниже",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
     await call.answer()
 
 
@@ -777,6 +823,7 @@ async def cancel_do(call: CallbackQuery):
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
     await refresh_user_commands(call.message.bot, call.from_user.id)
+    await delete_my_bookings_messages(call.message.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="Перейти в главное меню", callback_data="main_menu")
@@ -801,6 +848,7 @@ async def change_date_do(call: CallbackQuery):
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
     await refresh_user_commands(call.message.bot, call.from_user.id)
+    await delete_my_bookings_messages(call.message.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     await call.message.answer("Бронь отменена. Выбери новую дату 👇", reply_markup=await check_dates_kb())
     await call.answer()
@@ -816,29 +864,16 @@ async def change_date_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
-    await _delete_previous_menu_message(call)
-    bookings = get_active_bookings_by_user(call.from_user.id)
-
-    if len(bookings) > 1:
-        kb = InlineKeyboardBuilder()
-        for b in bookings:
-            label = f"📅 {format_date(b[5])} {b[6]}"
-            kb.button(text=label, callback_data=f"change_date_select_{b[0]}")
-        kb.adjust(1)
-        await call.message.answer(
-            _multi_booking_text(bookings, "Уточните, на какую бронь хотели бы изменить дату?"),
-            reply_markup=kb.as_markup(),
-        )
-    else:
-        date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
-        kb = InlineKeyboardBuilder()
-        kb.button(text="Подтверждаю", callback_data=f"change_date_do_{booking_id}")
-        kb.adjust(1)
-        await call.message.answer(
-            f"Для подтверждения изменения даты брони на <b>{date_label}</b> нажмите кнопку ниже",
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML",
-        )
+    # Карточку /my_bookings не удаляем — подтверждение отдельным сообщением
+    date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Подтверждаю", callback_data=f"change_date_do_{booking_id}")
+    kb.adjust(1)
+    await call.message.answer(
+        f"Для подтверждения изменения даты брони на <b>{date_label}</b> нажмите кнопку ниже",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
     await call.answer()
 
 
@@ -893,28 +928,16 @@ async def change_guests_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
-    bookings = get_active_bookings_by_user(call.from_user.id)
-
-    if len(bookings) > 1:
-        kb = InlineKeyboardBuilder()
-        for b in bookings:
-            label = f"👥 {format_date(b[5])} {b[6]}"
-            kb.button(text=label, callback_data=f"change_guests_select_{b[0]}")
-        kb.adjust(1)
-        await call.message.answer(
-            _multi_booking_text(bookings, "Уточните, на какой брони меняем количество гостей?"),
-            reply_markup=kb.as_markup(),
-        )
-    else:
-        date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
-        kb = InlineKeyboardBuilder()
-        kb.button(text="Подтверждаю", callback_data=f"change_guests_do_{booking_id}")
-        kb.adjust(1)
-        await call.message.answer(
-            f"Для подтверждения изменения количества гостей на бронь <b>{date_label}</b> нажмите кнопку ниже 👇",
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML",
-        )
+    # Карточку /my_bookings не удаляем — подтверждение отдельным сообщением
+    date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Подтверждаю", callback_data=f"change_guests_do_{booking_id}")
+    kb.adjust(1)
+    await call.message.answer(
+        f"Для подтверждения изменения количества гостей на бронь <b>{date_label}</b> нажмите кнопку ниже 👇",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
     await call.answer()
 
 
@@ -1022,11 +1045,20 @@ async def process_new_guests(message: Message, state: FSMContext):
 @router.message(F.chat.type == "private")
 async def unknown_message(message: Message, state: FSMContext):
     # Только личка: в группах/чате модерации бот не отвечает на произвольный текст
-    # Картинки не должны вызывать главное меню (скрин розыгрыша и т.п.)
+    # Картинки не обрабатываем (скрин розыгрыша и т.п.)
     if message.photo or (
         message.document and (message.document.mime_type or "").startswith("image/")
     ):
         return
-    if await state.get_state() is None:
-        from bot.handlers.start import main_menu_kb
-        await message.answer("Пожалуйста, выбери вариант из кнопок ниже 👇", reply_markup=main_menu_kb())
+    if await state.get_state() is not None:
+        return
+
+    from bot.handlers.start import _is_meaningful_free_text, submit_help_question
+
+    text = message.text or message.caption or ""
+    # Короткий спам / абракадабра — молчим и меню не показываем
+    if not _is_meaningful_free_text(text):
+        return
+
+    # Осмысленный текст (≥10 символов) — в тот же чат, что и вопросы из /help
+    await submit_help_question(message, thank_you=True)

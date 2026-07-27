@@ -28,9 +28,12 @@ jobs:
           cd /home/standup/app
           git fetch origin dev
           git checkout dev
-          git pull --ff-only origin dev
+          # Код на сервере всегда = origin/dev (.env не в git, не затрагивается).
+          # Иначе локальные hotfix'ы на VPS блокируют pull.
+          git reset --hard origin/dev
+          git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc'
           /home/standup/app/venv/bin/python -m pip install -r requirements.txt
-          /home/standup/app/venv/bin/python -c "from bot.db.crud import ensure_help_tables, ensure_raffle_tables; ensure_raffle_tables(); ensure_help_tables()"
+          /home/standup/app/venv/bin/python -c "from bot.db.crud import ensure_help_tables, ensure_raffle_tables; from bot.db.analytics import ensure_analytics_tables; ensure_raffle_tables(); ensure_help_tables(); ensure_analytics_tables()"
           /home/standup/app/venv/bin/python -c "import main"
           /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format proverka --source-sheet "Проверка материала"
           /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format best --source-sheet "StandUp BEST"
@@ -41,9 +44,19 @@ jobs:
             sudo /usr/bin/journalctl -u standup-bot -n 80 --no-pager
             exit 1
           )
-          if sudo /usr/bin/systemctl list-unit-files standup-events-sync.service --no-legend | grep -q standup-events-sync.service; then
-            sudo /usr/bin/systemctl restart standup-events-sync || echo "standup-events-sync restart failed; bot deploy continues"
+          if sudo /usr/bin/systemctl list-unit-files standup-admin.service --no-legend | grep -q standup-admin.service; then
+            sudo /usr/bin/systemctl restart standup-admin
+            sleep 1
+            sudo /usr/bin/systemctl is-active --quiet standup-admin || (
+              sudo /usr/bin/journalctl -u standup-admin -n 80 --no-pager
+              exit 1
+            )
           else
-            echo "standup-events-sync.service not found; skipping restart"
+            echo "standup-admin.service not found; skipping restart"
+          fi
+          if sudo /usr/bin/systemctl list-unit-files standup-events-sync.service --no-legend | grep -q standup-events-sync.service; then
+            sudo /usr/bin/systemctl disable --now standup-events-sync || echo "standup-events-sync stop/disable failed; continuing"
+          else
+            echo "standup-events-sync.service not found; skipping"
           fi
           EOF

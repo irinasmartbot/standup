@@ -41,6 +41,16 @@ from bot.config import (
     bot,
     dp,
 )
+from bot.db.analytics import (
+    EVENT_RAFFLE_APPROVED,
+    EVENT_RAFFLE_BRANCH,
+    EVENT_RAFFLE_ENTER,
+    EVENT_RAFFLE_REJECTED,
+    EVENT_RAFFLE_SCREENSHOT,
+    EVENT_RAFFLE_SUB_FAILED,
+    EVENT_RAFFLE_SUBSCRIBED,
+    track_event,
+)
 from bot.db.crud import (
     clear_raffle_awaiting_screenshot,
     clear_raffle_nav,
@@ -69,7 +79,10 @@ from bot.db.crud import (
     update_raffle_submission_status,
 )
 from bot.services.sheets import load_events
+from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
 from bot.utils.bot_commands import refresh_user_commands
+from bot.utils.nav_messages import delete_my_bookings_messages
+from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
 from bot.utils.ticket import MONTHS, format_date, generate_ticket, guests_word, now_msk, parse_event_datetime
 
 router = Router()
@@ -192,22 +205,24 @@ POST_REJECT_TEXT = (
 
 TICKET_ISSUED_TEXT = (
     "Отлично!\n\n"
-    "Данные по билету:\n\n"
-    "Ваше имя: {name}\n"
-    "Дата: {date}\n"
-    "Время: {time}\n"
-    "Место: {place}\n"
-    "Количество гостей: 1 гость\n\n"
+    "<b>Данные по билету:</b>\n\n"
+    "<b>Ваше имя:</b> {name}\n"
+    "<b>Дата:</b> {date}\n"
+    "<b>Время:</b> {time}\n"
+    "<b>Место:</b> {place}\n"
+    "<b>Количество гостей:</b> 1 гость\n\n"
     "Ждем вас на мероприятии ❤️\n\n"
     "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
     "чтобы вас посадили вместе — нажмите кнопку «Что, если я хочу прийти не один?» "
     "и узнайте информацию.\n"
     "<u>В противном случае вы будете сидеть на месте, которое предложит администратор рассадки.</u>\n\n"
+    "<blockquote expandable>"
     "Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
     f"При возникновении вопросов — можно писать менеджеру {{manager}} "
     f"(если срочно — звоните {MANAGER_PHONE})\n\n"
     f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
     "(там часто дарят бесплатные билеты на платные шоу 😉)"
+    "</blockquote>"
 )
 
 SCREEN_OK_TEXT = (
@@ -399,6 +414,7 @@ async def reset_rozygrysh_cmd(message: Message, state: FSMContext):
 
 async def send_raffle_start(message: Message, state: FSMContext):
     ensure_user(message.from_user.id, message.from_user.username, _full_name(message.from_user))
+    track_event(EVENT_RAFFLE_ENTER, telegram_id=message.from_user.id)
     ok, reason, booking_id = await can_enter_raffle(message.from_user.id)
     if not ok:
         markup = None
@@ -446,6 +462,11 @@ async def rz_post(call: CallbackQuery, state: FSMContext):
     kb.adjust(1)
     await call.message.answer(POST_TEXT, reply_markup=kb.as_markup(), parse_mode="HTML")
     await state.update_data(rz_kind="post")
+    track_event(
+        EVENT_RAFFLE_BRANCH,
+        telegram_id=call.from_user.id,
+        props={"kind": "post"},
+    )
     await call.answer()
 
 
@@ -501,6 +522,11 @@ async def rz_review(call: CallbackQuery, state: FSMContext):
         disable_web_page_preview=True,
     )
     await state.update_data(rz_kind="review")
+    track_event(
+        EVENT_RAFFLE_BRANCH,
+        telegram_id=call.from_user.id,
+        props={"kind": "review"},
+    )
     await call.answer()
 
 
@@ -628,17 +654,37 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
     clear_raffle_awaiting_screenshot(message.from_user.id)
 
     file_id = photo.file_id
+    file_unique_id = getattr(photo, "file_unique_id", None)
     full_name = _full_name(message.from_user)
     username = message.from_user.username or ""
+    source_at = message.date
+    if source_at and getattr(source_at, "tzinfo", None) is None:
+        from datetime import timezone as _tz
+
+        source_at = source_at.replace(tzinfo=_tz.utc)
     try:
         submission_id = create_raffle_submission(
-            message.from_user.id, username, full_name, kind, file_id
+            message.from_user.id,
+            username,
+            full_name,
+            kind,
+            file_id,
+            photo_file_unique_id=file_unique_id,
+            source_chat_id=message.chat.id,
+            source_message_id=message.message_id,
+            source_message_at=source_at,
         )
     except Exception:
         logger.exception("Failed to create raffle submission")
         await message.answer("Не удалось отправить скрин на проверку. Попробуй позже или напиши менеджеру.")
         await _arm_screenshot_wait_for_telegram_id(message.from_user.id, kind)
         return
+
+    track_event(
+        EVENT_RAFFLE_SCREENSHOT,
+        telegram_id=message.from_user.id,
+        props={"kind": kind, "submission_id": submission_id},
+    )
 
     sent_ok = await _send_to_moderation(
         submission_id, message.from_user.id, username, full_name, kind, file_id
@@ -783,6 +829,11 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
 
     # только клиент из этой заявки
     telegram_id = int(row[1])
+    track_event(
+        EVENT_RAFFLE_APPROVED,
+        telegram_id=telegram_id,
+        props={"kind": row[4], "submission_id": submission_id},
+    )
     await call.answer()
     await bot.send_message(
         telegram_id,
@@ -803,6 +854,11 @@ async def _reject_submission(row, reason: str | None, card_ref, cleanup_chat_id=
     """Отклоняет заявку, обновляет карточку, пишет клиенту, чистит служебные сообщения."""
     submission_id = int(row[0])
     update_raffle_submission_status(submission_id, "rejected", reject_reason=reason or None)
+    track_event(
+        EVENT_RAFFLE_REJECTED,
+        telegram_id=int(row[1]),
+        props={"kind": row[4], "submission_id": submission_id, "reason": reason or None},
+    )
     now = now_msk().strftime("%d.%m.%Y в %H:%M")
     status_lines = f"\n\n❌ Скрин отклонен {now}"
     if reason:
@@ -966,9 +1022,19 @@ async def _send_happy_sticker(telegram_id: int):
 
 async def _continue_after_subscribe_check(telegram_id: int, manual_attempts: int = 0):
     if await _is_subscribed(telegram_id):
+        track_event(
+            EVENT_RAFFLE_SUBSCRIBED,
+            telegram_id=telegram_id,
+            props={"manual_attempts": manual_attempts},
+        )
         await _send_subscribed_and_dates(telegram_id)
         return
 
+    track_event(
+        EVENT_RAFFLE_SUB_FAILED,
+        telegram_id=telegram_id,
+        props={"manual_attempts": manual_attempts},
+    )
     # без подписки — без радостного стикера
     kb = InlineKeyboardBuilder()
     kb.button(text="Подписаться", url=CHANNEL_LINK)
@@ -1025,6 +1091,11 @@ async def _send_subscribed_and_dates(telegram_id: int):
 async def rz_sub_check(call: CallbackQuery):
     attempts = int(call.data.replace("rz_sub_check_", "") or "0")
     if await _is_subscribed(call.from_user.id):
+        track_event(
+            EVENT_RAFFLE_SUBSCRIBED,
+            telegram_id=call.from_user.id,
+            props={"manual_attempts": attempts, "source": "manual_check"},
+        )
         await call.answer()
         await _send_subscribed_and_dates(call.from_user.id)
         return
@@ -1073,6 +1144,11 @@ async def rz_channel_join(event: ChatMemberUpdated):
     # продолжаем только если ждём подписку
     if user_id not in _SUB_CHECK_MESSAGES:
         return
+    track_event(
+        EVENT_RAFFLE_SUBSCRIBED,
+        telegram_id=user_id,
+        props={"source": "channel_join"},
+    )
     await _send_subscribed_and_dates(user_id)
 
 
@@ -1249,6 +1325,11 @@ async def rz_book(call: CallbackQuery, state: FSMContext):
     )
     name = _full_name(call.from_user)
     await state.update_data(name=name)
+
+    same_day_alert = same_day_booking_warning(
+        call.from_user.id, event["date"], exclude_time=event["time"], for_alert=True
+    )
+
     kb = InlineKeyboardBuilder()
     kb.button(text="Все верно 👌", callback_data="rz_name_ok")
     kb.button(text="Изменить", callback_data="rz_name_change")
@@ -1259,7 +1340,10 @@ async def rz_book(call: CallbackQuery, state: FSMContext):
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
     )
-    await call.answer()
+    if same_day_alert:
+        await call.answer(same_day_alert, show_alert=True)
+    else:
+        await call.answer()
 
 
 @router.callback_query(F.data == "rz_name_ok")
@@ -1285,16 +1369,9 @@ async def rz_process_name(message: Message, state: FSMContext):
     await _ask_phone(message, state, message.from_user.id)
 
 
-def _phone_looks_valid(phone: str | None) -> bool:
-    if not phone:
-        return False
-    digits = "".join(ch for ch in str(phone) if ch.isdigit())
-    return 10 <= len(digits) <= 15
-
-
 async def _ask_phone(message, state: FSMContext, telegram_id: int):
-    saved = get_last_phone(telegram_id)
-    if saved and _phone_looks_valid(saved):
+    saved = normalize_phone(get_last_phone(telegram_id))
+    if saved:
         kb = InlineKeyboardBuilder()
         kb.button(text="✅ Да, использовать", callback_data="rz_phone_saved")
         kb.button(text="✏️ Ввести другой номер", callback_data="rz_phone_change")
@@ -1361,15 +1438,16 @@ async def rz_phone_change(call: CallbackQuery, state: FSMContext):
 
 @router.message(RaffleState.waiting_phone, F.contact)
 async def rz_phone_contact(message: Message, state: FSMContext):
-    await state.update_data(phone=message.contact.phone_number)
+    phone = normalize_phone(message.contact.phone_number) or (message.contact.phone_number or "").strip()
+    await state.update_data(phone=phone)
     await _finish_booking(message, state, message.from_user)
 
 
 @router.message(RaffleState.waiting_phone)
 async def rz_phone_text(message: Message, state: FSMContext):
-    phone = (message.text or "").strip()
-    if len(phone) < 5:
-        await message.answer("Кажется, это не номер. Пришли контакт или номер ещё раз.")
+    phone = normalize_phone(message.text)
+    if not phone:
+        await message.answer(PHONE_INVALID_TEXT, reply_markup=_phone_kb(), parse_mode="HTML")
         return
     await state.update_data(phone=phone)
     await _finish_booking(message, state, message.from_user)
@@ -1438,10 +1516,12 @@ async def _finish_booking(message: Message, state: FSMContext, user):
             )
             return
 
-        if not _phone_looks_valid(phone):
+        phone = normalize_phone(phone)
+        if not phone:
             await message.answer(
-                "Кажется, номер телефона некорректный. Введи номер ещё раз:",
+                PHONE_INVALID_TEXT,
                 reply_markup=_phone_kb(),
+                parse_mode="HTML",
             )
             await state.set_state(RaffleState.waiting_phone)
             await state.update_data(
@@ -1455,6 +1535,7 @@ async def _finish_booking(message: Message, state: FSMContext, user):
                 name=name,
             )
             return
+        await state.update_data(phone=phone)
 
         try:
             booking_id = create_booking(
@@ -1497,14 +1578,7 @@ async def _finish_booking(message: Message, state: FSMContext, user):
                 f"<b>Время:</b> {event_time}\n\n"
                 f"<b>ОБЯЗАТЕЛЬНО подтвердите бронь, нажав на кнопку «Получить билет»</b>\n\n"
                 f"❗ Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.\n\n"
-                f"Напоминаем, что :\n"
-                f"1. Сбор гостей начинается за полчаса до начала шоу, старт в {event_time}\n"
-                f"2. Рассадка осуществляется администратором рассадки на ближайшие к сцене свободные места. "
-                f"Возможна подсадка за один стол других гостей для небольших компаний.\n"
-                f"3. Обратите внимание, что при посещении шоу заказ минимум одной позиции по меню является обязательным.\n"
-                f"4. {escape(location_line)}\n"
-                f"5. Количество гостей - 1 чел.\n"
-                f"6. Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО ПРЕДУПРЕДИТЕ 😊"
+                f"{reminder_details_cut(event_time=event_time, location_line=location_line, guests=1)}"
             )
             markup = _manage_kb(booking_id, include_ticket=True)
         else:
@@ -1684,12 +1758,13 @@ async def rz_cancel_do(call: CallbackQuery):
         await call.answer("Бронь уже неактивна", show_alert=True)
         return
 
-    # удаляем UI брони + подсказку «Подтверждаю»
+    # удаляем UI брони + подсказку «Подтверждаю» + старый вывод /my_bookings
     await _delete_raffle_ui(
         call.from_user.id,
         booking_id,
         extra_message_ids=(call.message.message_id,),
     )
+    await delete_my_bookings_messages(call.message.bot, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
     set_rozygrysh_used(call.from_user.id, False)
     await refresh_user_commands(call.message.bot, call.from_user.id)

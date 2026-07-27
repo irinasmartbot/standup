@@ -238,6 +238,26 @@ def create_booking(
                 )
                 booking_id = cur.fetchone()[0]
             conn.commit()
+            try:
+                from bot.db.analytics import EVENT_BOOKING_CREATED, track_event
+
+                track_event(
+                    EVENT_BOOKING_CREATED,
+                    telegram_id=telegram_id,
+                    user_id=user_id,
+                    event_id=found_event_id,
+                    booking_id=booking_id,
+                    props={
+                        "format": booking_format,
+                        "event_format": event_format,
+                        "guests": guests,
+                        "event_date": event_date,
+                        "event_time": event_time,
+                        "location": event_location,
+                    },
+                )
+            except Exception:
+                pass
             return booking_id
 
     conn = sqlite3.connect(DB_PATH)
@@ -266,7 +286,7 @@ def get_active_bookings_by_user(telegram_id):
                     + """
                     WHERE u.telegram_id = %s
                       AND b.status IN ('booked', 'confirmed')
-                    ORDER BY e.event_date, e.event_time
+                    ORDER BY e.event_date ASC, e.event_time ASC, b.id ASC
                     """,
                     (telegram_id,),
                 )
@@ -275,11 +295,48 @@ def get_active_bookings_by_user(telegram_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "SELECT * FROM bookings WHERE telegram_id=? AND status IN ('booked', 'confirmed') ORDER BY event_date",
+        "SELECT * FROM bookings WHERE telegram_id=? AND status IN ('booked', 'confirmed') ORDER BY event_date ASC, event_time ASC, id ASC",
         (telegram_id,),
     )
     rows = c.fetchall()
     conn.close()
+    return rows
+
+
+def get_same_day_bookings_summary(telegram_id, event_date, exclude_time=None):
+    """Активные брони на дату: [(time, location, format), ...]."""
+    if _use_postgres():
+        with _pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        to_char(e.event_time, 'HH24:MI') AS event_time,
+                        e.location,
+                        b.format
+                    FROM bookings b
+                    JOIN users u ON u.id = b.user_id
+                    JOIN events e ON e.id = b.event_id
+                    WHERE u.telegram_id = %s
+                      AND b.status IN ('booked', 'confirmed')
+                      AND e.event_date = %s
+                    ORDER BY e.event_time ASC, b.id ASC
+                    """,
+                    (telegram_id, _parse_event_date(event_date)),
+                )
+                rows = _fetchall_tuples(cur)
+        if exclude_time:
+            rows = [r for r in rows if (r[0] or "") != exclude_time]
+        return rows
+
+    rows = []
+    for booking in get_active_bookings_by_user(telegram_id):
+        if (booking[5] or "") != event_date:
+            continue
+        if exclude_time and (booking[6] or "") == exclude_time:
+            continue
+        # SQLite legacy: format колонки может не быть
+        rows.append((booking[6], booking[8], "proverka"))
     return rows
 
 
@@ -379,10 +436,47 @@ def update_booking_status(booking_id, status):
             sql = "UPDATE bookings SET status = %s, updated_at = now() WHERE id = %s"
             params = (status, booking_id)
 
+        meta = None
         with _pg_connect() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT u.telegram_id, b.format, b.event_id, b.user_id
+                    FROM bookings b
+                    JOIN users u ON u.id = b.user_id
+                    WHERE b.id = %s
+                    """,
+                    (booking_id,),
+                )
+                meta = cur.fetchone()
                 cur.execute(sql, params)
             conn.commit()
+        if meta:
+            try:
+                from bot.db.analytics import (
+                    EVENT_BOOKING_ANNULLED,
+                    EVENT_BOOKING_CANCELLED,
+                    EVENT_BOOKING_CONFIRMED,
+                    track_event,
+                )
+
+                telegram_id, booking_format, event_id, user_id = meta
+                event_name = {
+                    "confirmed": EVENT_BOOKING_CONFIRMED,
+                    "cancelled": EVENT_BOOKING_CANCELLED,
+                    "annulled": EVENT_BOOKING_ANNULLED,
+                }.get(status)
+                if event_name:
+                    track_event(
+                        event_name,
+                        telegram_id=telegram_id,
+                        user_id=user_id,
+                        event_id=event_id,
+                        booking_id=booking_id,
+                        props={"format": booking_format},
+                    )
+            except Exception:
+                pass
         return
 
     conn = sqlite3.connect(DB_PATH)
@@ -474,8 +568,19 @@ def update_reminder_flag(booking_id, flag):
 
 def annul_booking(booking_id):
     if _use_postgres():
+        meta = None
         with _pg_connect() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT u.telegram_id, b.format, b.event_id, b.user_id
+                    FROM bookings b
+                    JOIN users u ON u.id = b.user_id
+                    WHERE b.id = %s AND b.status = 'booked'
+                    """,
+                    (booking_id,),
+                )
+                meta = cur.fetchone()
                 cur.execute(
                     """
                     UPDATE bookings
@@ -484,7 +589,23 @@ def annul_booking(booking_id):
                     """,
                     (datetime.now(), booking_id),
                 )
+                updated = cur.rowcount or 0
             conn.commit()
+        if updated and meta:
+            try:
+                from bot.db.analytics import EVENT_BOOKING_ANNULLED, track_event
+
+                telegram_id, booking_format, event_id, user_id = meta
+                track_event(
+                    EVENT_BOOKING_ANNULLED,
+                    telegram_id=telegram_id,
+                    user_id=user_id,
+                    event_id=event_id,
+                    booking_id=booking_id,
+                    props={"format": booking_format, "source": "annul_booking"},
+                )
+            except Exception:
+                pass
         return
 
     conn = sqlite3.connect(DB_PATH)
@@ -582,17 +703,23 @@ def get_active_raffle_booking(telegram_id):
             return _fetchone_tuple(cur)
 
 
-def get_user_bookings_for_commands(telegram_id, status):
-    """Активные брони/билеты для команд /active_bookings и /myticket."""
+def get_user_bookings_for_commands(telegram_id, status=None):
+    """Активные бесплатные брони для /my_bookings (proverka + rozygrysh).
+
+    status=None — и booked, и confirmed.
+    status='booked'|'confirmed' — фильтр (для совместимости со старыми вызовами).
+    """
     if not _use_postgres():
         return []
-    if status not in {"booked", "confirmed"}:
+    if status is not None and status not in {"booked", "confirmed"}:
         return []
 
     with _pg_connect() as conn:
         with conn.cursor() as cur:
+            status_sql = "AND b.status = %s" if status else "AND b.status IN ('booked', 'confirmed')"
+            params = (telegram_id, status) if status else (telegram_id,)
             cur.execute(
-                """
+                f"""
                 SELECT
                     b.id,
                     b.format,
@@ -610,11 +737,11 @@ def get_user_bookings_for_commands(telegram_id, status):
                 JOIN events e ON e.id = b.event_id
                 WHERE u.telegram_id = %s
                   AND b.format IN ('proverka', 'rozygrysh')
-                  AND b.status = %s
+                  {status_sql}
                   AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
-                ORDER BY e.event_date, e.event_time
+                ORDER BY e.event_date ASC, e.event_time ASC, b.id ASC
                 """,
-                (telegram_id, status),
+                params,
             )
             return _fetchall_tuples(cur)
 
@@ -803,6 +930,10 @@ def ensure_raffle_tables():
                     status TEXT NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending', 'approved', 'rejected')),
                     photo_file_id TEXT NOT NULL,
+                    photo_file_unique_id TEXT,
+                    source_chat_id BIGINT,
+                    source_message_id BIGINT,
+                    source_message_at TIMESTAMPTZ,
                     moderation_chat_id BIGINT,
                     moderation_message_id BIGINT,
                     reject_reason TEXT,
@@ -817,6 +948,13 @@ def ensure_raffle_tables():
                 ON raffle_submissions (telegram_id, status)
                 """
             )
+            for ddl in (
+                "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS photo_file_unique_id TEXT",
+                "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS source_chat_id BIGINT",
+                "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS source_message_id BIGINT",
+                "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS source_message_at TIMESTAMPTZ",
+            ):
+                cur.execute(ddl)
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS raffle_nav (
@@ -860,7 +998,18 @@ def get_pending_raffle_submission(telegram_id):
             return _fetchone_tuple(cur)
 
 
-def create_raffle_submission(telegram_id, username, full_name, kind, photo_file_id):
+def create_raffle_submission(
+    telegram_id,
+    username,
+    full_name,
+    kind,
+    photo_file_id,
+    *,
+    photo_file_unique_id=None,
+    source_chat_id=None,
+    source_message_id=None,
+    source_message_at=None,
+):
     if not _use_postgres():
         raise RuntimeError("Raffle submissions require PostgreSQL")
     with _pg_connect() as conn:
@@ -869,15 +1018,93 @@ def create_raffle_submission(telegram_id, username, full_name, kind, photo_file_
             cur.execute(
                 """
                 INSERT INTO raffle_submissions
-                    (user_id, telegram_id, username, full_name, kind, status, photo_file_id)
-                VALUES (%s, %s, %s, %s, %s, 'pending', %s)
+                    (user_id, telegram_id, username, full_name, kind, status, photo_file_id,
+                     photo_file_unique_id, source_chat_id, source_message_id, source_message_at)
+                VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (user_id, telegram_id, username, full_name, kind, photo_file_id),
+                (
+                    user_id,
+                    telegram_id,
+                    username,
+                    full_name,
+                    kind,
+                    photo_file_id,
+                    photo_file_unique_id,
+                    source_chat_id,
+                    source_message_id,
+                    source_message_at,
+                ),
             )
             submission_id = cur.fetchone()[0]
         conn.commit()
     return submission_id
+
+
+def get_raffle_submissions_for_telegram(telegram_id: int, limit: int = 20) -> list[dict]:
+    if not _use_postgres() or not telegram_id:
+        return []
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, kind, status, photo_file_id, photo_file_unique_id,
+                    source_chat_id, source_message_id, source_message_at,
+                    moderation_chat_id, moderation_message_id, reject_reason,
+                    created_at, reviewed_at
+                FROM raffle_submissions
+                WHERE telegram_id = %s
+                ORDER BY id DESC
+                LIMIT %s
+                """,
+                (telegram_id, limit),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def get_user_raffle_flags(telegram_id: int = None, user_id: int = None) -> dict:
+    if not _use_postgres() or (not telegram_id and not user_id):
+        return {"rozygrysh_used": False, "is_blocked": False}
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            try:
+                if user_id:
+                    cur.execute(
+                        """
+                        SELECT COALESCE(rozygrysh_used, false), COALESCE(is_blocked, false)
+                        FROM users WHERE id = %s
+                        """,
+                        (user_id,),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT COALESCE(rozygrysh_used, false), COALESCE(is_blocked, false)
+                        FROM users WHERE telegram_id = %s
+                        """,
+                        (telegram_id,),
+                    )
+                row = cur.fetchone()
+            except Exception:
+                if user_id:
+                    cur.execute(
+                        "SELECT COALESCE(rozygrysh_used, false) FROM users WHERE id = %s",
+                        (user_id,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT COALESCE(rozygrysh_used, false) FROM users WHERE telegram_id = %s",
+                        (telegram_id,),
+                    )
+                row = cur.fetchone()
+                if not row:
+                    return {"rozygrysh_used": False, "is_blocked": False}
+                return {"rozygrysh_used": bool(row[0]), "is_blocked": False}
+            if not row:
+                return {"rozygrysh_used": False, "is_blocked": False}
+            return {"rozygrysh_used": bool(row[0]), "is_blocked": bool(row[1])}
 
 
 def save_raffle_moderation_message(submission_id, chat_id, message_id):

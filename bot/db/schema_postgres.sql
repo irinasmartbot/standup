@@ -95,6 +95,10 @@ CREATE TABLE IF NOT EXISTS raffle_submissions (
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'approved', 'rejected')),
     photo_file_id TEXT NOT NULL,
+    photo_file_unique_id TEXT,
+    source_chat_id BIGINT,
+    source_message_id BIGINT,
+    source_message_at TIMESTAMPTZ,
     moderation_chat_id BIGINT,
     moderation_message_id BIGINT,
     reject_reason TEXT,
@@ -115,3 +119,35 @@ CREATE TABLE IF NOT EXISTS raffle_nav (
     awaiting_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+
+-- Product analytics (funnel / admin dashboard)
+CREATE TABLE IF NOT EXISTS analytics_events (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'telegram'
+        CHECK (channel IN ('telegram', 'vkontakte', 'import', 'unknown')),
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    telegram_id BIGINT,
+    vk_id BIGINT,
+    event_id BIGINT REFERENCES events(id) ON DELETE SET NULL,
+    booking_id BIGINT REFERENCES bookings(id) ON DELETE SET NULL,
+    props JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_events_name_created
+    ON analytics_events (name, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_events_telegram_created
+    ON analytics_events (telegram_id, created_at DESC)
+    WHERE telegram_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_analytics_events_channel_created
+    ON analytics_events (channel, created_at DESC);
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;

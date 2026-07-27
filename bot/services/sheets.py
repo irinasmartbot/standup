@@ -33,7 +33,7 @@ SELECT
 FROM events
 WHERE format = %(event_format)s
   AND status = 'active'
-  AND event_date >= CURRENT_DATE
+  AND event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
 ORDER BY event_date, event_time, location;
 """
 
