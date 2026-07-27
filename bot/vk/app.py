@@ -742,10 +742,27 @@ class VKBotApp:
         if same_day_alert:
             await self.client.send_message(peer_id, same_day_alert)
 
-        await self._send_text(
-            peer_id,
-            "Напишите, пожалуйста, ваше имя.",
-        )
+        await self._ask_name(peer_id, vk_id, self.booking_sessions[vk_id])
+
+    async def _ask_name(self, peer_id: int, vk_id: int, session: dict) -> None:
+        """Как в TG: предложить имя из профиля VK или попросить ввести."""
+        session["step"] = vk_booking.STEP_NAME
+        try:
+            name = (await self.client.get_user_display_name(vk_id) or "").strip()
+        except Exception:
+            logger.exception("Failed to load VK display name vk_id=%s", vk_id)
+            name = ""
+        if name:
+            session["name"] = name
+            await self._send_text(
+                peer_id,
+                vk_booking.name_confirm_text(name),
+                keyboard=vk_booking.name_confirm_keyboard(),
+                replace_nav=False,
+            )
+            return
+        session["name"] = ""
+        await self._send_text(peer_id, vk_booking.NAME_ASK_TEXT, replace_nav=False)
 
     async def _ask_phone(self, peer_id: int, vk_id: int, session: dict) -> None:
         saved = vk_booking.saved_phone_for(vk_id)
@@ -1184,6 +1201,18 @@ class VKBotApp:
         if not session:
             return False
 
+        if cmd == "booking_name_ok":
+            if not (session.get("name") or "").strip():
+                session["step"] = vk_booking.STEP_NAME
+                await self.client.send_message(peer_id, vk_booking.NAME_ASK_TEXT)
+                return True
+            await self._ask_phone(peer_id, vk_id, session)
+            return True
+        if cmd == "booking_name_change":
+            session["name"] = ""
+            session["step"] = vk_booking.STEP_NAME
+            await self.client.send_message(peer_id, vk_booking.NAME_ASK_TEXT)
+            return True
         if cmd == "booking_phone_use":
             phone = normalize_phone(session.get("phone"))
             if not phone:
@@ -1260,7 +1289,7 @@ class VKBotApp:
         if step == vk_booking.STEP_NAME:
             await self.client.send_message(
                 peer_id,
-                "Напишите, пожалуйста, ваше имя.",
+                vk_booking.NAME_ASK_TEXT,
             )
             return True
         if step == vk_booking.STEP_PHONE:
@@ -2068,9 +2097,7 @@ class VKBotApp:
         await self._ask_name_or_phone_raffle(peer_id, vk_id, session)
 
     async def _ask_name_or_phone_raffle(self, peer_id: int, vk_id: int, session: dict) -> None:
-        # Как в проверке материала: всегда спрашиваем имя, не подставляем из VK.
-        session["step"] = vk_booking.STEP_NAME
-        await self._send_text(peer_id, "Напишите, пожалуйста, ваше имя.")
+        await self._ask_name(peer_id, vk_id, session)
 
     async def _send_raffle_start(self, peer_id: int, vk_id: int) -> None:
         self._track(vk_id, EVENT_RAFFLE_ENTER)

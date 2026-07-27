@@ -26,6 +26,7 @@ STEP_NAME = "waiting_name"
 STEP_PHONE = "waiting_phone"
 STEP_GUESTS = "waiting_guests"
 
+NAME_ASK_TEXT = "Напишите, пожалуйста, ваше имя."
 PHONE_ASK_TEXT = (
     "Введите номер телефона с кодом страны.\n"
     "Пример: +79001234567"
@@ -39,6 +40,22 @@ PHONE_INVALID_TEXT = (
 
 def _payload(value: str, **extra) -> dict[str, Any]:
     return {"cmd": value, **extra}
+
+
+def name_confirm_text(name: str) -> str:
+    safe = (name or "").strip() or "Гость"
+    return format_vk_text(
+        "Для бронирования вам нужно заполнить некоторые данные\n\n"
+        f"Ваше имя <b>{safe}</b>, верно?"
+    )
+
+
+def name_confirm_keyboard() -> str:
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button("Все верно 👌", _payload("booking_name_ok"), color="primary")
+    kb.button("Изменить", _payload("booking_name_change"))
+    kb.adjust(2)
+    return kb.as_json()
 
 
 def guests_keyboard() -> str:
