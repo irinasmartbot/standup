@@ -1162,12 +1162,6 @@ def ensure_raffle_tables():
                 ON raffle_submissions (telegram_id, status)
                 """
             )
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_raffle_submissions_vk_status
-                ON raffle_submissions (vk_id, status)
-                """
-            )
             for ddl in (
                 "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS photo_file_unique_id TEXT",
                 "ALTER TABLE raffle_submissions ADD COLUMN IF NOT EXISTS source_chat_id BIGINT",
@@ -1177,6 +1171,13 @@ def ensure_raffle_tables():
                 "ALTER TABLE raffle_submissions ALTER COLUMN telegram_id DROP NOT NULL",
             ):
                 cur.execute(ddl)
+            # Индекс только после ADD COLUMN: на старых БД таблицы уже есть без vk_id.
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_raffle_submissions_vk_status
+                ON raffle_submissions (vk_id, status)
+                """
+            )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS raffle_nav (
