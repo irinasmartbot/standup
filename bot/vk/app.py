@@ -1888,7 +1888,9 @@ class VKBotApp:
         # Без картинки: вложение + inline keyboard у VK иногда уходит без кнопок.
         peer = int(peer_id)
         existing = self.peer_dates_message_ids.get(peer)
-        if edit and existing:
+        if edit:
+            # Важно: даты мог прислать TG-бот — message_id у VK-бота нет,
+            # тогда листаем по cmid кнопки (иначе уйдёт второе сообщение).
             ok = await self._edit_card(
                 peer_id,
                 text,
@@ -1897,7 +1899,15 @@ class VKBotApp:
                 attachment=None,
             )
             if ok:
+                if existing:
+                    self.peer_dates_message_ids[peer] = int(existing)
                 return
+            logger.warning(
+                "Raffle dates edit failed peer_id=%s msg_id=%s cmid=%s — send once",
+                peer_id,
+                existing,
+                self._callback_cmid(peer_id),
+            )
         mid = await self._send_text(
             peer_id,
             text,
