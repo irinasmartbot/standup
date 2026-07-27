@@ -112,7 +112,7 @@ def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) 
 
 
 def formats_keyboard() -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button("STANDUP BEST", _payload("best"), color="primary")
     kb.button("Хитлото", _payload("hitloto"), color="primary")
     kb.button("StandUp Проверка материала", _payload("check"), color="primary")
@@ -122,7 +122,7 @@ def formats_keyboard() -> str:
 
 
 def paid_formats_keyboard() -> str:
-    kb = VKKeyboardBuilder()
+    kb = VKKeyboardBuilder(inline=True)
     kb.button("STANDUP BEST", _payload("best"), color="primary")
     kb.button("Хитлото", _payload("hitloto"), color="primary")
     kb.button("В главное меню", _payload("main_menu"))
@@ -407,21 +407,17 @@ class VKBotApp:
         if len(bucket) > 6:
             self.peer_nav_message_ids[peer] = bucket[-6:]
 
-    async def _clear_reply_keyboard(self, peer_id: int) -> None:
-        """Убирает нижнюю (не inline) клавиатуру, чтобы у карточки не двоились кнопки."""
+    async def _clear_reply_keyboard(self, peer_id: int) -> int | None:
+        """Сбрасывает нижнюю reply-клавиатуру. Возвращает id служебного сообщения."""
         try:
-            mid = await self.client.send_message(
+            return await self.client.send_message(
                 peer_id,
                 "\u2060",
                 keyboard=empty_keyboard(),
             )
-            if not mid:
-                return
-            # Даём клиенту VK применить сброс клавиатуры, потом убираем служебное сообщение.
-            await asyncio.sleep(0.4)
-            await self.client.delete_messages(peer_id, [int(mid)])
         except Exception:
             logger.exception("Failed to clear VK reply keyboard peer_id=%s", peer_id)
+            return None
 
     def _keyboard_is_inline(self, keyboard: str | None) -> bool:
         if not keyboard:
@@ -443,8 +439,11 @@ class VKBotApp:
     ) -> int | None:
         if replace_nav:
             await self._delete_nav(peer_id)
+        clear_id: int | None = None
         if self._keyboard_is_inline(keyboard):
-            await self._clear_reply_keyboard(peer_id)
+            # Важно: сброс reply-клавиатуры должен остаться до отправки inline-карточки.
+            # Если удалить служебное сообщение слишком рано, VK снова показывает старое меню.
+            clear_id = await self._clear_reply_keyboard(peer_id)
         message_id: int | None = None
         try:
             message_id = await self.client.send_message(
@@ -458,6 +457,12 @@ class VKBotApp:
                 raise
             logger.exception("Failed to send VK message with attachment, retrying without it")
             message_id = await self.client.send_message(peer_id, text, keyboard=keyboard)
+        if clear_id:
+            try:
+                await asyncio.sleep(0.25)
+                await self.client.delete_messages(peer_id, [int(clear_id)])
+            except Exception:
+                logger.exception("Failed to delete VK reply-keyboard clear message peer_id=%s", peer_id)
         if replace_nav:
             self._remember_nav(peer_id, message_id)
         return message_id
