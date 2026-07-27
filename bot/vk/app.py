@@ -883,7 +883,6 @@ class VKBotApp:
                 await self.client.send_message(
                     peer_id,
                     vk_booking.PHONE_INVALID_TEXT,
-                    keyboard=vk_booking.booking_cancel_keyboard(),
                 )
                 session["step"] = vk_booking.STEP_PHONE
                 return True
@@ -896,7 +895,6 @@ class VKBotApp:
             await self.client.send_message(
                 peer_id,
                 vk_booking.PHONE_ASK_TEXT,
-                keyboard=vk_booking.booking_cancel_keyboard(),
             )
             return True
         if cmd == "booking_guests":
@@ -922,7 +920,6 @@ class VKBotApp:
                 await self.client.send_message(
                     peer_id,
                     vk_booking.PHONE_INVALID_TEXT,
-                    keyboard=vk_booking.booking_cancel_keyboard(),
                 )
                 return True
             session["phone"] = phone
@@ -951,14 +948,12 @@ class VKBotApp:
             await self.client.send_message(
                 peer_id,
                 "Напишите, пожалуйста, ваше имя.",
-                keyboard=vk_booking.booking_cancel_keyboard(),
             )
             return True
         if step == vk_booking.STEP_PHONE:
             await self.client.send_message(
                 peer_id,
                 vk_booking.PHONE_ASK_TEXT,
-                keyboard=vk_booking.booking_cancel_keyboard(),
             )
             return True
         if step == vk_booking.STEP_GUESTS:
