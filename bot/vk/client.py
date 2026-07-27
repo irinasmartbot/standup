@@ -68,18 +68,28 @@ class VKClient:
     async def edit_message(
         self,
         peer_id: int,
-        message_id: int,
         text: str,
         *,
+        message_id: int | None = None,
+        conversation_message_id: int | None = None,
         keyboard: str | None = None,
         attachment: str | None = None,
     ) -> bool:
-        """Edit an existing message in place (text / keyboard / attachment)."""
+        """Edit an existing message in place (text / keyboard / attachment).
+
+        Prefer message_id when known; conversation_message_id works after bot restart
+        (comes from message_event on the button that was clicked).
+        """
+        if not message_id and not conversation_message_id:
+            return False
         params: dict[str, Any] = {
             "peer_id": int(peer_id),
-            "message_id": int(message_id),
             "message": text,
         }
+        if message_id:
+            params["message_id"] = int(message_id)
+        else:
+            params["conversation_message_id"] = int(conversation_message_id)
         if self.settings.group_id:
             params["group_id"] = self.settings.group_id
         if keyboard is not None:
@@ -91,9 +101,10 @@ class VKClient:
             return bool(response)
         except VKAPIError:
             logger.exception(
-                "messages.edit failed peer_id=%s message_id=%s",
+                "messages.edit failed peer_id=%s message_id=%s cmid=%s",
                 peer_id,
                 message_id,
+                conversation_message_id,
             )
             return False
 

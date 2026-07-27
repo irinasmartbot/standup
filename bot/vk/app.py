@@ -315,6 +315,8 @@ class VKBotApp:
         self.peer_carousel_message_ids: dict[int, int] = {}
         self.peer_my_bookings_message_ids: dict[int, int] = {}
         self.peer_dates_message_ids: dict[int, int] = {}
+        # cmid кнопки из текущего message_event — переживает рестарт бота.
+        self._peer_event_cmid: dict[int, int] = {}
         self._seen_event_ids: dict[str, float] = {}
         self._seen_message_ids: dict[int, float] = {}
         self._peer_cmd_cooldown: dict[tuple[int, str], float] = {}
@@ -376,12 +378,9 @@ class VKBotApp:
         ids.extend(self._pending_delete_ids.pop(peer, []))
         if extra_ids:
             ids.extend(extra_ids)
-        # History fallback: after restart memory is empty, but old keyboards are still in chat.
-        try:
-            from_history = await self.client.collect_recent_nav_message_ids(peer, also_ids=ids)
-            ids.extend(from_history)
-        except Exception:
-            logger.exception("VK nav history cleanup failed peer_id=%s", peer)
+        # Не чистим всю историю с клавиатурами: после рестарта память пустая,
+        # и такой wipe убивал старые меню — кнопки «мертвели», пока пользователь
+        # снова не писал «Начать».
         unique: list[int] = []
         for mid in ids:
             try:
@@ -392,6 +391,45 @@ class VKBotApp:
                 unique.append(value)
         if unique:
             await self.client.delete_messages(peer, unique)
+
+    def _callback_cmid(self, peer_id: int) -> int | None:
+        value = self._peer_event_cmid.get(int(peer_id))
+        return int(value) if value else None
+
+    async def _edit_card(
+        self,
+        peer_id: int,
+        text: str,
+        *,
+        stored_message_id: int | None,
+        keyboard: str | None = None,
+        attachment: str | None = None,
+    ) -> bool:
+        """Edit by remembered message_id or by cmid from the clicked button."""
+        cmid = self._callback_cmid(peer_id)
+        if stored_message_id:
+            ok = await self.client.edit_message(
+                peer_id,
+                text,
+                message_id=int(stored_message_id),
+                keyboard=keyboard,
+                attachment=attachment,
+            )
+            if ok:
+                await self._delete_pending(peer_id)
+                return True
+        if cmid:
+            ok = await self.client.edit_message(
+                peer_id,
+                text,
+                conversation_message_id=int(cmid),
+                keyboard=keyboard,
+                attachment=attachment,
+            )
+            if ok:
+                await self._delete_pending(peer_id)
+                return True
+        return False
 
     async def _delete_pending(self, peer_id: int) -> None:
         peer = int(peer_id)
@@ -483,21 +521,22 @@ class VKBotApp:
         """Листание дат: правим ту же карточку, без новых сообщений в чате."""
         peer = int(peer_id)
         existing_id = self.peer_dates_message_ids.get(peer)
-        if edit and existing_id:
-            ok = await self.client.edit_message(
-                peer_id,
-                existing_id,
-                text,
-                keyboard=keyboard,
-                attachment=attachment or "",
-            )
-            await self._delete_pending(peer_id)
-            if ok:
-                return
+        if edit and await self._edit_card(
+            peer_id,
+            text,
+            stored_message_id=existing_id,
+            keyboard=keyboard,
+            attachment=attachment or "",
+        ):
+            if existing_id:
+                self.peer_dates_message_ids[peer] = int(existing_id)
+            return
+        if edit and (existing_id or self._callback_cmid(peer_id)):
             logger.warning(
-                "Dates list edit failed peer_id=%s msg_id=%s, falling back to send",
+                "Dates list edit failed peer_id=%s msg_id=%s cmid=%s, falling back to send",
                 peer_id,
                 existing_id,
+                self._callback_cmid(peer_id),
             )
         mid = await self._send_text(
             peer_id,
@@ -750,20 +789,21 @@ class VKBotApp:
         peer = int(peer_id)
         existing_id = self.peer_my_bookings_message_ids.get(peer)
 
-        if edit and existing_id:
-            ok = await self.client.edit_message(
-                peer_id,
-                existing_id,
-                text,
-                keyboard=keyboard,
-            )
-            await self._delete_pending(peer_id)
-            if ok:
-                return
+        if edit and await self._edit_card(
+            peer_id,
+            text,
+            stored_message_id=existing_id,
+            keyboard=keyboard,
+        ):
+            if existing_id:
+                self.peer_my_bookings_message_ids[peer] = int(existing_id)
+            return
+        if edit and (existing_id or self._callback_cmid(peer_id)):
             logger.warning(
-                "My bookings carousel edit failed peer_id=%s msg_id=%s, falling back to send",
+                "My bookings carousel edit failed peer_id=%s msg_id=%s cmid=%s, falling back to send",
                 peer_id,
                 existing_id,
+                self._callback_cmid(peer_id),
             )
 
         mid = await self._send_text(peer_id, text, keyboard=keyboard)
@@ -1245,15 +1285,25 @@ class VKBotApp:
             payload = raw_payload
         else:
             payload = _parse_payload(raw_payload if isinstance(raw_payload, str) else None)
+        try:
+            cmid = int(obj.get("conversation_message_id") or 0) or None
+        except (TypeError, ValueError):
+            cmid = None
         message = {
             "peer_id": peer_id,
             "from_id": user_id,
             "text": "",
             "payload": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
             "id": None,
+            "conversation_message_id": cmid,
         }
         async with self._peer_lock(peer_id):
-            await self._dispatch_message(message, peer_id)
+            if cmid:
+                self._peer_event_cmid[peer_id] = cmid
+            try:
+                await self._dispatch_message(message, peer_id)
+            finally:
+                self._peer_event_cmid.pop(peer_id, None)
 
     async def _dispatch_message(self, message: dict[str, Any], peer_id: int) -> None:
         vk_id = self._vk_id(message, peer_id)
@@ -1784,22 +1834,22 @@ class VKBotApp:
         peer = int(peer_id)
         existing_id = self.peer_carousel_message_ids.get(peer)
 
-        if edit and existing_id:
-            # Плавно меняем ту же карточку, без delete + send.
-            ok = await self.client.edit_message(
-                peer_id,
-                existing_id,
-                text,
-                keyboard=keyboard,
-                attachment=attachment or "",
-            )
-            await self._delete_pending(peer_id)
-            if ok:
-                return
+        if edit and await self._edit_card(
+            peer_id,
+            text,
+            stored_message_id=existing_id,
+            keyboard=keyboard,
+            attachment=attachment or "",
+        ):
+            if existing_id:
+                self.peer_carousel_message_ids[peer] = int(existing_id)
+            return
+        if edit and (existing_id or self._callback_cmid(peer_id)):
             logger.warning(
-                "BEST carousel edit failed peer_id=%s msg_id=%s, falling back to send",
+                "BEST carousel edit failed peer_id=%s msg_id=%s cmid=%s, falling back to send",
                 peer_id,
                 existing_id,
+                self._callback_cmid(peer_id),
             )
 
         mid = await self._send_text(
