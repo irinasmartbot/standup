@@ -158,14 +158,21 @@ def generate_ticket(name, date_str, time_str, location, guests):
     guests_line = guests_word(guests)
     font_guests = _fit_font(draw, guests_line, load_font, max_text_w, max(9, int(H * 0.060)))
 
-    # Адрес: сначала уменьшаем кегль, затем перенос на 2 строки.
+    # Адрес крупнее: держим кегль ближе к дате, переносим на 2–3 строки.
     loc = (location or "").strip()
-    loc_max = max(8, int(H * 0.048))
-    font_small = _fit_font(draw, loc, load_font, max_text_w, loc_max, min_size=7)
-    loc_lines = _wrap_text(draw, loc, font_small, max_text_w, max_lines=2)
+    loc_size = max(11, int(H * 0.055))
+    min_loc = max(10, int(H * 0.042))
+    font_small = load_font(loc_size)
+    loc_lines = _wrap_text(draw, loc, font_small, max_text_w, max_lines=3)
+    while loc_size > min_loc and any(
+        _text_width(draw, line, font_small) > max_text_w for line in loc_lines
+    ):
+        loc_size -= 1
+        font_small = load_font(loc_size)
+        loc_lines = _wrap_text(draw, loc, font_small, max_text_w, max_lines=3)
 
     x = rect_x1 + int(W * 0.02)
-    # 4–5 строк с равными промежутками внутри тёмного блока
+    # 4–6 строк с равными промежутками внутри тёмного блока
     line_count = 3 + len(loc_lines)  # name, date, address lines, guests
     step = max(1, rect_h // (line_count + 1))
     y = rect_y1 + int(step * 0.45)
