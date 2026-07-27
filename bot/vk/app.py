@@ -1002,7 +1002,10 @@ class VKBotApp:
             vk_mb.clear_manage_session(self.manage_sessions, vk_id)
             await self._send_text(
                 peer_id,
-                vk_mb.cancel_done_text(),
+                vk_mb.cancel_done_text(
+                    community_link=self.settings.community_link,
+                    manager_link=self.settings.manager_link,
+                ),
                 keyboard=vk_mb.after_cancel_keyboard(self.settings.community_link),
             )
             return True

@@ -158,7 +158,7 @@ def confirm_keyboard(cmd: str, booking_id: int) -> str:
 def after_cancel_keyboard(community_link: str) -> str:
     kb = VKKeyboardBuilder(inline=True)
     if community_link:
-        kb.button("Канал анонсов", link=community_link)
+        kb.button("Наше сообщество", link=community_link)
     kb.button("⬅️ В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
@@ -247,12 +247,14 @@ async def apply_new_guests(*, booking_id: int, guests: int) -> tuple[bool, str]:
     )
 
 
-def cancel_done_text() -> str:
+def cancel_done_text(*, community_link: str = "", manager_link: str = "") -> str:
+    community = (community_link or "").strip() or CHANNEL_LINK
+    manager = (manager_link or "").strip() or "@ccoverr"
     return (
         "Хорошо, спасибо, что предупредили 😊 Ждём Вас на других мероприятиях, "
         "актуальная афиша всегда на нашем сайте: MoscowStandUpshow.ru\n\n"
-        "При возникновении вопросов - можно писать менеджеру @ccoverr\n\n"
-        f"И не забудь заглянуть на наш канал анонсов ({CHANNEL_LINK}) "
+        f"При возникновении вопросов - можно писать менеджеру ({manager})\n\n"
+        f"И не забудь заглянуть в наше сообщество ({community}) "
         "(там часто дарят бесплатные билеты на платные шоу 😉)"
     )
 
