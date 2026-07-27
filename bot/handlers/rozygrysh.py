@@ -889,7 +889,7 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
         from bot.vk import raffle as vk_raffle
 
         await vk_raffle.send_vk_text(vk_id, vk_raffle.SCREEN_ACCEPTED_TEXT)
-        asyncio.create_task(_after_vk_screen_accepted(int(vk_id)))
+        _schedule_vk_after_accept(int(vk_id))
         return
     await bot.send_message(
         telegram_id,
@@ -898,17 +898,23 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
     asyncio.create_task(_after_screen_accepted(telegram_id))
 
 
+_VK_AFTER_ACCEPT_TASKS: set[asyncio.Task] = set()
+
+
 async def _after_vk_screen_accepted(vk_id: int):
     from bot.vk import raffle as vk_raffle
     from bot.vk.config import load_vk_settings
 
     try:
-        await asyncio.sleep(2)
-        await vk_raffle.continue_after_subscribe_check(vk_id)
+        # Пауза против flood control VK между двумя messages.send подряд.
+        await asyncio.sleep(3)
+        ok = await vk_raffle.continue_after_subscribe_check(vk_id)
+        if ok:
+            return
+        # continue уже написал клиенту (даты / «не видим» / кнопка retry).
         return
     except Exception:
         logger.exception("VK after-accept flow failed for %s", vk_id)
-    # Не говорим «не видим подписки», если упали на датах/API — даём кнопку продолжить.
     try:
         settings = load_vk_settings()
         await vk_raffle.send_vk_text(
@@ -919,6 +925,12 @@ async def _after_vk_screen_accepted(vk_id: int):
         )
     except Exception:
         logger.exception("VK after-accept fallback failed for %s", vk_id)
+
+
+def _schedule_vk_after_accept(vk_id: int) -> None:
+    task = asyncio.create_task(_after_vk_screen_accepted(int(vk_id)))
+    _VK_AFTER_ACCEPT_TASKS.add(task)
+    task.add_done_callback(_VK_AFTER_ACCEPT_TASKS.discard)
 
 
 async def _after_screen_accepted(telegram_id: int):

@@ -286,9 +286,10 @@ async def download_screenshot_bytes(url: str) -> bytes:
 
 async def send_vk_text(vk_id: int, text: str, *, keyboard: str | None = None) -> bool:
     """DM из TG-бота/админки в VK (нужны VK_GROUP_* в .env процесса)."""
+    import asyncio
     import logging
 
-    from bot.vk.client import VKClient
+    from bot.vk.client import VKClient, VKAPIError
     from bot.vk.config import load_vk_settings
 
     logger = logging.getLogger(__name__)
@@ -297,14 +298,28 @@ async def send_vk_text(vk_id: int, text: str, *, keyboard: str | None = None) ->
         logger.error("VK settings not configured — cannot DM vk_id=%s", vk_id)
         return False
     client = VKClient(settings)
+
+    async def _once(kb: str | None) -> None:
+        await client.send_message(int(vk_id), text, keyboard=kb)
+
     try:
-        await client.send_message(int(vk_id), text, keyboard=keyboard)
+        await _once(keyboard)
         return True
-    except Exception:
+    except Exception as exc:
         logger.exception("send_vk_text failed vk_id=%s", vk_id)
+        # Flood / transient — одна пауза и повтор.
+        msg = str(exc).lower()
+        if "flood" in msg or "too many" in msg or isinstance(exc, VKAPIError):
+            try:
+                await asyncio.sleep(1.5)
+                await _once(keyboard)
+                return True
+            except Exception:
+                logger.exception("send_vk_text retry failed vk_id=%s", vk_id)
         if keyboard:
             try:
-                await client.send_message(int(vk_id), text)
+                await asyncio.sleep(0.5)
+                await _once(None)
                 return True
             except Exception:
                 logger.exception("send_vk_text fallback failed vk_id=%s", vk_id)
@@ -447,7 +462,7 @@ async def is_community_member(vk_id: int) -> bool:
 async def continue_after_subscribe_check(vk_id: int, *, manual_attempts: int = 0) -> bool:
     """После принятия скрина: проверка подписки на сообщество VK.
 
-    Returns True if user may proceed to dates (message sent or ready).
+    Returns True if dates (or empty-dates notice) were delivered.
     """
     import logging
 
@@ -473,9 +488,19 @@ async def continue_after_subscribe_check(vk_id: int, *, manual_attempts: int = 0
         except Exception:
             logger.exception("track subscribed failed vk_id=%s", vk_id)
         ok = await send_raffle_dates_message(int(vk_id))
-        if not ok:
-            logger.error("send_raffle_dates_message returned False vk_id=%s", vk_id)
-        return bool(ok)
+        if ok:
+            return True
+        logger.error("send_raffle_dates_message returned False vk_id=%s", vk_id)
+        # Не молчим: даём кнопку, чтобы VK-бот отправил даты своим клиентом.
+        await send_vk_text(
+            vk_id,
+            "Подписка есть, но список дат не отправился. Нажми кнопку ниже 👇",
+            keyboard=subscribe_keyboard(
+                settings.community_link,
+                manual_attempts=manual_attempts,
+            ),
+        )
+        return False
 
     try:
         track_event(
