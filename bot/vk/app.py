@@ -65,6 +65,8 @@ DATES_PAGE_SIZE = 6
 VK_CHANNEL = "vkontakte"
 # Как в TG: не крутим в рандоме карточки площадок / хитлото / билет / отзывы.
 _EXCLUDED_RANDOM_COVER_KEYS = frozenset({"temple_bar", "escobar", "nebar", "hitloto_start"})
+# Deep link / ref: vk.me/<club>?ref=standup_rozygr (как TG start=standup_rozygr).
+_RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
 
 WELCOME_TEXT = format_vk_text(TG_WELCOME_TEXT)
 FORMATS_TEXT = format_vk_text(TG_FORMATS_TEXT)
@@ -115,7 +117,6 @@ def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) 
     kb = VKKeyboardBuilder(inline=True)
     kb.button("Забронировать места", _payload("book"), color="primary")
     kb.button("Купить билет", _payload("buy_ticket"), color="primary")
-    kb.button("Розыгрыш", _payload("raffle"), color="primary")
     if show_my_bookings:
         kb.button("Мои брони", _payload("my_bookings"))
     kb.button("Наши форматы ШОУ", _payload("formats"))
@@ -123,13 +124,12 @@ def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) 
     kb.button("Правила посещения шоу", _payload("rules"))
     kb.button("Задать вопрос менеджеру", link=settings.manager_link)
     kb.button("Канал анонсов", link=settings.community_link)
-    # VK: max 6 rows / 10 buttons
+    # Как на скрине TG/VK: площадки|правила и менеджер|канал в рядах по 2.
+    # VK: max 6 rows / 10 buttons. Розыгрыш — только по ссылке / слову «розыгрыш».
     if show_my_bookings:
-        # book|buy, raffle, my_bookings, formats, venues|rules, manager|channel
-        kb.adjust(2, 1, 1, 1, 2, 2)
-    else:
-        # book, buy, raffle, formats, venues|rules, manager|channel
         kb.adjust(1, 1, 1, 1, 2, 2)
+    else:
+        kb.adjust(1, 1, 1, 2, 2)
     return kb.as_json()
 
 
@@ -1452,6 +1452,12 @@ class VKBotApp:
         session = self.raffle_sessions.get(int(vk_id)) or {}
         if session.get("screen_requested") and not cmd:
             await self._handle_raffle_screenshot(peer_id, vk_id, message)
+            return
+
+        # Запуск розыгрыша по ссылке: ?ref=standup_rozygr (или слово «розыгрыш»).
+        ref = str(message.get("ref") or payload.get("ref") or "").strip().casefold()
+        if ref in _RAFFLE_REF_VALUES or cmd == "raffle":
+            await self._send_raffle_start(peer_id, vk_id)
             return
 
         if text.lower() in {"/start", "start", "начать"} or cmd == "main_menu":
