@@ -935,7 +935,8 @@ def ensure_help_tables():
                 """
                 CREATE TABLE IF NOT EXISTS help_requests (
                     id BIGSERIAL PRIMARY KEY,
-                    telegram_id BIGINT NOT NULL,
+                    telegram_id BIGINT,
+                    vk_id BIGINT,
                     username TEXT,
                     full_name TEXT,
                     question_text TEXT,
@@ -945,10 +946,14 @@ def ensure_help_tables():
                         CHECK (status IN ('open', 'answered')),
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     answered_at TIMESTAMPTZ,
-                    UNIQUE (help_chat_id, help_message_id)
+                    UNIQUE (help_chat_id, help_message_id),
+                    CHECK (telegram_id IS NOT NULL OR vk_id IS NOT NULL)
                 )
                 """
             )
+            # Миграции для уже существующей таблицы (TG-only).
+            cur.execute("ALTER TABLE help_requests ADD COLUMN IF NOT EXISTS vk_id BIGINT")
+            cur.execute("ALTER TABLE help_requests ALTER COLUMN telegram_id DROP NOT NULL")
         conn.commit()
 
 
@@ -959,20 +964,25 @@ def create_help_request(
     question_text,
     help_chat_id,
     help_message_id,
+    *,
+    vk_id=None,
 ):
     if not _use_postgres():
         return
+    if telegram_id is None and vk_id is None:
+        raise ValueError("telegram_id or vk_id is required for help request")
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO help_requests (
-                    telegram_id, username, full_name, question_text,
+                    telegram_id, vk_id, username, full_name, question_text,
                     help_chat_id, help_message_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (help_chat_id, help_message_id) DO UPDATE SET
                     telegram_id = EXCLUDED.telegram_id,
+                    vk_id = EXCLUDED.vk_id,
                     username = EXCLUDED.username,
                     full_name = EXCLUDED.full_name,
                     question_text = EXCLUDED.question_text,
@@ -981,6 +991,7 @@ def create_help_request(
                 """,
                 (
                     telegram_id,
+                    vk_id,
                     username or None,
                     full_name or None,
                     question_text or None,
@@ -998,7 +1009,7 @@ def get_help_request_by_message(help_chat_id, help_message_id):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT telegram_id, username, full_name, question_text, status
+                SELECT telegram_id, username, full_name, question_text, status, vk_id
                 FROM help_requests
                 WHERE help_chat_id = %s AND help_message_id = %s
                 """,

@@ -1,5 +1,6 @@
 from html import escape
 from datetime import datetime
+import logging
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -40,6 +41,7 @@ from bot.utils.nav_messages import (
 from bot.utils.ticket import generate_ticket
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 # Маркер для WELCOME_MARKER в booking/formats — держать совпадение с текстом приветствия.
 WELCOME_TEXT = (
@@ -268,14 +270,43 @@ def _ticket_view_kb(page: int = 0):
 
 
 def _help_card_text(
-    telegram_id: int,
+    telegram_id: int | None,
     full_name: str | None,
     username: str | None,
     question: str,
     phone: str | None = None,
     answer: str | None = None,
     manager_name: str | None = None,
+    *,
+    vk_id: int | None = None,
 ) -> str:
+    if vk_id is not None:
+        title = "✅ Вопрос отвечен" if answer is not None else "❓ Вопрос из VK"
+        lines = [
+            f"<b>{title}</b>",
+            "",
+            f"VK id: <code>{int(vk_id)}</code>",
+        ]
+        if phone:
+            lines.append(f"Телефон: {escape(phone)}")
+        lines.extend(["", f"<b>Вопрос:</b>\n{escape(question)}"])
+        if answer is not None:
+            from bot.utils.ticket import now_msk
+
+            answered_at = now_msk().strftime("%d.%m.%Y в %H:%M")
+            manager = escape(manager_name or "менеджера")
+            lines.extend([
+                "",
+                f"<b>Ответ от {manager} ({answered_at}):</b>",
+                escape(answer),
+            ])
+        else:
+            lines.extend([
+                "",
+                "Чтобы ответить пользователю, ответьте reply на это сообщение.",
+            ])
+        return "\n".join(lines)
+
     username_label = f"@{username}" if username else "без username"
     title = "✅ Вопрос отвечен" if answer is not None else "🆕 Новый вопрос из бота"
     lines = [
@@ -625,34 +656,73 @@ async def help_chat_reply(message: Message):
     username = request[1]
     full_name = request[2]
     question = request[3] or "Вопрос без текста"
+    vk_id = request[5] if len(request) > 5 else None
     answer_text = message.text or message.caption or "Ответ отправлен файлом/медиа"
-    if message.text:
-        await message.bot.send_message(
-            telegram_id,
-            f"Ответ техподдержки:\n\n{message.text}",
-        )
+
+    if vk_id:
+        sent_ok = await _send_vk_support_answer(int(vk_id), answer_text, message)
+        if not sent_ok:
+            await message.reply("Не удалось отправить ответ в VK. Проверьте VK_GROUP_TOKEN / права сообщений.")
+            return
+        phone = get_last_phone(vk_id=int(vk_id))
+    elif telegram_id:
+        if message.text:
+            await message.bot.send_message(
+                int(telegram_id),
+                f"Ответ техподдержки:\n\n{message.text}",
+            )
+        else:
+            await message.bot.copy_message(
+                chat_id=int(telegram_id),
+                from_chat_id=message.chat.id,
+                message_id=message.message_id,
+            )
+        phone = get_last_phone(int(telegram_id))
     else:
-        await message.bot.copy_message(
-            chat_id=telegram_id,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id,
-        )
+        return
+
     mark_help_request_answered(message.chat.id, replied.message_id)
     try:
         await replied.edit_text(
             _help_card_text(
-                telegram_id=telegram_id,
+                telegram_id=int(telegram_id) if telegram_id else None,
                 full_name=full_name,
                 username=username,
                 question=question,
-                phone=get_last_phone(telegram_id),
+                phone=phone,
                 answer=answer_text,
                 manager_name=message.from_user.full_name if message.from_user else None,
+                vk_id=int(vk_id) if vk_id else None,
             ),
             parse_mode="HTML",
         )
     except Exception:
         pass
+
+
+async def _send_vk_support_answer(vk_id: int, answer_text: str, message: Message) -> bool:
+    """Отправляет ответ поддержки пользователю VK (текст; медиа — только подпись/уведомление)."""
+    try:
+        from bot.vk.client import VKClient
+        from bot.vk.config import load_vk_settings
+
+        settings = load_vk_settings()
+        if not settings.is_configured:
+            return False
+        client = VKClient(settings)
+        text = message.text or message.caption
+        if text:
+            await client.send_message(int(vk_id), f"Ответ техподдержки:\n\n{text}")
+        else:
+            await client.send_message(
+                int(vk_id),
+                "Ответ техподдержки: сообщение без текста (файл/медиа). "
+                "Напишите менеджеру, если нужно уточнение.",
+            )
+        return True
+    except Exception:
+        logger.exception("Failed to send VK support answer vk_id=%s", vk_id)
+        return False
 
 
 @router.callback_query(F.data == "main_menu")

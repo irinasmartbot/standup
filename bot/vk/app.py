@@ -23,7 +23,14 @@ from bot.db.analytics import (
     EVENT_SHOW_CARD,
     track_event,
 )
-from bot.db.crud import ensure_user, get_booking, get_last_phone, update_booking_status
+from bot.db.crud import (
+    create_help_request,
+    ensure_help_tables,
+    ensure_user,
+    get_booking,
+    get_last_phone,
+    update_booking_status,
+)
 from bot.handlers.booking import BOOKING_RULES_TEXT as TG_BOOKING_RULES_TEXT
 from bot.handlers.formats import (
     BUY_TICKET_TEXT as TG_BUY_TICKET_TEXT,
@@ -1630,23 +1637,30 @@ class VKBotApp:
         )
 
     async def _forward_vk_help_question(self, vk_id: int, text: str) -> bool:
-        """Дублирует вопрос в Telegram HELP_CHAT (как /help в TG)."""
+        """Карточка в Telegram HELP_CHAT + запись help_requests (как TG /help)."""
         try:
             help_chat_id = int(HELP_CHAT_ID) if HELP_CHAT_ID else 0
         except (TypeError, ValueError):
             help_chat_id = 0
         if not BOT_TOKEN or not help_chat_id:
             return False
+
+        ensure_help_tables()
         phone = ""
         try:
             phone = get_last_phone(vk_id=vk_id) or ""
         except Exception:
             logger.exception("Failed to load phone for VK help vk_id=%s", vk_id)
-        body = (
-            "❓ Вопрос из VK\n"
-            f"VK id: <code>{vk_id}</code>\n"
-            f"Телефон: {phone or '—'}\n\n"
-            f"{text.strip()}"
+
+        from bot.handlers.start import _help_card_text
+
+        body = _help_card_text(
+            telegram_id=None,
+            full_name=None,
+            username=None,
+            question=text.strip(),
+            phone=phone or None,
+            vk_id=int(vk_id),
         )
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         try:
@@ -1664,6 +1678,19 @@ class VKBotApp:
             if not data.get("ok"):
                 logger.warning("TG help forward failed for VK vk_id=%s: %s", vk_id, data)
                 return False
+            message_id = ((data.get("result") or {}) or {}).get("message_id")
+            if not message_id:
+                logger.warning("TG help forward without message_id vk_id=%s: %s", vk_id, data)
+                return False
+            create_help_request(
+                None,
+                None,
+                None,
+                text.strip(),
+                help_chat_id,
+                int(message_id),
+                vk_id=int(vk_id),
+            )
             return True
         except Exception:
             logger.exception("TG help forward error for VK vk_id=%s", vk_id)
