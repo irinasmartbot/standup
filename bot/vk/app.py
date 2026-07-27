@@ -1293,6 +1293,7 @@ class VKBotApp:
             "check_date_page",
             "best_date_page",
             "hitloto_date_page",
+            "rz_dates_page",
             "venues_details",
             "venues_card",
         }:
@@ -1732,7 +1733,8 @@ class VKBotApp:
             return True
 
         if cmd in {"rz_dates", "rz_dates_page"}:
-            if not await vk_raffle.is_community_member(vk_id):
+            # На листании не дёргаем groups.isMember каждый раз.
+            if cmd == "rz_dates" and not await vk_raffle.is_community_member(vk_id):
                 await vk_raffle.continue_after_subscribe_check(vk_id)
                 return True
             page = int(payload.get("page") or 0)
