@@ -1408,6 +1408,317 @@ def get_user_raffle_flags(
             return {"rozygrysh_used": bool(row[0]), "is_blocked": bool(row[1])}
 
 
+def ensure_offline_gift_tables():
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vk_offline_gift_entries (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_id BIGINT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+                    vk_id BIGINT NOT NULL,
+                    full_name TEXT,
+                    is_winner BOOLEAN NOT NULL DEFAULT false,
+                    subscribed_checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE (event_id, vk_id)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_vk_offline_gift_event
+                ON vk_offline_gift_entries (event_id, created_at)
+                """
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uniq_vk_offline_gift_winner
+                ON vk_offline_gift_entries (event_id)
+                WHERE is_winner
+                """
+            )
+        conn.commit()
+
+
+def _offline_event_row(row) -> dict:
+    return {
+        "id": row[0],
+        "format": row[1],
+        "date": row[2],
+        "weekday": row[3] or "",
+        "time": row[4],
+        "location": row[5] or "",
+        "address": row[6] or "",
+        "entries_count": int(row[7] or 0) if len(row) > 7 else 0,
+        "winner_name": row[8] if len(row) > 8 else None,
+    }
+
+
+def get_offline_gift_dates(limit: int = 14) -> list[dict]:
+    if not _use_postgres():
+        return []
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    to_char(e.event_date, 'DD.MM.YYYY') AS event_date,
+                    COALESCE(min(e.weekday), '') AS weekday,
+                    count(*) AS events_count
+                FROM events e
+                WHERE e.status = 'active'
+                  AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
+                  AND e.format IN ('proverka', 'best', 'hitloto')
+                GROUP BY e.event_date
+                ORDER BY e.event_date
+                LIMIT %s
+                """,
+                (int(limit),),
+            )
+            return [
+                {"date": row[0], "weekday": row[1] or "", "events_count": int(row[2] or 0)}
+                for row in cur.fetchall()
+            ]
+
+
+def get_offline_gift_events_for_date(event_date: str) -> list[dict]:
+    if not _use_postgres():
+        return []
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    e.id,
+                    e.format,
+                    to_char(e.event_date, 'DD.MM.YYYY') AS event_date,
+                    e.weekday,
+                    to_char(e.event_time, 'HH24:MI') AS event_time,
+                    e.location,
+                    e.address,
+                    count(g.id) AS entries_count,
+                    max(CASE WHEN g.is_winner THEN COALESCE(g.full_name, 'VK ' || g.vk_id::text) END)
+                        AS winner_name
+                FROM events e
+                LEFT JOIN vk_offline_gift_entries g ON g.event_id = e.id
+                WHERE e.status = 'active'
+                  AND e.event_date = %s
+                  AND e.format IN ('proverka', 'best', 'hitloto')
+                GROUP BY e.id
+                ORDER BY e.event_time, e.location, e.format
+                """,
+                (_parse_event_date(event_date),),
+            )
+            return [_offline_event_row(row) for row in cur.fetchall()]
+
+
+def get_offline_gift_today_events() -> list[dict]:
+    if not _use_postgres():
+        return []
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    e.id,
+                    e.format,
+                    to_char(e.event_date, 'DD.MM.YYYY') AS event_date,
+                    e.weekday,
+                    to_char(e.event_time, 'HH24:MI') AS event_time,
+                    e.location,
+                    e.address,
+                    count(g.id) AS entries_count,
+                    max(CASE WHEN g.is_winner THEN COALESCE(g.full_name, 'VK ' || g.vk_id::text) END)
+                        AS winner_name
+                FROM events e
+                LEFT JOIN vk_offline_gift_entries g ON g.event_id = e.id
+                WHERE e.status = 'active'
+                  AND e.event_date = (now() AT TIME ZONE 'Europe/Moscow')::date
+                  AND e.format IN ('proverka', 'best', 'hitloto')
+                GROUP BY e.id
+                ORDER BY e.event_time, e.location, e.format
+                """
+            )
+            return [_offline_event_row(row) for row in cur.fetchall()]
+
+
+def get_offline_gift_event(event_id: int) -> dict | None:
+    if not _use_postgres():
+        return None
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    e.id,
+                    e.format,
+                    to_char(e.event_date, 'DD.MM.YYYY') AS event_date,
+                    e.weekday,
+                    to_char(e.event_time, 'HH24:MI') AS event_time,
+                    e.location,
+                    e.address,
+                    count(g.id) AS entries_count,
+                    max(CASE WHEN g.is_winner THEN COALESCE(g.full_name, 'VK ' || g.vk_id::text) END)
+                        AS winner_name
+                FROM events e
+                LEFT JOIN vk_offline_gift_entries g ON g.event_id = e.id
+                WHERE e.id = %s
+                  AND e.status = 'active'
+                  AND e.format IN ('proverka', 'best', 'hitloto')
+                GROUP BY e.id
+                """,
+                (int(event_id),),
+            )
+            row = cur.fetchone()
+            return _offline_event_row(row) if row else None
+
+
+def record_offline_gift_entry(*, event_id: int, vk_id: int, full_name: str = "") -> dict | None:
+    if not _use_postgres():
+        return None
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            event = get_offline_gift_event(int(event_id))
+            if not event:
+                return None
+            user_id = _upsert_user(
+                cur,
+                None,
+                None,
+                full_name or None,
+                None,
+                vk_id=int(vk_id),
+                source="vkontakte",
+            )
+            cur.execute(
+                """
+                INSERT INTO vk_offline_gift_entries (
+                    event_id, user_id, vk_id, full_name, subscribed_checked_at, created_at
+                )
+                VALUES (%s, %s, %s, %s, now(), now())
+                ON CONFLICT (event_id, vk_id)
+                DO UPDATE SET
+                    user_id = EXCLUDED.user_id,
+                    full_name = COALESCE(EXCLUDED.full_name, vk_offline_gift_entries.full_name),
+                    subscribed_checked_at = now()
+                RETURNING id, (xmax = 0) AS inserted
+                """,
+                (int(event_id), user_id, int(vk_id), full_name or None),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    event = get_offline_gift_event(int(event_id)) or {}
+    return {
+        "entry_id": row[0] if row else None,
+        "inserted": bool(row[1]) if row else False,
+        "event": event,
+    }
+
+
+def get_offline_gift_entries(event_id: int) -> list[dict]:
+    if not _use_postgres():
+        return []
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    vk_id,
+                    COALESCE(full_name, 'VK ' || vk_id::text) AS full_name,
+                    is_winner,
+                    to_char(created_at AT TIME ZONE 'Europe/Moscow', 'DD.MM HH24:MI') AS created_label
+                FROM vk_offline_gift_entries
+                WHERE event_id = %s
+                ORDER BY created_at, id
+                """,
+                (int(event_id),),
+            )
+            return [
+                {
+                    "id": row[0],
+                    "vk_id": row[1],
+                    "full_name": row[2],
+                    "is_winner": bool(row[3]),
+                    "created_label": row[4],
+                }
+                for row in cur.fetchall()
+            ]
+
+
+def draw_offline_gift_winner(event_id: int, *, redraw: bool = False) -> dict | None:
+    if not _use_postgres():
+        return None
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            if not redraw:
+                cur.execute(
+                    """
+                    SELECT id, vk_id, COALESCE(full_name, 'VK ' || vk_id::text), is_winner
+                    FROM vk_offline_gift_entries
+                    WHERE event_id = %s AND is_winner = true
+                    LIMIT 1
+                    """,
+                    (int(event_id),),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    return {
+                        "id": existing[0],
+                        "vk_id": existing[1],
+                        "full_name": existing[2],
+                        "is_winner": bool(existing[3]),
+                        "already_had_winner": True,
+                    }
+            cur.execute(
+                "UPDATE vk_offline_gift_entries SET is_winner = false WHERE event_id = %s",
+                (int(event_id),),
+            )
+            cur.execute(
+                """
+                SELECT id
+                FROM vk_offline_gift_entries
+                WHERE event_id = %s
+                ORDER BY random()
+                LIMIT 1
+                """,
+                (int(event_id),),
+            )
+            picked = cur.fetchone()
+            if not picked:
+                conn.commit()
+                return None
+            cur.execute(
+                """
+                UPDATE vk_offline_gift_entries
+                SET is_winner = true
+                WHERE id = %s
+                RETURNING id, vk_id, COALESCE(full_name, 'VK ' || vk_id::text), is_winner
+                """,
+                (picked[0],),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return {
+        "id": row[0],
+        "vk_id": row[1],
+        "full_name": row[2],
+        "is_winner": bool(row[3]),
+        "already_had_winner": False,
+    }
+
+
 def save_raffle_moderation_message(submission_id, chat_id, message_id):
     if not _use_postgres():
         return

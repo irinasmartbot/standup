@@ -416,6 +416,11 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
         await send_raffle_start(message, state)
         return
 
+    if payload == "chek_list":
+        from bot.handlers.offline_gift import send_check_list_start
+        await send_check_list_start(message)
+        return
+
     if payload == "quick_booking":
         from bot.handlers.formats import send_all_formats
         await send_all_formats(message, from_deep_link=True)

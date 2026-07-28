@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import logging
 import random
@@ -71,6 +72,7 @@ _EXCLUDED_RANDOM_COVER_KEYS = frozenset({"temple_bar", "escobar", "nebar", "hitl
 # Deep link: vk.com/write-{group_id}?ref=standup_rozygr или vk.me/{screen_name}?ref=...
 # (ссылка вида vk.com/club...?ref= НЕ передаёт ref в message_new).
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
+_OFFLINE_GIFT_REF_VALUES = frozenset({"offline_gift", "gift", "chek_list", "check_list"})
 
 
 def raffle_entry_link(settings: VKSettings) -> str:
@@ -84,6 +86,40 @@ def raffle_entry_link(settings: VKSettings) -> str:
         if name and not name.startswith("club") and name not in {"vk.com", "vk.ru"}:
             return f"https://vk.me/{name}?ref=standup_rozygr"
     return "напиши «розыгрыш»"
+
+
+def _offline_gift_event_id_from_ref(ref: str) -> int | None:
+    value = (ref or "").strip().casefold()
+    for prefix in ("offline_gift_", "gift_", "chek_list_", "check_list_"):
+        if value.startswith(prefix):
+            raw = value[len(prefix) :]
+            return int(raw) if raw.isdigit() else None
+    return None
+
+
+def _is_offline_gift_ref(ref: str) -> bool:
+    value = (ref or "").strip().casefold()
+    return value in _OFFLINE_GIFT_REF_VALUES or _offline_gift_event_id_from_ref(value) is not None
+
+
+def _gift_format_label(value: str) -> str:
+    return {
+        "proverka": "Проверка",
+        "best": "BEST",
+        "hitloto": "Хитлото",
+    }.get(value or "", value or "Шоу")
+
+
+def _gift_event_label(event: dict[str, Any]) -> str:
+    return " · ".join(
+        part
+        for part in [
+            event.get("time") or "",
+            event.get("location") or "",
+            _gift_format_label(event.get("format") or ""),
+        ]
+        if part
+    )
 
 # HTML с <b>/<i> — client.send_message сам соберёт VK format_data.
 WELCOME_TEXT = (
@@ -1372,6 +1408,9 @@ class VKBotApp:
             "booking_phone_use",
             "booking_phone_change",
             "rz_not_alone",
+            "ogift_event",
+            "ogift_sub_check",
+            "ogift_today",
             "venues_details",
             "venues_card",
         }:
@@ -1510,6 +1549,11 @@ class VKBotApp:
                 "⬅️ в главное меню": "main_menu",
                 "мои брони": "my_bookings",
                 "розыгрыш": "raffle",
+                "подарок": "offline_gift",
+                "чек лист": "offline_gift",
+                "чек-лист": "offline_gift",
+                "chek_list": "offline_gift",
+                "check_list": "offline_gift",
             }
             cmd = text_commands.get(text_key)
             if not cmd and text_key in {"📅 выбрать по дате", "выбрать по дате"}:
@@ -1535,6 +1579,14 @@ class VKBotApp:
         ):
             return
 
+        if await self._handle_offline_gift_flow(
+            peer_id,
+            vk_id,
+            cmd=cmd,
+            payload=payload,
+        ):
+            return
+
         if not cmd:
             kind = self._resolve_raffle_screenshot_kind(vk_id)
             if kind:
@@ -1554,6 +1606,15 @@ class VKBotApp:
         # сообщения (тогда «начать»/бронь ошибочно открывали розыгрыш).
         ref = str(message.get("ref") or payload.get("ref") or "").strip().casefold()
         payload_command = str(payload.get("command") or "").strip().casefold()
+        is_gift_deeplink = _is_offline_gift_ref(ref) and payload_command == "start" and not cmd
+        if cmd == "offline_gift" or is_gift_deeplink:
+            event_id = _offline_gift_event_id_from_ref(ref)
+            if event_id:
+                await self._join_offline_gift_event(peer_id, vk_id, event_id)
+            else:
+                await self._send_offline_gift_events(peer_id)
+            return
+
         is_raffle_deeplink = (
             ref in _RAFFLE_REF_VALUES and payload_command == "start" and not cmd
         )
@@ -1759,6 +1820,165 @@ class VKBotApp:
         if text and not cmd:
             await self._handle_unknown_free_text(peer_id, vk_id, text)
             return
+
+    async def _handle_offline_gift_flow(
+        self,
+        peer_id: int,
+        vk_id: int,
+        *,
+        cmd: str | None,
+        payload: dict[str, Any] | None = None,
+    ) -> bool:
+        payload = payload or {}
+        if cmd not in {"offline_gift", "ogift_event", "ogift_sub_check", "ogift_today"}:
+            return False
+
+        if cmd == "offline_gift" or cmd == "ogift_today":
+            await self._send_offline_gift_events(peer_id)
+            return True
+
+        try:
+            event_id = int(payload.get("event_id") or 0)
+        except (TypeError, ValueError):
+            event_id = 0
+        if not event_id:
+            await self._send_offline_gift_events(peer_id)
+            return True
+
+        await self._join_offline_gift_event(peer_id, vk_id, event_id)
+        return True
+
+    def _offline_gift_events_keyboard(self, events: list[dict]) -> str:
+        kb = VKKeyboardBuilder(inline=True)
+        for event in events[:10]:
+            kb.button(
+                _gift_event_label(event),
+                _payload("ogift_event", event_id=int(event["id"])),
+                color="primary",
+            )
+        kb.button("В главное меню", _payload("main_menu"))
+        kb.adjust(1)
+        return kb.as_json()
+
+    async def _send_offline_gift_events(self, peer_id: int) -> None:
+        from bot.db.crud import get_offline_gift_today_events
+
+        events = get_offline_gift_today_events()
+        if not events:
+            await self._send_text(
+                peer_id,
+                (
+                    "🎁 <b>Розыгрыш подарка</b>\n\n"
+                    "На сегодня активных шоу не найдено. "
+                    "Покажи это сообщение администратору или попробуй позже."
+                ),
+                replace_nav=False,
+            )
+            return
+        if len(events) == 1:
+            event = events[0]
+            kb = VKKeyboardBuilder(inline=True)
+            kb.button(
+                "Участвовать в розыгрыше",
+                _payload("ogift_event", event_id=int(event["id"])),
+                color="primary",
+            )
+            kb.button("В главное меню", _payload("main_menu"))
+            kb.adjust(1)
+            await self._send_text(
+                peer_id,
+                (
+                    "🎁 <b>Розыгрыш подарка на шоу</b>\n\n"
+                    f"<b>Сегодня:</b> {html.escape(_gift_event_label(event))}\n\n"
+                    "Нажми кнопку ниже, чтобы попасть в список участников."
+                ),
+                keyboard=kb.as_json(),
+                replace_nav=False,
+            )
+            return
+        await self._send_text(
+            peer_id,
+            (
+                "🎁 <b>Розыгрыш подарка на шоу</b>\n\n"
+                "Выбери, на каком ты сейчас шоу. Это важно, если сегодня "
+                "идёт несколько мероприятий."
+            ),
+            keyboard=self._offline_gift_events_keyboard(events),
+            replace_nav=False,
+        )
+
+    async def _join_offline_gift_event(self, peer_id: int, vk_id: int, event_id: int) -> None:
+        from bot.db.crud import get_offline_gift_event, record_offline_gift_entry
+
+        event = get_offline_gift_event(int(event_id))
+        if not event:
+            await self._send_text(
+                peer_id,
+                "Шоу не найдено или уже недоступно. Выбери актуальное шоу 👇",
+                replace_nav=False,
+            )
+            await self._send_offline_gift_events(peer_id)
+            return
+
+        try:
+            subscribed = await self.client.is_group_member(vk_id)
+        except Exception:
+            logger.exception("Offline gift subscription check failed vk_id=%s", vk_id)
+            subscribed = False
+        if not subscribed:
+            kb = VKKeyboardBuilder(inline=True)
+            if self.settings.community_link:
+                kb.button("Подписаться на сообщество", link=self.settings.community_link)
+            kb.button(
+                "Я подписался",
+                _payload("ogift_sub_check", event_id=int(event_id)),
+                color="primary",
+            )
+            kb.button("Выбрать другое шоу", _payload("ogift_today"))
+            kb.adjust(1)
+            await self._send_text(
+                peer_id,
+                (
+                    "🎁 <b>Чтобы участвовать в розыгрыше подарка</b>, "
+                    "подпишись на наше сообщество VK.\n\n"
+                    f"<b>Шоу:</b> {html.escape(_gift_event_label(event))}\n\n"
+                    "Если уже подписан(а), нажми «Я подписался»."
+                ),
+                keyboard=kb.as_json(),
+                replace_nav=False,
+            )
+            return
+
+        try:
+            full_name = await self.client.get_user_display_name(vk_id)
+        except Exception:
+            logger.exception("VK users.get failed for offline gift vk_id=%s", vk_id)
+            full_name = ""
+        result = record_offline_gift_entry(
+            event_id=int(event_id),
+            vk_id=int(vk_id),
+            full_name=full_name,
+        )
+        if not result:
+            await self._send_text(peer_id, "Не удалось добавить в список. Покажи это администратору.")
+            return
+        count = int((result.get("event") or {}).get("entries_count") or 0)
+        status = (
+            "Ты в списке участников ✅"
+            if result.get("inserted")
+            else "Ты уже есть в списке участников ✅"
+        )
+        await self._send_text(
+            peer_id,
+            (
+                f"🎁 <b>{status}</b>\n\n"
+                f"<b>Шоу:</b> {html.escape(_gift_event_label(event))}\n"
+                f"<b>Имя:</b> {html.escape(full_name or 'VK ' + str(vk_id))}\n"
+                f"<b>Участников сейчас:</b> {count}\n\n"
+                "Ведущий выберет победителя во время шоу. Удачи!"
+            ),
+            replace_nav=False,
+        )
 
     async def _handle_raffle_flow(
         self,

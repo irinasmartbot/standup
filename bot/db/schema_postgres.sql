@@ -131,6 +131,25 @@ CREATE TABLE IF NOT EXISTS raffle_vk_awaiting (
     awaiting_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS vk_offline_gift_entries (
+    id BIGSERIAL PRIMARY KEY,
+    event_id BIGINT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    vk_id BIGINT NOT NULL,
+    full_name TEXT,
+    is_winner BOOLEAN NOT NULL DEFAULT false,
+    subscribed_checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (event_id, vk_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vk_offline_gift_event
+    ON vk_offline_gift_entries (event_id, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_vk_offline_gift_winner
+    ON vk_offline_gift_entries (event_id)
+    WHERE is_winner;
+
 
 -- Product analytics (funnel / admin dashboard)
 CREATE TABLE IF NOT EXISTS analytics_events (
