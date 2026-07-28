@@ -16,6 +16,34 @@ class VKAPIError(RuntimeError):
     pass
 
 
+def _message_id_from_send_response(response: Any) -> int:
+    """messages.send: int (старые v) или dict/list (новые v)."""
+    if response is None:
+        return 0
+    if isinstance(response, bool):
+        return 0
+    if isinstance(response, int):
+        return int(response)
+    if isinstance(response, str) and response.strip().isdigit():
+        return int(response.strip())
+    if isinstance(response, list) and response:
+        return _message_id_from_send_response(response[0])
+    if isinstance(response, dict):
+        for key in ("message_id", "conversation_message_id", "id"):
+            value = response.get(key)
+            if value is None or isinstance(value, bool):
+                continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    try:
+        return int(response)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        logger.warning("Unexpected messages.send response type: %r", response)
+        return 0
+
+
 def _connector() -> aiohttp.TCPConnector:
     try:
         import certifi
@@ -78,7 +106,7 @@ class VKClient:
                 response = await self.api("messages.send", **params)
             else:
                 raise
-        return int(response)
+        return _message_id_from_send_response(response)
 
     async def edit_message(
         self,

@@ -588,6 +588,8 @@ class VKBotApp:
         except Exception:
             if not attachment:
                 raise
+            # Только реальные ошибки API/сети. Не повторять, если сообщение уже ушло
+            # (иначе в чате появляется дубль без картинки).
             logger.exception("Failed to send VK message with attachment, retrying without it")
             message_id = await self.client.send_message(peer_id, text, keyboard=keyboard)
         if clear_id:
@@ -1544,17 +1546,26 @@ class VKBotApp:
                 if time.monotonic() - last_burst < 8.0:
                     return
 
-        # Запуск розыгрыша по ссылке: ?ref=standup_rozygr (или слово «розыгрыш»).
+        # Розыгрыш:
+        # - явно словом «розыгрыш»;
+        # - deep link: кнопка Start с payload command=start и ref=...
+        # Нельзя брать голый message.ref: VK «липко» таскает ref на следующие
+        # сообщения (тогда «начать»/бронь ошибочно открывали розыгрыш).
         ref = str(message.get("ref") or payload.get("ref") or "").strip().casefold()
-        if ref in _RAFFLE_REF_VALUES or cmd == "raffle":
+        payload_command = str(payload.get("command") or "").strip().casefold()
+        is_raffle_deeplink = (
+            ref in _RAFFLE_REF_VALUES and payload_command == "start" and not cmd
+        )
+        if cmd == "raffle" or is_raffle_deeplink:
             await self._send_raffle_start(peer_id, vk_id)
             return
 
-        if text.lower() in {"/start", "start", "начать"} or cmd == "main_menu":
+        if text.lower() in {"/start", "start", "начать"} or cmd == "main_menu" or payload_command == "start":
             await self.send_menu(
                 peer_id,
                 vk_id=vk_id,
-                is_start=text.lower() in {"/start", "start", "начать"},
+                is_start=text.lower() in {"/start", "start", "начать"}
+                or payload_command == "start",
             )
             return
         if cmd == "formats":
