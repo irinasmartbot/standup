@@ -114,12 +114,79 @@ def after_booking_keyboard(booking_id: int, *, offer_ticket: bool) -> str:
     return kb.as_json()
 
 
+def after_raffle_booking_keyboard(
+    booking_id: int,
+    *,
+    offer_ticket: bool,
+    manager_link: str,
+    community_link: str,
+) -> str:
+    """Как в TG после брони розыгрыша: билет / не один / отмена / менеджер / сообщество."""
+    kb = VKKeyboardBuilder(inline=True)
+    if offer_ticket:
+        kb.button(
+            "🎟 Получить билет",
+            _payload("booking_get_ticket", booking_id=booking_id),
+            color="positive",
+        )
+    kb.button("Что, если я хочу прийти не один?", _payload("rz_not_alone"))
+    kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
+    if (manager_link or "").strip():
+        kb.button("Задать вопрос менеджеру", link=manager_link.strip())
+    if (community_link or "").strip():
+        kb.button("Заглянуть в наше сообщество", link=community_link.strip())
+    kb.adjust(1)
+    return kb.as_json()
+
+
+def raffle_not_alone_text(*, manager_link: str, paid_booking_link: str = "") -> str:
+    manager = (manager_link or "").strip() or MANAGER_LINK
+    paid = (paid_booking_link or "").strip()
+    if paid:
+        booking_part = f'<a href="{paid}">систему бронирования</a>'
+    else:
+        # Пока нет боевой ссылки — ведём в платную ветку BEST внутри VK-бота.
+        booking_part = "систему бронирования (кнопка ниже — StandUp BEST)"
+    return (
+        f"Ваши друзья могут купить билеты на выбранное Вами шоу через {booking_part}.\n\n"
+        f"После этого просто напишите нашему <a href=\"{manager}\">менеджеру</a>, "
+        f"на какие места и на какую дату они взяли билеты.\n\n"
+        "Мы уберём из продажи соседнее место специально для Вас и посадим туда 😉"
+    )
+
+
+def raffle_not_alone_keyboard(*, paid_booking_link: str = "") -> str:
+    kb = VKKeyboardBuilder(inline=True)
+    paid = (paid_booking_link or "").strip()
+    if paid:
+        kb.button("Купить билет друзьям", link=paid, color="positive")
+    else:
+        kb.button("Купить билет (BEST)", _payload("best"), color="positive")
+    kb.adjust(1)
+    return kb.as_json()
+
+
 def manage_ticket_keyboard(booking_id: int, settings_manager_link: str) -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
     kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
     kb.button("Задать вопрос менеджеру", link=settings_manager_link)
     kb.button("В главное меню", _payload("main_menu"))
+    kb.adjust(1)
+    return kb.as_json()
+
+
+def raffle_ticket_manage_keyboard(
+    booking_id: int,
+    *,
+    manager_link: str = "",
+) -> str:
+    """После выдачи билета розыгрыша — как в TG."""
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
+    kb.button("Что, если я хочу прийти не один?", _payload("rz_not_alone"))
+    if (manager_link or "").strip():
+        kb.button("Задать вопрос менеджеру", link=manager_link.strip())
     kb.adjust(1)
     return kb.as_json()
 
@@ -208,6 +275,7 @@ async def complete_booking(
     address = (event or {}).get("address") or session.get("event_address") or ""
     offer_ticket = days_until <= 1
 
+    is_raffle = (session.get("booking_format") or "") == "rozygrysh"
     details = booking_details_block(
         date_str=date_str,
         event_time=event_time or "",
@@ -215,7 +283,33 @@ async def complete_booking(
         guests=None if offer_ticket else guests,
         weekday_part=weekday_part,
     )
-    if offer_ticket:
+    if is_raffle:
+        if offer_ticket:
+            text = (
+                f"<b>Отлично!</b>\n\n"
+                f"❗ <b>Важная информация</b> — для того чтобы мы окончательно закрепили за Вами место "
+                f"на дату и время:\n"
+                f"{details}\n\n"
+                f"<b>ОБЯЗАТЕЛЬНО подтвердите бронь, нажав на кнопку «Получить билет»</b>\n\n"
+                f"❗ Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована."
+            )
+        else:
+            text = (
+                f"<b>Отлично!</b> Мы внесли Вас в списки гостей:\n\n"
+                f"{details}\n\n"
+                f"<b>❗ Внимание, за сутки до мероприятия Вам придёт сообщение-напоминание "
+                f"с подробностями и кнопкой «Получить билет». "
+                f"Обязательно нажмите кнопку, чтобы подтвердить бронь. "
+                f"Если Вы не успеете подтвердить бронь, она будет аннулирована.</b>\n\n"
+                f"Если поменяются планы, обязательно предупредите 😊"
+            )
+        keyboard = after_raffle_booking_keyboard(
+            booking_id,
+            offer_ticket=offer_ticket,
+            manager_link=manager_link,
+            community_link=community_link,
+        )
+    elif offer_ticket:
         text = (
             f"<b>Отлично!</b>\n\n"
             f"<b>Важная информация</b> — чтобы закрепить место:\n"
@@ -223,6 +317,7 @@ async def complete_booking(
             f"<b>ОБЯЗАТЕЛЬНО</b> подтвердите бронь кнопкой «Получить билет».\n"
             f"Если не успеете подтвердить, бронь будет аннулирована."
         )
+        keyboard = after_booking_keyboard(booking_id, offer_ticket=True)
     else:
         text = (
             f"<b>Отлично!</b> Мы внесли вас в списки гостей:\n\n"
@@ -231,11 +326,12 @@ async def complete_booking(
             f"<b>«Получить билет»</b>. "
             f"<b>Обязательно нажмите её</b>, чтобы подтвердить бронь."
         )
+        keyboard = after_booking_keyboard(booking_id, offer_ticket=False)
 
     await client.send_message(
         peer_id,
         text,
-        keyboard=after_booking_keyboard(booking_id, offer_ticket=offer_ticket),
+        keyboard=keyboard,
     )
     return booking_id
 
@@ -304,19 +400,49 @@ async def issue_ticket(
 
     vk_manager = (manager_link or "").strip() or MANAGER_LINK
     vk_community = (community_link or "").strip() or CHANNEL_LINK
-    caption = (
-        "<b>Отлично!</b>\n\n"
-        "<b>Данные по билету:</b>\n\n"
-        f"<b>Ваше имя:</b> {name or ''}\n"
-        f"<b>Дата:</b> {event_date or ''}\n"
-        f"<b>Время:</b> {event_time or ''}\n"
-        f"<b>Место:</b> {place}\n"
-        f"<b>Количество гостей:</b> {guests_word(guests)}\n\n"
-        "Ждем вас на мероприятии ❤️\n\n"
-        f"При вопросах — менеджеру ({vk_manager}). "
-        f"Если срочно — звоните {MANAGER_PHONE}.\n\n"
-        f"Канал анонсов: {vk_community}"
-    )
+    is_raffle = False
+    try:
+        from bot.db.crud import get_active_raffle_booking
+
+        raffle_row = get_active_raffle_booking(vk_id=int(peer_id))
+        is_raffle = bool(raffle_row and int(raffle_row[0]) == int(booking_id))
+    except Exception:
+        pass
+
+    if is_raffle:
+        caption = (
+            "<b>Отлично!</b>\n\n"
+            "<b>Данные по билету:</b>\n\n"
+            f"<b>Ваше имя:</b> {name or ''}\n"
+            f"<b>Дата:</b> {event_date or ''}\n"
+            f"<b>Время:</b> {event_time or ''}\n"
+            f"<b>Место:</b> {place}\n"
+            f"<b>Количество гостей:</b> {guests_word(guests)}\n\n"
+            "Ждем вас на мероприятии ❤️\n\n"
+            "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
+            "чтобы вас посадили вместе — нажмите кнопку «Что, если я хочу прийти не один?» "
+            "и узнайте информацию.\n\n"
+            f"При вопросах — менеджеру ({vk_manager}). "
+            f"Если срочно — звоните {MANAGER_PHONE}.\n\n"
+            f"Наше сообщество: {vk_community}"
+        )
+        keyboard = raffle_ticket_manage_keyboard(booking_id, manager_link=manager_link)
+    else:
+        caption = (
+            "<b>Отлично!</b>\n\n"
+            "<b>Данные по билету:</b>\n\n"
+            f"<b>Ваше имя:</b> {name or ''}\n"
+            f"<b>Дата:</b> {event_date or ''}\n"
+            f"<b>Время:</b> {event_time or ''}\n"
+            f"<b>Место:</b> {place}\n"
+            f"<b>Количество гостей:</b> {guests_word(guests)}\n\n"
+            "Ждем вас на мероприятии ❤️\n\n"
+            f"При вопросах — менеджеру ({vk_manager}). "
+            f"Если срочно — звоните {MANAGER_PHONE}.\n\n"
+            f"Канал анонсов: {vk_community}"
+        )
+        keyboard = manage_ticket_keyboard(booking_id, manager_link)
+
     attachment = await client.upload_message_photo(
         peer_id,
         ticket_buf.getvalue(),
@@ -326,7 +452,7 @@ async def issue_ticket(
         peer_id,
         caption,
         attachment=attachment,
-        keyboard=manage_ticket_keyboard(booking_id, manager_link),
+        keyboard=keyboard,
     )
     save_ticket_message_id(booking_id, msg_id)
 

@@ -1371,6 +1371,7 @@ class VKBotApp:
             "booking_name_change",
             "booking_phone_use",
             "booking_phone_change",
+            "rz_not_alone",
             "venues_details",
             "venues_card",
         }:
@@ -1770,6 +1771,7 @@ class VKBotApp:
         payload = payload or {}
         if cmd not in {
             "raffle",
+            "rz_not_alone",
             "rz_post",
             "rz_review",
             "rz_post_cross",
@@ -1789,6 +1791,19 @@ class VKBotApp:
 
         if cmd == "raffle":
             await self._send_raffle_start(peer_id, vk_id)
+            return True
+
+        if cmd == "rz_not_alone":
+            paid = getattr(self.settings, "paid_booking_link", "") or ""
+            await self._send_text(
+                peer_id,
+                vk_booking.raffle_not_alone_text(
+                    manager_link=self.settings.manager_link,
+                    paid_booking_link=paid,
+                ),
+                keyboard=vk_booking.raffle_not_alone_keyboard(paid_booking_link=paid),
+                replace_nav=False,
+            )
             return True
 
         if cmd == "rz_sub_check":

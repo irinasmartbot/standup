@@ -46,6 +46,8 @@ class VKSettings:
     admin_peer_id: int | None
     manager_link: str
     community_link: str
+    # Ссылка на платную бронь для друзей («не один»). Пока может быть пустой.
+    paid_booking_link: str
     system_images_cache: str
 
     @property
@@ -63,6 +65,7 @@ def load_vk_settings() -> VKSettings:
         admin_peer_id=_as_int(os.getenv("VK_ADMIN_PEER_ID")),
         manager_link=os.getenv("VK_MANAGER_LINK", "https://vk.com/").strip(),
         community_link=os.getenv("VK_COMMUNITY_LINK", "https://vk.com/").strip(),
+        paid_booking_link=os.getenv("VK_PAID_BOOKING_LINK", "").strip(),
         system_images_cache=os.getenv(
             "VK_SYSTEM_IMAGES_CACHE",
             "data/storage/vk_system_images.json",
