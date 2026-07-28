@@ -55,13 +55,13 @@ def booking_card_text(row, *, page: int = 0, total: int = 1) -> str:
         f"<b><i>{MY_BOOKINGS_INTRO}</i></b>",
         "",
         title_line,
-        f"📅 {event_date} в {event_time}",
-        f"📍 {location or ''}",
-        f"Адрес: {address or ''}",
-        f"Гостей: {guests}",
+        f"📅 <b>{event_date}</b> в <b>{event_time}</b>",
+        f"📍 <b>{location or ''}</b>",
+        f"<b>Адрес:</b> {address or ''}",
+        f"<b>Гостей:</b> {guests}",
     ]
     if status == "confirmed":
-        lines.extend(["", "✅ Бронь подтверждена"])
+        lines.extend(["", "✅ <b>Бронь подтверждена</b>"])
     return "\n".join(lines)
 
 

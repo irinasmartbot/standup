@@ -699,11 +699,11 @@ class VKBotApp:
             await self._send_text(
                 peer_id,
                 (
-                    "⚠️ ВНИМАНИЕ, мы уже внесли Вас в списки гостей:\n\n"
-                    f"Дата: {date_str}\n"
-                    f"Время: {existing[6]}\n"
-                    f"Локация: {existing[8]}\n"
-                    f"Количество гостей: {existing[9]} чел.\n\n"
+                    "⚠️ <b>ВНИМАНИЕ</b>, мы уже внесли Вас в списки гостей:\n\n"
+                    f"<b>Дата:</b> {date_str}\n"
+                    f"<b>Время:</b> {existing[6]}\n"
+                    f"<b>Локация:</b> {existing[8]}\n"
+                    f"<b>Количество гостей:</b> {existing[9]} чел.\n\n"
                     "Вы не можете забронировать повторный билет на данное мероприятие"
                 ),
                 keyboard=vk_booking.manage_ticket_keyboard(
@@ -783,7 +783,7 @@ class VKBotApp:
         await self.client.send_message(
             peer_id,
             f"{name}, напишите цифрой или выберите кнопкой, на какое количество человек бронируете?\n\n"
-            "Внимание: бронь на один билет максимум 4 человека.",
+            "<b>Внимание:</b> бронь на один билет максимум <b>4 человека</b>.",
             keyboard=vk_booking.guests_keyboard(),
         )
 
@@ -819,7 +819,7 @@ class VKBotApp:
                     await self.client.send_message(
                         peer_id,
                         (
-                            "⚠️ ВНИМАНИЕ, мы уже внесли Вас в списки гостей.\n"
+                            "⚠️ <b>ВНИМАНИЕ</b>, мы уже внесли Вас в списки гостей.\n"
                             "Вы не можете забронировать повторный билет на данное мероприятие"
                         ),
                         keyboard=vk_booking.manage_ticket_keyboard(
@@ -1809,7 +1809,7 @@ class VKBotApp:
                 )
                 await self._send_text(
                     peer_id,
-                    "Не видим вашей подписки. Подпишись на сообщество и нажми кнопку ниже 👇",
+                    vk_raffle.SUB_MISSING_TEXT,
                     keyboard=vk_raffle.subscribe_keyboard(
                         self.settings.community_link,
                         manual_attempts=attempts,
@@ -2024,15 +2024,12 @@ class VKBotApp:
         if not dates:
             await self._send_text(
                 peer_id,
-                "Отлично, подписка на сообщество есть 🙌\n\n"
-                "Пока нет доступных дат для бесплатного билета 😔 Загляни позже!",
+                "<b>Отлично</b>, подписка на сообщество есть 🙌\n\n"
+                "Пока нет доступных дат для <b>бесплатного билета</b> 😔 Загляни позже!",
                 keyboard=self._main_menu_kb(vk_id),
             )
             return
-        text = (
-            "Отлично, подписка на сообщество есть 🙌\n\n"
-            "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉"
-        )
+        text = vk_raffle.SUB_OK_DATES_TEXT
         try:
             keyboard = vk_raffle.dates_keyboard(dates, page=page)
         except Exception:
@@ -2075,11 +2072,7 @@ class VKBotApp:
             self.peer_dates_message_ids[peer] = int(mid)
 
     async def _send_raffle_date(self, peer_id: int, vk_id: int, date: str) -> None:
-        dates_text = (
-            "Отлично, подписка на сообщество есть 🙌\n\n"
-            "Теперь выбирай дату, на которую хочешь получить бесплатный билет 😉"
-        )
-        await self._disable_callback_buttons(peer_id, dates_text)
+        await self._disable_callback_buttons(peer_id, vk_raffle.SUB_OK_DATES_TEXT)
         self.peer_dates_message_ids.pop(int(peer_id), None)
 
         events = [e for e in await vk_raffle.future_best_events() if e.get("date") == date]

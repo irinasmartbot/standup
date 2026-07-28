@@ -25,14 +25,14 @@ STEP_NAME = "waiting_name"
 STEP_PHONE = "waiting_phone"
 STEP_GUESTS = "waiting_guests"
 
-NAME_ASK_TEXT = "Напишите, пожалуйста, ваше имя."
+NAME_ASK_TEXT = "Напишите, пожалуйста, <b>ваше имя</b>."
 PHONE_ASK_TEXT = (
-    "Введите номер телефона с кодом страны.\n"
-    "Пример: +79001234567"
+    "Введите <b>номер телефона</b> с кодом страны.\n"
+    "Пример: <b>+79001234567</b>"
 )
 PHONE_INVALID_TEXT = (
     "Нужен корректный номер телефона с кодом страны — без букв и лишних символов.\n"
-    "Пример: +79001234567\n\n"
+    "Пример: <b>+79001234567</b>\n\n"
     "Введите номер ещё раз 👇"
 )
 
@@ -47,6 +47,25 @@ def name_confirm_text(name: str) -> str:
         "Для бронирования вам нужно заполнить некоторые данные\n\n"
         f"Ваше имя <b>{safe}</b>, верно?"
     )
+
+
+def booking_details_block(
+    *,
+    date_str: str,
+    event_time: str,
+    address: str = "",
+    guests: int | None = None,
+    weekday_part: str = "",
+) -> str:
+    lines = [
+        f"<b>Дата:</b> {date_str}{weekday_part}",
+        f"<b>Время:</b> {event_time}",
+    ]
+    if address:
+        lines.append(f"<b>Локация:</b> {address}")
+    if guests is not None:
+        lines.append(f"<b>Количество гостей:</b> {guests} чел.")
+    return "\n".join(lines)
 
 
 def name_confirm_keyboard(name: str = "") -> str:
@@ -189,24 +208,28 @@ async def complete_booking(
     address = (event or {}).get("address") or session.get("event_address") or ""
     offer_ticket = days_until <= 1
 
+    details = booking_details_block(
+        date_str=date_str,
+        event_time=event_time or "",
+        address=address if not offer_ticket else "",
+        guests=None if offer_ticket else guests,
+        weekday_part=weekday_part,
+    )
     if offer_ticket:
         text = (
-            f"Отлично!\n\n"
-            f"Важная информация — чтобы закрепить место:\n"
-            f"Дата: {date_str}{weekday_part}\n"
-            f"Время: {event_time}\n\n"
-            f"ОБЯЗАТЕЛЬНО подтвердите бронь кнопкой «Получить билет».\n"
+            f"<b>Отлично!</b>\n\n"
+            f"<b>Важная информация</b> — чтобы закрепить место:\n"
+            f"{details}\n\n"
+            f"<b>ОБЯЗАТЕЛЬНО</b> подтвердите бронь кнопкой «Получить билет».\n"
             f"Если не успеете подтвердить, бронь будет аннулирована."
         )
     else:
         text = (
-            f"Отлично! Мы внесли вас в списки гостей:\n\n"
-            f"Дата: {date_str}{weekday_part}\n"
-            f"Время: {event_time}\n"
-            f"Локация: {address}\n"
-            f"Количество гостей: {guests} чел.\n\n"
-            f"За сутки до мероприятия придёт напоминание с кнопкой «Получить билет». "
-            f"Обязательно нажмите её, чтобы подтвердить бронь."
+            f"<b>Отлично!</b> Мы внесли вас в списки гостей:\n\n"
+            f"{details}\n\n"
+            f"За сутки до мероприятия придёт напоминание с кнопкой "
+            f"<b>«Получить билет»</b>. "
+            f"<b>Обязательно нажмите её</b>, чтобы подтвердить бронь."
         )
 
     await client.send_message(
@@ -282,7 +305,7 @@ async def issue_ticket(
     vk_manager = (manager_link or "").strip() or MANAGER_LINK
     vk_community = (community_link or "").strip() or CHANNEL_LINK
     caption = (
-        "Отлично!\n\n"
+        "<b>Отлично!</b>\n\n"
         "<b>Данные по билету:</b>\n\n"
         f"<b>Ваше имя:</b> {name or ''}\n"
         f"<b>Дата:</b> {event_date or ''}\n"

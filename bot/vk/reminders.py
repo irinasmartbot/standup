@@ -83,18 +83,18 @@ async def send_vk_booking_reminder(client: VKClient, row, reminder_type: str, *,
     if reminder_type == "day":
         text = (
             f"{name}, мне необходимо подтвердить, либо отменить Вашу бронь "
-            f"на {date_str} в {event_time} 😊\n\n"
-            f"Чтобы подтвердить бронь, нажми на «Получить билет» 👇"
+            f"на <b>{date_str}</b> в <b>{event_time}</b> 😊\n\n"
+            f"Чтобы подтвердить бронь, нажми на <b>«Получить билет»</b> 👇"
         )
     else:
         text = (
-            f"Напоминание о брони на Moscow StandUp Show:\n\n"
-            f"Дата: {date_str}\n"
-            f"Время: {event_time}\n"
-            f"Адрес: {event_address}\n"
-            f"Количество гостей: {guests} чел.\n\n"
+            f"<b>Напоминание о брони</b> на Moscow StandUp Show:\n\n"
+            f"<b>Дата:</b> {date_str}\n"
+            f"<b>Время:</b> {event_time}\n"
+            f"<b>Адрес:</b> {event_address}\n"
+            f"<b>Количество гостей:</b> {guests} чел.\n\n"
             f"Сбор гостей начинается за полчаса до начала шоу. "
-            f"Для подтверждения брони нажмите «Получить билет» 👇"
+            f"Для подтверждения брони нажмите <b>«Получить билет»</b> 👇"
         )
 
     msg_id = await client.send_message(
