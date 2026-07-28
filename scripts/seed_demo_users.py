@@ -34,29 +34,34 @@ from bot.db.analytics import (  # noqa: E402
 )
 
 
+# Fictional people at different funnel stages (re-run updates names/events in place).
 DEMO = [
     {
         "telegram_id": 900000001,
-        "name": "Демо · только старт",
-        "username": "demo_start_only",
+        "name": "Анна Смирнова",
+        "username": "anna_smirnova92",
+        "show_format": "best",
         "events": [EVENT_BOT_START],
     },
     {
         "telegram_id": 900000002,
-        "name": "Демо · смотрел BEST",
-        "username": "demo_browse_best",
+        "name": "Кирилл Орлов",
+        "username": "kirill_orlov",
+        "show_format": "best",
         "events": [EVENT_BOT_START, EVENT_BRANCH_BEST, EVENT_SHOW_CARD],
     },
     {
         "telegram_id": 900000003,
-        "name": "Демо · клик Купить",
-        "username": "demo_buy_click",
+        "name": "Мария Ковалёва",
+        "username": "masha_kovaleva",
+        "show_format": "best",
         "events": [EVENT_BOT_START, EVENT_BRANCH_BEST, EVENT_SHOW_CARD, EVENT_BUY_CLICK],
     },
     {
         "telegram_id": 900000004,
-        "name": "Демо · бронь без билета",
-        "username": "demo_booked",
+        "name": "Дмитрий Соколов",
+        "username": "dima_sokolov",
+        "show_format": "proverka",
         "events": [
             EVENT_BOT_START,
             EVENT_BRANCH_PROVERKA,
@@ -67,8 +72,9 @@ DEMO = [
     },
     {
         "telegram_id": 900000005,
-        "name": "Демо · билет получен",
-        "username": "demo_ticket",
+        "name": "Елена Васильева",
+        "username": "lena_vasilieva",
+        "show_format": "best",
         "events": [
             EVENT_BOT_START,
             EVENT_BRANCH_BEST,
@@ -80,8 +86,9 @@ DEMO = [
     },
     {
         "telegram_id": 900000006,
-        "name": "Демо · VK-стиль (telegram id)",
-        "username": "demo_mixed",
+        "name": "Павел Морозов",
+        "username": "pavel_morozov",
+        "show_format": "best",
         "events": [EVENT_BOT_START, EVENT_BRANCH_BEST],
     },
 ]
@@ -118,9 +125,9 @@ def main() -> int:
                 )
                 for step, name in enumerate(person["events"]):
                     created = now - timedelta(hours=len(person["events"]) - step, minutes=i * 3)
-                    props = {"demo": True, "seed": "seed_demo_users"}
+                    props = {"seed": "seed_demo_users"}
                     if name == EVENT_SHOW_CARD:
-                        props["format"] = "best" if "BEST" in person["name"] or "билет" in person["name"] else "proverka"
+                        props["format"] = person.get("show_format") or "best"
                     cur.execute(
                         """
                         INSERT INTO analytics_events (
