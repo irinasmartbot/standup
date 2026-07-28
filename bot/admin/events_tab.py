@@ -452,7 +452,8 @@ def render_events_tab(
         <div class="events-notify-box">
           <b>Сообщение гостям при скрытии / удалении</b>
           <span class="muted">Необязательно. Уйдёт только по строкам, где отмечено «скрыть» или «удалить».
-          Сами брони и билеты по скрытому шоу отменяются всегда.</span>
+          Сами брони и билеты по скрытому шоу отменяются всегда.
+          Превью ниже обновляется при выборе «скрыть» и аудитории.</span>
           <textarea name="notify_message" rows="3"
             placeholder="Например: внимание, это мероприятие отменено. Приносим извинения."></textarea>
           <div class="events-notify-audience">
@@ -463,6 +464,7 @@ def render_events_tab(
           </div>
         </div>
         '''}
+        <div id="events-impact-preview" class="events-impact-host" hidden></div>
       </form>
       <div class="events-toolbar events-toolbar-bottom">
         <button type="submit" form="events-save-form" class="events-update-btn">Обновить</button>
@@ -714,6 +716,86 @@ def render_events_tab(
           f.addEventListener("submit", fillTicketNotes);
         }});
       }}
+
+      var impactHost = document.getElementById("events-impact-preview");
+      var impactTimer = null;
+      var impactSeq = 0;
+      function selectedHideIds(form) {{
+        var ids = [];
+        form.querySelectorAll('input[name="e_delete"]:checked, input[name="e_purge"]:checked').forEach(function (el) {{
+          if (el.value) ids.push(el.value);
+        }});
+        return ids;
+      }}
+      function selectedAudience(form) {{
+        var rad = form.querySelector('input[name="notify_audience"]:checked');
+        var msg = form.querySelector('[name="notify_message"]');
+        var audience = rad ? rad.value : "";
+        if (!audience) return "";
+        if (msg && !(msg.value || "").trim()) return "";
+        return audience;
+      }}
+      function refreshImpact() {{
+        var form = document.getElementById("events-save-form");
+        if (!form || !impactHost) return;
+        var ids = selectedHideIds(form);
+        if (!ids.length) {{
+          impactHost.hidden = true;
+          impactHost.innerHTML = "";
+          return;
+        }}
+        impactHost.hidden = false;
+        impactHost.innerHTML = '<div class="events-impact-box"><b>Превью…</b><p class="muted">Считаем, кого затронет скрытие.</p></div>';
+        var seq = ++impactSeq;
+        var audience = selectedAudience(form);
+        var url = "/admin/events/hide-preview?ids=" + encodeURIComponent(ids.join(","))
+          + "&audience=" + encodeURIComponent(audience);
+        fetch(url, {{ credentials: "same-origin" }})
+          .then(function (r) {{ return r.json(); }})
+          .then(function (data) {{
+            if (seq !== impactSeq) return;
+            impactHost.innerHTML = (data && data.html) ? data.html : "<p class='muted'>Не удалось загрузить превью.</p>";
+            impactHost.hidden = false;
+          }})
+          .catch(function () {{
+            if (seq !== impactSeq) return;
+            impactHost.innerHTML = "<div class='events-impact-box'><b>Превью недоступно</b><p class='muted'>Проверьте соединение и обновите страницу.</p></div>";
+          }});
+      }}
+      function scheduleImpact() {{
+        clearTimeout(impactTimer);
+        impactTimer = setTimeout(refreshImpact, 200);
+      }}
+      document.querySelectorAll('input[name="e_delete"], input[name="e_purge"]').forEach(function (el) {{
+        el.addEventListener("change", scheduleImpact);
+      }});
+      document.querySelectorAll('input[name="notify_audience"]').forEach(function (el) {{
+        el.addEventListener("change", scheduleImpact);
+      }});
+      var notifyMsg = document.querySelector('[name="notify_message"]');
+      if (notifyMsg) {{
+        notifyMsg.addEventListener("input", scheduleImpact);
+      }}
+      var saveForm = document.getElementById("events-save-form");
+      if (saveForm) {{
+        saveForm.addEventListener("submit", function (ev) {{
+          var ids = selectedHideIds(saveForm);
+          if (!ids.length) return;
+          var box = impactHost ? impactHost.innerText || "" : "";
+          var summary = "Скрыть/удалить отмеченные шоу?\\n\\n"
+            + "Будут отменены активные брони и билеты по этим шоу, напоминания прекратятся.";
+          if (selectedAudience(saveForm)) {{
+            summary += "\\nТакже уйдёт сообщение выбранной группе гостей.";
+          }}
+          if (box) {{
+            summary += "\\n\\nСводка:\\n" + box.replace(/\\s+/g, " ").trim().slice(0, 500);
+          }}
+          if (!window.confirm(summary)) {{
+            ev.preventDefault();
+          }}
+        }});
+      }}
+      scheduleImpact();
     }})();
     </script>
     """

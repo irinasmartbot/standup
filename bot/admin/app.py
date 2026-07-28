@@ -2570,6 +2570,17 @@ def render_admin_html(
     }}
     .events-notify-audience {{ display:flex; flex-wrap:wrap; gap:12px 18px; font-size:13px; }}
     .events-note-label {{ display:block; margin:10px 0 6px; font-weight:600; }}
+    .events-impact-host {{ margin-top:14px; }}
+    .events-impact-box {{
+      padding:14px 16px; border:1px solid #f59e0b; border-radius:12px;
+      background:#fffbeb; color:#78350f;
+    }}
+    .events-impact-box.events-impact-empty {{ border-color:#cbd5e1; background:#f8fafc; color:#334155; }}
+    .events-impact-summary {{ margin:8px 0 12px; padding-left:18px; }}
+    .events-impact-summary li {{ margin:4px 0; }}
+    .events-impact-table {{ font-size:13px; background:#fff; }}
+    .events-impact-table th {{ white-space:nowrap; }}
+    .events-impact-msg {{ color:#b45309; font-weight:700; }}
     .audit-log {{ margin-bottom:16px; }}
     .audit-log table {{ font-size:13px; }}
     .audit-log td {{ vertical-align:top; }}
@@ -3588,11 +3599,39 @@ async def index_page(request: web.Request) -> web.Response:
     raise web.HTTPFound("/admin")
 
 
+async def events_hide_preview_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        return web.json_response({"error": "auth"}, status=401)
+    raw_ids = (request.query.get("ids") or "").strip()
+    audience = (request.query.get("audience") or "").strip()
+    if not _can_resend_tickets(request, config):
+        # Managers may preview cancel impact, but not message audience.
+        audience = ""
+    elif not audience:
+        audience = ""
+    ids = [p for p in raw_ids.split(",") if p.strip()]
+    from bot.admin.event_notify import build_hide_impact
+
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(None, build_hide_impact, ids, audience)
+    return web.json_response(
+        {
+            "event_ids": data.get("event_ids") or [],
+            "cancel_count": data.get("cancel_count") or 0,
+            "ticket_count": data.get("ticket_count") or 0,
+            "notify_count": data.get("notify_count") or 0,
+            "html": data.get("html") or "",
+        }
+    )
+
+
 def create_app(config: AdminConfig | None = None) -> web.Application:
     app = web.Application()
     app["config"] = config or load_config()
     app.router.add_get("/", index_page)
     app.router.add_get("/admin", admin_page)
+    app.router.add_get("/admin/events/hide-preview", events_hide_preview_page)
     app.router.add_post("/admin/events/save", events_save_page)
     app.router.add_post("/admin/events/restore", events_restore_page)
     app.router.add_post("/admin/events/resend-ticket", events_resend_ticket_page)

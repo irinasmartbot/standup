@@ -221,3 +221,151 @@ async def cancel_event_bookings_async(event_ids: list[int]) -> dict:
                 logger.exception("cancel booking %s for event %s failed", booking_id, eid)
             await asyncio.sleep(0.05)
     return result
+
+
+def _h(value) -> str:
+    return (
+        str(value or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _person_channel(row: dict) -> str:
+    source = (row.get("booking_source") or "").strip().lower()
+    tid = row.get("telegram_id")
+    vid = row.get("vk_id")
+    if source in {"vk", "vkontakte"} or (vid and not tid):
+        return f"VK {vid}" if vid else "VK"
+    if tid:
+        return f"TG {tid}"
+    return "—"
+
+
+def _event_label(row: dict) -> str:
+    date = row.get("event_date")
+    time = row.get("event_time")
+    loc = row.get("location") or ""
+    date_s = date.isoformat() if hasattr(date, "isoformat") else str(date or "")
+    time_s = time.strftime("%H:%M") if hasattr(time, "strftime") else str(time or "")[:5]
+    return f"{date_s} {time_s} · {loc}".strip(" ·")
+
+
+def build_hide_impact(event_ids: list[int], audience: str = "") -> dict:
+    """Preview who is affected when hiding events (cancel + optional notify)."""
+    ids = []
+    for raw in event_ids or []:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            pass
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return {
+            "event_ids": [],
+            "cancel_count": 0,
+            "ticket_count": 0,
+            "notify_count": 0,
+            "people": [],
+            "html": "",
+        }
+
+    people = []
+    ticket_count = 0
+    notify_set: set[int] = set()
+    notify_statuses = {
+        "booked": {"booked"},
+        "confirmed": {"confirmed"},
+        "both": {"booked", "confirmed"},
+    }.get((audience or "").strip(), set())
+
+    for eid in ids:
+        for row in list_event_notify_recipients(eid, "both"):
+            status = row.get("status") or ""
+            has_ticket = status == "confirmed" or bool(row.get("ticket_message_id"))
+            if has_ticket:
+                ticket_count += 1
+            will_notify = status in notify_statuses
+            if will_notify:
+                notify_set.add(int(row["booking_id"]))
+            people.append(
+                {
+                    "booking_id": row.get("booking_id"),
+                    "event_id": eid,
+                    "event_label": _event_label(row),
+                    "name": row.get("name") or "Без имени",
+                    "channel": _person_channel(row),
+                    "status": status,
+                    "status_label": "билет" if status == "confirmed" else "бронь",
+                    "has_ticket": has_ticket,
+                    "will_notify": will_notify,
+                }
+            )
+
+    html = _render_impact_html(people, len(ids), ticket_count, len(notify_set), bool(notify_statuses))
+    return {
+        "event_ids": ids,
+        "cancel_count": len(people),
+        "ticket_count": ticket_count,
+        "notify_count": len(notify_set),
+        "people": people,
+        "html": html,
+    }
+
+
+def _render_impact_html(
+    people: list[dict],
+    event_count: int,
+    ticket_count: int,
+    notify_count: int,
+    notify_enabled: bool,
+) -> str:
+    if not people:
+        return (
+            '<div class="events-impact-box events-impact-empty">'
+            "<b>Превью скрытия</b>"
+            "<p>На отмеченных шоу нет активных броней и билетов — "
+            "отменять и писать будет некому.</p>"
+            "</div>"
+        )
+
+    rows = []
+    for p in people:
+        effects = ["бронь/билет отменится", "напоминания прекратятся"]
+        if p.get("has_ticket"):
+            effects.append("билет в чате уберётся")
+        if notify_enabled and p.get("will_notify"):
+            effects.append('<span class="events-impact-msg">получит сообщение</span>')
+        elif notify_enabled:
+            effects.append('<span class="muted">сообщение не уйдёт (не в выбранной группе)</span>')
+        rows.append(
+            "<tr>"
+            f"<td>#{_h(p.get('booking_id'))}</td>"
+            f"<td>{_h(p.get('name'))}<br><span class='muted'>{_h(p.get('channel'))}</span></td>"
+            f"<td>{_h(p.get('event_label'))}</td>"
+            f"<td>{_h(p.get('status_label'))}</td>"
+            f"<td>{' · '.join(effects)}</td>"
+            "</tr>"
+        )
+
+    notify_line = (
+        f"<li>Сообщение получат: <b>{notify_count}</b> чел.</li>"
+        if notify_enabled
+        else "<li>Сообщение гостям: <b>не отправляется</b> (или нет текста / аудитории).</li>"
+    )
+    return (
+        '<div class="events-impact-box">'
+        "<b>⚠ Что произойдёт при «Обновить»</b>"
+        "<ul class='events-impact-summary'>"
+        f"<li>Шоу к скрытию: <b>{event_count}</b></li>"
+        f"<li>Отменятся активные брони/билеты: <b>{len(people)}</b></li>"
+        f"<li>Из них с билетом в чате: <b>{ticket_count}</b></li>"
+        f"{notify_line}"
+        "</ul>"
+        '<div class="table-wrap"><table class="events-impact-table"><thead><tr>'
+        "<th>Бронь</th><th>Гость</th><th>Шоу</th><th>Сейчас</th><th>Действия</th>"
+        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+        "</div>"
+    )
