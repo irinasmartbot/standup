@@ -149,15 +149,18 @@ def _ticket_bytes(row: dict) -> bytes:
     return buf.getvalue()
 
 
-def _caption(row: dict, *, updated: bool) -> str:
+def _caption(row: dict, *, updated: bool, extra_note: str = "") -> str:
     place = f"{row.get('location') or ''}, {row.get('address') or ''}".strip(", ")
     head = (
         "Обновлённый билет\n\nДанные мероприятия изменились — актуальный билет ниже.\n\n"
         if updated
         else "Билет\n\n"
     )
+    note = (extra_note or "").strip()
+    note_block = f"{escape(note)}\n\n" if note else ""
     return (
         f"{head}"
+        f"{note_block}"
         f"<b>Данные по билету:</b>\n\n"
         f"<b>Ваше имя:</b> {escape(row.get('name') or '')}\n"
         f"<b>Дата:</b> {escape(row.get('event_date') or '')}\n"
@@ -174,7 +177,7 @@ def _is_vk_booking(row: dict) -> bool:
     return bool(row.get("vk_id")) and not row.get("telegram_id")
 
 
-async def _resend_ticket_telegram(row: dict, *, updated: bool) -> dict:
+async def _resend_ticket_telegram(row: dict, *, updated: bool, extra_note: str = "") -> dict:
     booking_id = int(row["booking_id"])
     token = _bot_token()
     if not token:
@@ -196,7 +199,7 @@ async def _resend_ticket_telegram(row: dict, *, updated: bool) -> dict:
         msg = await bot.send_photo(
             chat_id=int(telegram_id),
             photo=photo,
-            caption=_caption(row, updated=updated),
+            caption=_caption(row, updated=updated, extra_note=extra_note),
             parse_mode="HTML",
         )
         save_ticket_message_id(booking_id, msg.message_id)
@@ -205,7 +208,7 @@ async def _resend_ticket_telegram(row: dict, *, updated: bool) -> dict:
         await bot.session.close()
 
 
-async def _resend_ticket_vk(row: dict, *, updated: bool) -> dict:
+async def _resend_ticket_vk(row: dict, *, updated: bool, extra_note: str = "") -> dict:
     booking_id = int(row["booking_id"])
     vk_id = row.get("vk_id")
     if not vk_id:
@@ -230,8 +233,11 @@ async def _resend_ticket_vk(row: dict, *, updated: bool) -> dict:
         if updated
         else "Билет\n\n"
     )
+    note = (extra_note or "").strip()
+    note_block = f"{note}\n\n" if note else ""
     caption = format_vk_text(
         f"{head}"
+        f"{note_block}"
         f"<b>Данные по билету:</b>\n\n"
         f"<b>Ваше имя:</b> {row.get('name') or ''}\n"
         f"<b>Дата:</b> {row.get('event_date') or ''}\n"
@@ -251,7 +257,9 @@ async def _resend_ticket_vk(row: dict, *, updated: bool) -> dict:
     return {"ok": True, "error": "", "booking_id": booking_id}
 
 
-async def resend_ticket_async(booking_id: int, *, updated: bool = True) -> dict:
+async def resend_ticket_async(
+    booking_id: int, *, updated: bool = True, extra_note: str = ""
+) -> dict:
     """Send ticket photo to the guest (Telegram or VK). Returns {ok, error, booking_id}."""
     row = get_booking_for_ticket_resend(booking_id)
     if not row:
@@ -264,22 +272,26 @@ async def resend_ticket_async(booking_id: int, *, updated: bool = True) -> dict:
         }
     try:
         if _is_vk_booking(row):
-            return await _resend_ticket_vk(row, updated=updated)
-        return await _resend_ticket_telegram(row, updated=updated)
+            return await _resend_ticket_vk(row, updated=updated, extra_note=extra_note)
+        return await _resend_ticket_telegram(row, updated=updated, extra_note=extra_note)
     except Exception as exc:
         logger.exception("resend_ticket failed for booking %s", booking_id)
         return {"ok": False, "error": str(exc), "booking_id": booking_id}
 
 
-def resend_ticket(booking_id: int, *, updated: bool = True) -> dict:
-    return asyncio.run(resend_ticket_async(booking_id, updated=updated))
+def resend_ticket(booking_id: int, *, updated: bool = True, extra_note: str = "") -> dict:
+    return asyncio.run(resend_ticket_async(booking_id, updated=updated, extra_note=extra_note))
 
 
-async def resend_tickets_for_event_async(event_id: int, *, updated: bool = True) -> dict:
+async def resend_tickets_for_event_async(
+    event_id: int, *, updated: bool = True, extra_note: str = ""
+) -> dict:
     holders = list_event_ticket_holders(event_id)
     result = {"ok": 0, "fail": 0, "errors": [], "total": len(holders)}
     for row in holders:
-        one = await resend_ticket_async(int(row["booking_id"]), updated=updated)
+        one = await resend_ticket_async(
+            int(row["booking_id"]), updated=updated, extra_note=extra_note
+        )
         if one.get("ok"):
             result["ok"] += 1
         else:
@@ -291,5 +303,9 @@ async def resend_tickets_for_event_async(event_id: int, *, updated: bool = True)
     return result
 
 
-def resend_tickets_for_event(event_id: int, *, updated: bool = True) -> dict:
-    return asyncio.run(resend_tickets_for_event_async(event_id, updated=updated))
+def resend_tickets_for_event(
+    event_id: int, *, updated: bool = True, extra_note: str = ""
+) -> dict:
+    return asyncio.run(
+        resend_tickets_for_event_async(event_id, updated=updated, extra_note=extra_note)
+    )

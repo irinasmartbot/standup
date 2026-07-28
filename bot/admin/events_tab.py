@@ -110,8 +110,8 @@ def _row_html(
     if paid:
         paid_cells = (
             f'<td class="events-col-price"><input name="e_price" type="number" min="0" step="1" value="{_h(price)}" placeholder="0"></td>'
-            f'<td class="events-col-url"><input class="events-grow" name="e_payment" value="{_h(pay)}" placeholder="https://…"></td>'
-            f'<td class="events-col-host"><input class="events-grow" name="e_host" value="{_h(host)}" placeholder="Кто в составе"></td>'
+            f'<td class="events-col-url"><input class="events-grow" name="e_payment" value="{_h(pay)}" placeholder="https://…" title="{_h(pay)}"></td>'
+            f'<td class="events-col-host"><input class="events-grow" name="e_host" value="{_h(host)}" placeholder="Кто в составе" title="{_h(host)}"></td>'
         )
     else:
         paid_cells = (
@@ -170,11 +170,11 @@ def _row_html(
         f'<td class="events-col-loc events-loc-cell">'
         f'<input name="e_location" value="{_h(loc)}" placeholder="Площадка" list="events-location-presets">'
         f'<div class="events-tpls">{loc_presets}</div></td>'
-        f'<td class="events-col-addr"><input class="events-grow" name="e_address" value="{_h(addr)}" placeholder="Адрес"></td>'
+        f'<td class="events-col-addr"><input class="events-grow" name="e_address" value="{_h(addr)}" placeholder="Адрес" title="{_h(addr)}"></td>'
         f"{seats_cell}"
         f"{paid_cells}"
-        f'<td class="events-col-desc"><input class="events-grow" name="e_description" value="{_h(desc)}" placeholder="Описание"></td>'
-        f'<td class="events-col-url"><input class="events-grow" name="e_image" value="{_h(image)}" placeholder="URL картинки"></td>'
+        f'<td class="events-col-desc"><input class="events-grow" name="e_description" value="{_h(desc)}" placeholder="Описание" title="{_h(desc)}"></td>'
+        f'<td class="events-col-url"><input class="events-grow" name="e_image" value="{_h(image)}" placeholder="URL картинки" title="{_h(image)}"></td>'
         f"{delete_cell}"
         "</tr>"
     )
@@ -197,15 +197,15 @@ def _table(
         else ""
     )
     head_seats = '<th class="events-col-seats">Мест</th>' if show_seats else ""
-    body = "".join(
-        _row_html(e, paid, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)
-        for e in events
-    )
-    body += "".join(
+    blanks = "".join(
         _row_html(
             None, paid, blank=True, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats
         )
         for _ in range(blank_rows)
+    )
+    body = blanks + "".join(
+        _row_html(e, paid, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)
+        for e in events
     )
     time_opts = "".join(f'<option value="{_h(t)}">' for t in TIME_PRESETS)
     loc_opts = "".join(f'<option value="{_h(name)}">' for name, _ in LOCATION_PRESETS)
@@ -273,7 +273,7 @@ def render_events_tab(
     if fmt == "best":
         note = (
             "<p class=\"muted\">BEST — платные шоу; даты отсюда же использует розыгрыш. "
-            "Пустые нижние строки — для быстрого добавления.<br>"
+            "Пустые <b>верхние</b> строки — для быстрого добавления (после «Обновить» дата встанет в общий список).<br>"
             "<b>Смена времени или площадки:</b> правьте нужную строку и нажмите «Обновить» — "
             "изменения появятся в боте.<br>"
             "«Скрыть» убирает из бота; «удалить» — насовсем (только если нет броней). "
@@ -282,7 +282,8 @@ def render_events_tab(
         )
     else:
         note = (
-            "<p class=\"muted\">Пустые нижние строки — быстро добавить шоу.<br>"
+            "<p class=\"muted\">Пустые <b>верхние</b> строки — быстро добавить шоу "
+            "(после «Обновить» попадёт в общий список).<br>"
             "<b>Смена времени или площадки:</b> правьте нужную строку и нажмите «Обновить» — "
             "изменения появятся в боте.<br>"
             "«Скрыть» убирает из бота; «удалить» — насовсем (только если нет броней). "
@@ -319,11 +320,12 @@ def render_events_tab(
                 f"<td>{_h(h.get('guests'))}</td>"
                 f"<td>{_h(got)}</td>"
                 f"<td>"
-                f'<form method="post" action="/admin/events/resend-ticket" class="inline-form">'
+                f'<form method="post" action="/admin/events/resend-ticket" class="inline-form ticket-resend-one">'
                 f'<input type="hidden" name="ef" value="{_h(fmt)}">'
                 f'<input type="hidden" name="tickets" value="{_h(tickets_event_id)}">'
                 f'<input type="hidden" name="booking_id" value="{_h(h.get("booking_id"))}">'
                 f'<input type="hidden" name="updated" value="1">'
+                f'<input type="hidden" name="extra_note" value="">'
                 '<button type="submit">Переотправить</button>'
                 "</form></td>"
                 "</tr>"
@@ -336,12 +338,18 @@ def render_events_tab(
       Метка «розыгрыш» — билет выдан в рамках розыгрыша BEST.
       Переотправка шлёт новый билет с текущими датой/временем/местом из афиши
       (Telegram или VK — по каналу брони).</p>
+      <label class="events-note-label" for="ticket-extra-note">
+        Сообщение вместе с билетом <span class="muted">(необязательно)</span>
+      </label>
+      <textarea id="ticket-extra-note" class="events-extra-note" rows="3"
+        placeholder="Например: дата и время изменились — вот актуальный билет"></textarea>
       <div class="events-toolbar">
-        <form method="post" action="/admin/events/resend-ticket">
+        <form method="post" action="/admin/events/resend-ticket" class="ticket-resend-bulk">
           <input type="hidden" name="ef" value="{_h(fmt)}">
           <input type="hidden" name="tickets" value="{_h(tickets_event_id)}">
           <input type="hidden" name="event_id" value="{_h(tickets_event_id)}">
           <input type="hidden" name="updated" value="1">
+          <input type="hidden" name="extra_note" value="">
           <button type="submit" {"disabled" if not holders else ""}>
             Переотправить всем ({len(holders)})
           </button>
@@ -435,9 +443,21 @@ def render_events_tab(
         <b>Вы начали редактирование.</b> Чтобы изменения появились в боте, нажмите синюю кнопку «Обновить».
       </p>
       {toolbar}
-      <form method="post" action="/admin/events/save" class="events-form" id="events-save-form">
+      <form method="post" action="/admin/events/save" class="events-form" id="events-save-form" data-events-draft-key="events-draft:{_h(fmt)}">
         <input type="hidden" name="ef" value="{_h(fmt)}">
         {_table(bundle.get("active") or [], paid=paid, blank_rows=5, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)}
+        <div class="events-notify-box">
+          <b>Сообщение гостям при скрытии / удалении</b>
+          <span class="muted">Необязательно. Уйдёт только по строкам, где отмечено «скрыть» или «удалить».</span>
+          <textarea name="notify_message" rows="3"
+            placeholder="Например: внимание, это мероприятие отменено. Приносим извинения."></textarea>
+          <div class="events-notify-audience">
+            <label><input type="radio" name="notify_audience" value="" checked> не отправлять</label>
+            <label><input type="radio" name="notify_audience" value="booked"> всем с активной бронью</label>
+            <label><input type="radio" name="notify_audience" value="confirmed"> только у кого есть билет</label>
+            <label><input type="radio" name="notify_audience" value="both"> бронь + билет</label>
+          </div>
+        </div>
       </form>
       <div class="events-toolbar events-toolbar-bottom">
         <button type="submit" form="events-save-form" class="events-update-btn">Обновить</button>
@@ -450,16 +470,20 @@ def render_events_tab(
     <script>
     (function () {{
       var COMPACT = {{
-        e_address: 180,
-        e_payment: 140,
-        e_host: 130,
-        e_description: 120,
-        e_image: 130
+        e_address: 200,
+        e_payment: 180,
+        e_host: 160,
+        e_description: 150,
+        e_image: 150
       }};
-      var EXPAND_MAX = 520;
+      var EXPAND_MAX = 720;
       var editHint = document.getElementById("events-edit-hint");
       function showEditHint() {{
         if (editHint) editHint.hidden = false;
+      }}
+      function syncTitle(el) {{
+        if (!el || el.tagName !== "INPUT") return;
+        el.title = el.value || el.placeholder || "";
       }}
       function measure(el) {{
         var style = window.getComputedStyle(el);
@@ -467,20 +491,118 @@ def render_events_tab(
         var ctx = canvas.getContext("2d");
         ctx.font = style.font || "13px sans-serif";
         var text = el.value || el.placeholder || "";
-        return Math.ceil(ctx.measureText(text).width + 28);
+        return Math.ceil(ctx.measureText(text).width + 36);
       }}
       function fitGrow(el, expanded) {{
         if (!el || !el.classList.contains("events-grow")) return;
-        var compact = COMPACT[el.name] || 120;
+        var compact = COMPACT[el.name] || 140;
         if (!expanded) {{
+          el.style.maxWidth = "100%";
           el.style.width = compact + "px";
+          el.classList.remove("events-grow-open");
           return;
         }}
         var w = measure(el);
+        el.classList.add("events-grow-open");
+        el.style.maxWidth = "none";
         el.style.width = Math.max(compact, Math.min(EXPAND_MAX, w)) + "px";
       }}
+      function collectDraft(form) {{
+        var rows = [];
+        form.querySelectorAll("tbody tr").forEach(function (tr) {{
+          var get = function (name) {{
+            var el = tr.querySelector('[name="' + name + '"]');
+            return el ? el.value : "";
+          }};
+          var delEl = tr.querySelector('input[name="e_delete"]');
+          var purEl = tr.querySelector('input[name="e_purge"]');
+          rows.push({{
+            id: get("e_id"),
+            date: get("e_date"),
+            time: get("e_time"),
+            location: get("e_location"),
+            address: get("e_address"),
+            seats: get("e_seats"),
+            price: get("e_price"),
+            payment: get("e_payment"),
+            host: get("e_host"),
+            description: get("e_description"),
+            image: get("e_image"),
+            delete: !!(delEl && delEl.checked),
+            purge: !!(purEl && purEl.checked)
+          }});
+        }});
+        var notify = form.querySelector('[name="notify_message"]');
+        var audience = form.querySelector('input[name="notify_audience"]:checked');
+        return {{
+          rows: rows,
+          notify_message: notify ? notify.value : "",
+          notify_audience: audience ? audience.value : ""
+        }};
+      }}
+      function applyDraft(form, draft) {{
+        if (!draft || !draft.rows) return;
+        var trs = form.querySelectorAll("tbody tr");
+        draft.rows.forEach(function (row, idx) {{
+          var tr = trs[idx];
+          if (!tr) return;
+          var set = function (name, val) {{
+            var el = tr.querySelector('[name="' + name + '"]');
+            if (el && val != null) el.value = val;
+          }};
+          set("e_date", row.date);
+          set("e_time", row.time);
+          set("e_location", row.location);
+          set("e_address", row.address);
+          set("e_seats", row.seats);
+          set("e_price", row.price);
+          set("e_payment", row.payment);
+          set("e_host", row.host);
+          set("e_description", row.description);
+          set("e_image", row.image);
+          var del = tr.querySelector('input[name="e_delete"]');
+          var pur = tr.querySelector('input[name="e_purge"]');
+          if (del) del.checked = !!row.delete;
+          if (pur) pur.checked = !!row.purge;
+        }});
+        var notify = form.querySelector('[name="notify_message"]');
+        if (notify && draft.notify_message != null) notify.value = draft.notify_message;
+        if (draft.notify_audience) {{
+          var rad = form.querySelector('input[name="notify_audience"][value="' + draft.notify_audience + '"]');
+          if (rad) rad.checked = true;
+        }}
+        showEditHint();
+      }}
+      function saveDraft(form) {{
+        var key = form.getAttribute("data-events-draft-key");
+        if (!key) return;
+        try {{
+          localStorage.setItem(key, JSON.stringify(collectDraft(form)));
+        }} catch (e) {{}}
+      }}
+      function clearDraft(form) {{
+        var key = form.getAttribute("data-events-draft-key");
+        if (!key) return;
+        try {{ localStorage.removeItem(key); }} catch (e) {{}}
+      }}
+      function loadDraft(form) {{
+        var key = form.getAttribute("data-events-draft-key");
+        if (!key) return;
+        try {{
+          var raw = localStorage.getItem(key);
+          if (!raw) return;
+          applyDraft(form, JSON.parse(raw));
+        }} catch (e) {{}}
+      }}
+
       document.querySelectorAll(".events-form").forEach(function (form) {{
         form.querySelectorAll("input.events-grow").forEach(function (el) {{
+          syncTitle(el);
+          fitGrow(el, false);
+        }});
+        loadDraft(form);
+        form.querySelectorAll("input.events-grow").forEach(function (el) {{
+          syncTitle(el);
           fitGrow(el, false);
         }});
         form.querySelectorAll(".events-table-scroll").forEach(function (root) {{
@@ -528,10 +650,18 @@ def render_events_tab(
         }});
         form.addEventListener("input", function (ev) {{
           showEditHint();
-          if (ev.target && ev.target.classList.contains("events-grow")) fitGrow(ev.target, true);
+          if (ev.target) {{
+            syncTitle(ev.target);
+            if (ev.target.classList.contains("events-grow")) fitGrow(ev.target, true);
+          }}
+          saveDraft(form);
         }});
         form.addEventListener("change", function () {{
           showEditHint();
+          saveDraft(form);
+        }});
+        form.addEventListener("submit", function () {{
+          clearDraft(form);
         }});
         form.addEventListener("click", function (ev) {{
           var btn = ev.target.closest("[data-events-tpl]");
@@ -551,11 +681,34 @@ def render_events_tab(
             if (locInput) locInput.value = btn.getAttribute("data-location") || "";
             if (addrInput) {{
               addrInput.value = btn.getAttribute("data-address") || "";
+              syncTitle(addrInput);
               fitGrow(addrInput, document.activeElement === addrInput);
             }}
           }}
+          saveDraft(form);
         }});
       }});
+
+      document.querySelectorAll('a.pill[href*="tab=events"]').forEach(function (a) {{
+        if ((a.textContent || "").indexOf("Отменить") === -1) return;
+        a.addEventListener("click", function () {{
+          document.querySelectorAll(".events-form").forEach(clearDraft);
+        }});
+      }});
+
+      var note = document.getElementById("ticket-extra-note");
+      function fillTicketNotes() {{
+        var text = note ? note.value : "";
+        document.querySelectorAll("input[name='extra_note']").forEach(function (el) {{
+          el.value = text;
+        }});
+      }}
+      if (note) {{
+        note.addEventListener("input", fillTicketNotes);
+        document.querySelectorAll(".ticket-resend-one, .ticket-resend-bulk").forEach(function (f) {{
+          f.addEventListener("submit", fillTicketNotes);
+        }});
+      }}
     }})();
     </script>
     """

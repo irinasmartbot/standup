@@ -670,6 +670,69 @@ def build_dashboard(rows: list[dict]) -> dict:
     return {"events": list(events.values()), "bookings": bookings, "users": users, "totals": totals}
 
 
+def fetch_directory_users(config: AdminConfig, limit: int = 3000) -> list[dict]:
+    """All bot entrants from users table (not only those with bookings)."""
+    if not _use_postgres(config):
+        return []
+    try:
+        with psycopg.connect(config.database_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, telegram_id, vk_id, name, username, phone, source
+                    FROM users
+                    ORDER BY COALESCE(last_active_at, created_at) DESC NULLS LAST, id DESC
+                    LIMIT %(limit)s
+                    """,
+                    {"limit": max(1, min(int(limit or 3000), 10000))},
+                )
+                return [dict(row) for row in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def merge_directory_users(dashboard: dict, directory: list[dict]) -> None:
+    """Add users who entered the bot but have no bookings yet."""
+    users = dashboard.setdefault("users", {})
+    known_ids: set[int] = set()
+    for user in users.values():
+        uid = user.get("user_id")
+        if uid is None:
+            continue
+        try:
+            known_ids.add(int(uid))
+        except (TypeError, ValueError):
+            pass
+    for row in directory or []:
+        try:
+            uid = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if uid in known_ids:
+            continue
+        key = str(uid)
+        if key in users:
+            continue
+        source = (row.get("source") or "").strip() or (
+            "vkontakte" if row.get("vk_id") else "telegram"
+        )
+        users[key] = {
+            "key": key,
+            "user_id": uid,
+            "name": row.get("name") or "",
+            "username": row.get("username") or "",
+            "phone": row.get("phone") or "",
+            "telegram_id": row.get("telegram_id"),
+            "vk_id": row.get("vk_id"),
+            "source": source,
+            "bookings": [],
+            "status_counts": Counter(),
+            "guests_confirmed": 0,
+            "guests_reserved": 0,
+        }
+        known_ids.add(uid)
+
+
 def _query_link(filters: dict, **updates) -> str:
     next_filters = {k: v for k, v in filters.items() if v and k != "token"}
     for key, value in updates.items():
@@ -872,7 +935,7 @@ def _tabs(
 ) -> str:
     if can_view_ops:
         tabs = [
-            ("users", "Users"),
+            ("users", "Пользователи"),
             ("bookings", "Все брони"),
             ("date", "По дате"),
             ("events", "Мероприятия"),
@@ -963,7 +1026,51 @@ def _cell_value(value) -> str:
     return _h(text)
 
 
-def _db_tab(tables: list[dict], browse: dict | None, filters: dict) -> str:
+def _audit_section(rows: list[dict] | None) -> str:
+    rows = rows or []
+    body = []
+    for row in rows:
+        details = row.get("details") or {}
+        if isinstance(details, str):
+            details_txt = details
+        else:
+            try:
+                import json as _json
+
+                details_txt = _json.dumps(details, ensure_ascii=False)
+            except Exception:
+                details_txt = str(details)
+        if len(details_txt) > 180:
+            details_txt = details_txt[:177] + "…"
+        body.append(
+            "<tr>"
+            f"<td>{_h(_fmt_msk(row.get('created_at')))}</td>"
+            f"<td>{_h(row.get('actor_role') or '—')}</td>"
+            f"<td>{_h(row.get('action') or '')}</td>"
+            f"<td>{_h(row.get('entity_type') or '')} {_h(row.get('entity_id') or '')}</td>"
+            f"<td class='muted'>{_h(details_txt)}</td>"
+            "</tr>"
+        )
+    if not body:
+        body.append('<tr><td colspan="5" class="muted">Пока пусто — действия появятся здесь.</td></tr>')
+    return (
+        '<section class="card audit-log">'
+        "<h2>Журнал действий</h2>"
+        '<p class="muted">Кто что менял в админке (сохранение афиши, переотправка билетов, рассылки).</p>'
+        '<div class="table-wrap"><table><thead><tr>'
+        "<th>Когда</th><th>Роль</th><th>Действие</th><th>Объект</th><th>Детали</th>"
+        f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+        "</section>"
+    )
+
+
+def _db_tab(
+    tables: list[dict],
+    browse: dict | None,
+    filters: dict,
+    audit_rows: list[dict] | None = None,
+) -> str:
+    audit_html = _audit_section(audit_rows)
     table_links = []
     for item in tables:
         active = "active" if filters.get("table") == item["name"] else ""
@@ -981,14 +1088,14 @@ def _db_tab(tables: list[dict], browse: dict | None, filters: dict) -> str:
         "</section>"
     )
     if not browse:
-        return nav + (
+        return audit_html + nav + (
             '<section class="card empty-state">'
             "<h2>Выберите таблицу</h2>"
             "<p>Нажмите на таблицу выше, чтобы увидеть строки как в Excel.</p>"
             "</section>"
         )
     if browse.get("error"):
-        return nav + f'<section class="card empty-state"><h2>{_h(browse["error"])}</h2></section>'
+        return audit_html + nav + f'<section class="card empty-state"><h2>{_h(browse["error"])}</h2></section>'
 
     cols = browse["columns"]
     col_meta = " · ".join(f'{c["name"]} ({c["type"]})' for c in cols)
@@ -1020,7 +1127,8 @@ def _db_tab(tables: list[dict], browse: dict | None, filters: dict) -> str:
         f"</div>"
     )
     return (
-        nav
+        audit_html
+        + nav
         + '<section class="card">'
         f'<h2>{_h(browse["table"])}</h2>'
         f'<p class="muted">{_h(col_meta)}</p>'
@@ -1146,16 +1254,18 @@ def _user_reminders_html(bookings: list[dict]) -> str:
     from bot.utils.ticket import parse_created_at, parse_event_datetime
 
     now = datetime.now(MSK).replace(tzinfo=None)
-    # Show active + confirmed (ticket taken) so raffle/shows with immediate ticket are visible.
-    relevant = [
-        b
-        for b in bookings
-        if b.get("status") in {"booked", "confirmed"}
-    ]
+    # Newest upcoming first; skip past event dates.
+    relevant = []
+    for b in bookings:
+        if b.get("status") not in {"booked", "confirmed"}:
+            continue
+        event_dt = parse_event_datetime(b.get("event_date") or "", b.get("event_time") or "")
+        if event_dt and event_dt < now:
+            continue
+        relevant.append(b)
     if not relevant:
-        return '<p class="muted">Нет броней для напоминаний.</p>'
+        return '<p class="muted">Нет актуальных броней для напоминаний.</p>'
 
-    # Newest event date first
     relevant = sorted(
         relevant,
         key=lambda b: (b.get("event_date") or "", b.get("event_time") or ""),
@@ -1446,6 +1556,9 @@ def _user_tickets_html(
                 f'<input type="hidden" name="updated" value="0">'
                 f'<input type="hidden" name="back" value="user">'
                 f'<input type="hidden" name="u" value="{_h(user_key)}">'
+                '<label class="events-note-label">Сообщение с билетом <span class="muted">(необяз.)</span></label>'
+                '<textarea name="extra_note" class="events-extra-note" rows="2" '
+                'placeholder="Например: дата изменилась — актуальный билет"></textarea>'
                 '<button type="submit">Переотправить билет</button>'
                 "</form>"
             )
@@ -1583,7 +1696,7 @@ def _users_tab(
             f'{_booking_table(bookings, show_format=True)}'
             "</section>"
         )
-    return flash_html + detail + f'<section class="card"><h2>Users</h2>{table}</section>'
+    return flash_html + detail + f'<section class="card"><h2>Пользователи</h2>{table}</section>'
 
 
 def _metric_pair(metric: dict | None) -> str:
@@ -2241,8 +2354,13 @@ def _content(
             can_resend_tickets=can_resend_tickets,
         )
     if tab == "db":
-        db_data = db_data or {"tables": [], "browse": None}
-        return _db_tab(db_data.get("tables") or [], db_data.get("browse"), filters)
+        db_data = db_data or {"tables": [], "browse": None, "audit": []}
+        return _db_tab(
+            db_data.get("tables") or [],
+            db_data.get("browse"),
+            filters,
+            audit_rows=db_data.get("audit"),
+        )
     return _date_tab(dashboard, filters)
 
 
@@ -2318,7 +2436,8 @@ def render_admin_html(
     header h1 {{ margin:0 0 8px; font-size:30px; }}
     header p {{ margin:0; color:#cbd5e1; }}
     header a {{ color:white; }}
-    main {{ max-width:1280px; margin:0 auto; padding:24px; }}
+    main {{ max-width:1680px; margin:0 auto; padding:24px; }}
+    body.tab-events main {{ max-width:1840px; }}
     .tabs {{ display:flex; gap:10px; margin:0 0 16px; padding-left:16px; flex-wrap:wrap; }}
     .tab, .pill {{ padding:10px 14px; border-radius:999px; border:1px solid var(--line); color:#111827; background:white; text-decoration:none; }}
     .tab.active, .pill.active {{ background:#111827; color:white; border-color:#111827; }}
@@ -2434,9 +2553,26 @@ def render_admin_html(
       width:120px; max-width:100%; transition: width .12s ease;
       text-overflow:ellipsis; overflow:hidden; white-space:nowrap;
     }}
-    table.events-edit input.events-grow:focus {{
-      text-overflow:clip; overflow:visible; position:relative; z-index:2;
+    table.events-edit input.events-grow:focus,
+    table.events-edit input.events-grow.events-grow-open {{
+      text-overflow:clip; overflow:visible; position:relative; z-index:3;
+      max-width:none; background:#fff;
+      box-shadow:0 4px 16px rgba(15,23,42,.12);
     }}
+    .events-notify-box {{
+      margin-top:16px; padding:14px 16px; border:1px solid #fecaca; border-radius:12px;
+      background:#fff7f7; display:flex; flex-direction:column; gap:8px;
+    }}
+    .events-notify-box textarea,
+    .events-extra-note {{
+      width:100%; max-width:720px; font:inherit; padding:10px 12px; border-radius:10px;
+      border:1px solid #cbd5e1; resize:vertical; min-height:72px;
+    }}
+    .events-notify-audience {{ display:flex; flex-wrap:wrap; gap:12px 18px; font-size:13px; }}
+    .events-note-label {{ display:block; margin:10px 0 6px; font-weight:600; }}
+    .audit-log {{ margin-bottom:16px; }}
+    .audit-log table {{ font-size:13px; }}
+    .audit-log td {{ vertical-align:top; }}
     .events-time-cell, .events-loc-cell {{ vertical-align:top; }}
     .events-tpls {{
       display:flex; flex-wrap:nowrap; gap:4px; margin-top:6px;
@@ -2707,7 +2843,7 @@ def render_admin_html(
     }}
   </style>
 </head>
-<body>
+<body class="tab-{_h(tab)}">
   <header>
     <h1>Стендап бронирование</h1>
     <p>Автообновление каждые 30 секунд · источник данных: {_h(source_label)} · <a href="/admin/logout">выйти</a></p>
@@ -2987,6 +3123,8 @@ async def admin_page(request: web.Request) -> web.Response:
         "totals": {"events": 0, "bookings": 0, "reserved_guests": 0, "confirmed_guests": 0},
     }
     if filters.get("tab") == "db":
+        from bot.db.admin_audit import fetch_admin_audit
+
         tables = await loop.run_in_executor(None, list_db_tables, config)
         browse = None
         if filters.get("table"):
@@ -2997,7 +3135,8 @@ async def admin_page(request: web.Request) -> web.Response:
                 filters["table"],
                 filters.get("page", "1"),
             )
-        db_data = {"tables": tables, "browse": browse}
+        audit_rows = await loop.run_in_executor(None, fetch_admin_audit, 80)
+        db_data = {"tables": tables, "browse": browse, "audit": audit_rows}
         dashboard = empty_dashboard
     elif filters.get("tab") == "analytics":
         from bot.db.analytics import fetch_analytics_report
@@ -3026,6 +3165,12 @@ async def admin_page(request: web.Request) -> web.Response:
             )
         if saved_flag == "1":
             events_flash = "Сохранено. Афиша в боте уже с новыми данными."
+            n_ok = request.query.get("n_ok")
+            n_fail = request.query.get("n_fail")
+            if n_ok is not None or n_fail is not None:
+                events_flash += (
+                    f" Рассылка об отмене: успешно {n_ok or '0'}, ошибок {n_fail or '0'}."
+                )
         elif saved_flag == "resend":
             ok = request.query.get("ok") or "0"
             fail = request.query.get("fail") or "0"
@@ -3044,6 +3189,9 @@ async def admin_page(request: web.Request) -> web.Response:
             fetch_filters["status"] = ""
         rows = await loop.run_in_executor(None, fetch_admin_rows, config, fetch_filters, include_empty_events)
         dashboard = build_dashboard(rows)
+        if filters.get("tab") == "users":
+            directory = await loop.run_in_executor(None, fetch_directory_users, config)
+            merge_directory_users(dashboard, directory)
         if filters.get("tab") == "users" and saved_flag == "resend":
             ok = request.query.get("ok") or "0"
             fail = request.query.get("fail") or "0"
@@ -3135,15 +3283,32 @@ async def events_resend_ticket_page(request: web.Request) -> web.Response:
     if event_format not in {"best", "proverka", "hitloto"}:
         event_format = "best"
     updated = (post.get("updated") or "1").strip() != "0"
+    extra_note = (post.get("extra_note") or "").strip()
     tickets = (post.get("tickets") or "").strip()
     back = (post.get("back") or "").strip()
     user_key = (post.get("u") or "").strip()
+    actor = _admin_role(request, config)
 
     event_id_raw = (post.get("event_id") or "").strip()
     booking_id_raw = (post.get("booking_id") or "").strip()
 
     if event_id_raw.isdigit():
-        result = await resend_tickets_for_event_async(int(event_id_raw), updated=updated)
+        result = await resend_tickets_for_event_async(
+            int(event_id_raw), updated=updated, extra_note=extra_note
+        )
+        from bot.db.admin_audit import log_admin_action
+
+        log_admin_action(
+            actor_role=actor,
+            action="resend_tickets_event",
+            entity_type="event",
+            entity_id=event_id_raw,
+            details={
+                "ok": result.get("ok"),
+                "fail": result.get("fail"),
+                "extra_note": bool(extra_note),
+            },
+        )
         q = urlencode(
             {
                 "tab": "events",
@@ -3157,7 +3322,18 @@ async def events_resend_ticket_page(request: web.Request) -> web.Response:
         raise web.HTTPFound(f"/admin?{q}")
 
     if booking_id_raw.isdigit():
-        one = await resend_ticket_async(int(booking_id_raw), updated=updated)
+        one = await resend_ticket_async(
+            int(booking_id_raw), updated=updated, extra_note=extra_note
+        )
+        from bot.db.admin_audit import log_admin_action
+
+        log_admin_action(
+            actor_role=actor,
+            action="resend_ticket",
+            entity_type="booking",
+            entity_id=booking_id_raw,
+            details={"ok": bool(one.get("ok")), "extra_note": bool(extra_note)},
+        )
         err = (one.get("error") or "")[:200]
         if back == "user" and user_key:
             q = {
@@ -3196,8 +3372,56 @@ async def events_save_page(request: web.Request) -> web.Response:
 
     post = await request.post()
     event_format, rows = parse_events_form(post)
+    notify_message = (post.get("notify_message") or "").strip()
+    notify_audience = (post.get("notify_audience") or "").strip()
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, save_events_batch, event_format, rows)
+    actor = _admin_role(request, config)
+    from bot.db.admin_audit import log_admin_action
+
+    touched_ids = [
+        str(r.get("id"))
+        for r in rows
+        if r.get("id") and (r.get("delete") or r.get("purge") or r.get("date"))
+    ]
+    log_admin_action(
+        actor_role=actor,
+        action="events_save",
+        entity_type="afisha",
+        entity_id=event_format,
+        details={
+            "saved": result.get("saved"),
+            "hidden": result.get("hidden"),
+            "deleted": result.get("deleted"),
+            "errors": len(result.get("errors") or []),
+            "notify_audience": notify_audience or "",
+            "notify": bool(notify_message and notify_audience),
+            "rows": len(rows),
+        },
+    )
+    notify_result = None
+    if notify_message and notify_audience in {"booked", "confirmed", "both"}:
+        hide_ids = []
+        for r in rows:
+            eid = r.get("id")
+            if eid and (r.get("delete") or r.get("purge")):
+                try:
+                    hide_ids.append(int(eid))
+                except (TypeError, ValueError):
+                    pass
+        if hide_ids:
+            from bot.admin.event_notify import notify_event_guests_async
+
+            notify_result = await notify_event_guests_async(
+                hide_ids, notify_message, notify_audience
+            )
+            log_admin_action(
+                actor_role=actor,
+                action="events_cancel_notify",
+                entity_type="event",
+                entity_id=",".join(str(i) for i in hide_ids),
+                details=notify_result,
+            )
     if result.get("errors"):
         can_view_db = _can_view_db(request, config)
         can_view_ops = _can_view_ops(request, config)
@@ -3233,6 +3457,11 @@ async def events_save_page(request: web.Request) -> web.Response:
             if result.get("saved") or result.get("hidden") or result.get("deleted")
             else ""
         )
+        if notify_result and not notify_result.get("skipped"):
+            flash = (flash + " " if flash else "") + (
+                f"Рассылка об отмене: успешно {notify_result.get('ok', 0)}, "
+                f"ошибок {notify_result.get('fail', 0)}."
+            )
         source_label = "PostgreSQL" if _use_postgres(config) else f"SQLite ({config.db_path})"
         return web.Response(
             text=render_admin_html(
@@ -3252,7 +3481,10 @@ async def events_save_page(request: web.Request) -> web.Response:
             ),
             content_type="text/html",
         )
-    raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}&saved=1")
+    q = f"/admin?tab=events&ef={quote(event_format)}&saved=1"
+    if notify_result and not notify_result.get("skipped"):
+        q += f"&n_ok={int(notify_result.get('ok') or 0)}&n_fail={int(notify_result.get('fail') or 0)}"
+    raise web.HTTPFound(q)
 
 
 async def events_restore_page(request: web.Request) -> web.Response:
@@ -3260,6 +3492,7 @@ async def events_restore_page(request: web.Request) -> web.Response:
     if not _check_auth(request, config):
         return web.Response(text=render_login_html(), status=401, content_type="text/html")
     from bot.db.events_admin import restore_events
+    from bot.db.admin_audit import log_admin_action
     from urllib.parse import quote
 
     post = await request.post()
@@ -3269,6 +3502,13 @@ async def events_restore_page(request: web.Request) -> web.Response:
     ids = post.getall("e_restore") if hasattr(post, "getall") else []
     result = await asyncio.get_running_loop().run_in_executor(
         None, restore_events, event_format, list(ids or [])
+    )
+    log_admin_action(
+        actor_role=_admin_role(request, config),
+        action="events_restore",
+        entity_type="afisha",
+        entity_id=event_format,
+        details={"restored": result.get("restored"), "errors": len(result.get("errors") or []), "ids": list(ids or [])},
     )
     if result.get("errors") and not result.get("restored"):
         raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}&saved=0")
@@ -3284,8 +3524,19 @@ async def login_page(request: web.Request) -> web.Response:
     # Manager → only events; client/owner → main admin
     if _is_manager_token(token, config) and not _is_owner_token(token, config) and not _is_client_token(token, config):
         dest = "/admin?tab=events"
+        role = "manager"
+    elif _is_owner_token(token, config):
+        dest = "/admin"
+        role = "owner"
+    elif _is_client_token(token, config):
+        dest = "/admin"
+        role = "client"
     else:
         dest = "/admin"
+        role = "unknown"
+    from bot.db.admin_audit import log_admin_action
+
+    log_admin_action(actor_role=role, action="login", entity_type="admin", entity_id="")
     response = web.HTTPFound(dest)
     _set_auth_cookie(response, token)
     raise response
