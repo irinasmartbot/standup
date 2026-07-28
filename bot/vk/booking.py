@@ -105,11 +105,31 @@ def booking_cancel_keyboard() -> str:
     return kb.as_json()
 
 
-def after_booking_keyboard(booking_id: int, *, offer_ticket: bool) -> str:
+def after_booking_keyboard(
+    booking_id: int,
+    *,
+    offer_ticket: bool,
+    manager_link: str = "",
+    community_link: str = "",
+) -> str:
+    """Как в TG после брони Проверки: билет / отмена / дата / гости / менеджер / сообщество."""
     kb = VKKeyboardBuilder(inline=True)
     if offer_ticket:
-        kb.button("Получить билет", _payload("booking_get_ticket", booking_id=booking_id), color="primary")
-    kb.button("В главное меню", _payload("main_menu"))
+        kb.button(
+            "🎟 Получить билет",
+            _payload("booking_get_ticket", booking_id=booking_id),
+            color="positive",
+        )
+    kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
+    kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
+    kb.button(
+        "Изменить количество гостей",
+        _payload("mb_change_guests_confirm", booking_id=booking_id),
+    )
+    if (manager_link or "").strip():
+        kb.button("💬 Задать вопрос менеджеру", link=manager_link.strip())
+    if (community_link or "").strip():
+        kb.button("📢 Заглянуть в наше сообщество", link=community_link.strip())
     kb.adjust(1)
     return kb.as_json()
 
@@ -309,24 +329,33 @@ async def complete_booking(
             manager_link=manager_link,
             community_link=community_link,
         )
-    elif offer_ticket:
-        text = (
-            f"<b>Отлично!</b>\n\n"
-            f"<b>Важная информация</b> — чтобы закрепить место:\n"
-            f"{details}\n\n"
-            f"<b>ОБЯЗАТЕЛЬНО</b> подтвердите бронь кнопкой «Получить билет».\n"
-            f"Если не успеете подтвердить, бронь будет аннулирована."
-        )
-        keyboard = after_booking_keyboard(booking_id, offer_ticket=True)
     else:
-        text = (
-            f"<b>Отлично!</b> Мы внесли вас в списки гостей:\n\n"
-            f"{details}\n\n"
-            f"За сутки до мероприятия придёт напоминание с кнопкой "
-            f"<b>«Получить билет»</b>. "
-            f"<b>Обязательно нажмите её</b>, чтобы подтвердить бронь."
+        # Проверка материала — текст и кнопки как в TG.
+        if offer_ticket:
+            text = (
+                f"<b>Отлично!</b>\n\n"
+                f"❗ <b>Важная информация</b> — для того чтобы мы окончательно закрепили за Вами место "
+                f"на дату и время:\n"
+                f"{details}\n\n"
+                f"<b>ОБЯЗАТЕЛЬНО подтвердите бронь, нажав на кнопку «Получить билет»</b>\n\n"
+                f"❗ Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована."
+            )
+        else:
+            text = (
+                f"<b>Отлично!</b> Мы внесли Вас в списки гостей:\n\n"
+                f"{details}\n\n"
+                f"<b>❗ Внимание, за сутки до мероприятия Вам придёт сообщение-напоминание "
+                f"с подробностями и кнопкой «Получить билет». "
+                f"Обязательно нажмите кнопку, чтобы подтвердить бронь. "
+                f"Если Вы не успеете подтвердить бронь, она будет аннулирована.</b>\n\n"
+                f"Если поменяются планы, обязательно предупредите 😊"
+            )
+        keyboard = after_booking_keyboard(
+            booking_id,
+            offer_ticket=offer_ticket,
+            manager_link=manager_link,
+            community_link=community_link,
         )
-        keyboard = after_booking_keyboard(booking_id, offer_ticket=False)
 
     await client.send_message(
         peer_id,
