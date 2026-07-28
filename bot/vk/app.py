@@ -44,7 +44,6 @@ from bot.handlers.formats import (
     VENUE_CARDS,
     VENUES_INTRO_TEXT as TG_VENUES_INTRO_TEXT,
 )
-from bot.handlers.start import WELCOME_TEXT as TG_WELCOME_TEXT
 from bot.services.sheets import load_events
 from bot.utils.booking_texts import same_day_booking_warning
 from bot.utils.free_text import is_meaningful_free_text
@@ -55,7 +54,9 @@ from bot.vk import my_bookings as vk_mb
 from bot.vk import raffle as vk_raffle
 from bot.vk.client import VKClient
 from bot.vk.config import VKSettings
-from bot.vk.formatting import format_vk_text
+from bot.vk.event_texts import best_event_text as _best_event_text_vk
+from bot.vk.event_texts import event_card_text as _event_text
+from bot.vk.event_texts import hitloto_event_text as _hitloto_event_text_vk
 from bot.vk.keyboards import VKKeyboardBuilder, empty_inline_keyboard, empty_keyboard
 from bot.vk.media import VKRemoteImageCache, VKSystemImageCache, resolve_image_attachment
 
@@ -84,22 +85,32 @@ def raffle_entry_link(settings: VKSettings) -> str:
             return f"https://vk.me/{name}?ref=standup_rozygr"
     return "напиши «розыгрыш»"
 
-WELCOME_TEXT = format_vk_text(TG_WELCOME_TEXT)
-FORMATS_TEXT = format_vk_text(TG_FORMATS_TEXT)
-BUY_TICKET_TEXT = format_vk_text(TG_BUY_TICKET_TEXT)
-RULES_TEXT = format_vk_text(TG_RULES_TEXT)
-BOOKING_RULES_TEXT = format_vk_text(TG_BOOKING_RULES_TEXT)
-VENUES_INTRO_TEXT = format_vk_text(TG_VENUES_INTRO_TEXT)
+# HTML с <b>/<i> — client.send_message сам соберёт VK format_data.
+WELCOME_TEXT = (
+    "🎭 <b>Moscow StandUp Show</b>\n\n"
+    "Привет! Мы делаем шоу в различных заведениях в центре Москвы каждый день. 🏙\n\n"
+    "✨ Только опытные комики, участники проектов ТНТ и YouTube, "
+    "харизматичные ведущие, интерактив со зрителями, атмосферные залы "
+    "и подарки на каждом мероприятии — это всё мы!\n\n"
+    "📍 <b>Здесь можно</b>\n"
+    "🎟 Забронировать места на <b>бесплатные шоу</b>\n"
+    "⭐ Купить билеты на <b>StandUp BEST</b> и <b>Хитлото</b>"
+)
+FORMATS_TEXT = TG_FORMATS_TEXT
+BUY_TICKET_TEXT = TG_BUY_TICKET_TEXT
+RULES_TEXT = TG_RULES_TEXT
+BOOKING_RULES_TEXT = TG_BOOKING_RULES_TEXT
+VENUES_INTRO_TEXT = TG_VENUES_INTRO_TEXT
 
-CHECK_ENTRY_TEXT = format_vk_text(
+CHECK_ENTRY_TEXT = (
     "Привет! 😊 Я помогу тебе забронировать места на <b>Проверку материала</b> "
     "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇"
 )
-BEST_ENTRY_TEXT = format_vk_text(
+BEST_ENTRY_TEXT = (
     "Привет 😊 Я помогу тебе выбрать билеты на <b>StandUp BEST</b> "
     "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇"
 )
-HITLOTO_ENTRY_TEXT = format_vk_text(
+HITLOTO_ENTRY_TEXT = (
     "Привет 😊 Я помогу тебе выбрать билеты на <b>Хитлото</b> "
     "от Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
 )
@@ -293,37 +304,6 @@ def _venues_keyboard(venues: list[str], command: str, back_cmd: str, *, inline: 
     kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
-
-
-def _event_text(event: dict[str, Any]) -> str:
-    return "\n".join(
-        [
-            format_date(event["date"]),
-            event.get("weekday") or "",
-            "",
-            event.get("time") or "",
-            event.get("address") or "",
-            event.get("description") or "",
-        ]
-    ).strip()
-
-
-def _best_event_text_vk(event: dict[str, Any]) -> str:
-    location_line = " ".join(
-        part for part in [event.get("time") or "", event.get("location") or ""] if part
-    ).strip()
-    parts = [
-        format_date(event["date"]),
-        event.get("weekday") or "",
-        "",
-        location_line,
-        event.get("address") or "",
-        event.get("description") or "",
-    ]
-    host = (event.get("host") or "").strip()
-    if host:
-        parts.extend(["", "Кто выступает:", host])
-    return "\n".join(part for part in parts if part is not None).strip()
 
 
 def _best_carousel_keyboard(
@@ -1028,9 +1008,7 @@ class VKBotApp:
             date_label = f"{format_date(booking[5])} {booking[6]}"
             await self._send_text(
                 peer_id,
-                format_vk_text(
-                    f"Для подтверждения отмены брони на <b>{date_label}</b> нажмите кнопку ниже"
-                ),
+                f"Для подтверждения отмены брони на <b>{date_label}</b> нажмите кнопку ниже",
                 keyboard=vk_mb.confirm_keyboard("mb_cancel_do", booking_id),
                 replace_nav=False,
             )
@@ -1069,9 +1047,7 @@ class VKBotApp:
             date_label = f"{format_date(booking[5])} {booking[6]}"
             await self._send_text(
                 peer_id,
-                format_vk_text(
-                    f"Для подтверждения изменения даты брони на <b>{date_label}</b> нажмите кнопку ниже"
-                ),
+                f"Для подтверждения изменения даты брони на <b>{date_label}</b> нажмите кнопку ниже",
                 keyboard=vk_mb.confirm_keyboard("mb_change_date_do", booking_id),
                 replace_nav=False,
             )
@@ -1105,7 +1081,7 @@ class VKBotApp:
             date_label = f"{format_date(booking[5])} {booking[6]}"
             await self._send_text(
                 peer_id,
-                format_vk_text(
+                (
                     f"Для подтверждения изменения количества гостей на бронь <b>{date_label}</b> "
                     "нажмите кнопку ниже 👇"
                 ),
@@ -1125,7 +1101,7 @@ class VKBotApp:
             }
             await self._send_text(
                 peer_id,
-                format_vk_text(
+                (
                     f"{booking[3]}, напишите пожалуйста цифрой, на какое количество человек бронируете?\n\n"
                     f"<b>Внимание, бронь на один билет максимум 4 человека</b>"
                 ),
@@ -2158,7 +2134,7 @@ class VKBotApp:
             vk_id=vk_id,
         )
         if warn:
-            await self._send_text(peer_id, format_vk_text(warn))
+            await self._send_text(peer_id, warn)
 
         session = vk_booking.start_session(self.booking_sessions, vk_id, event)
         session["booking_format"] = "rozygrysh"
@@ -2434,7 +2410,7 @@ class VKBotApp:
             return
         index = int(index or 0) % len(VENUE_CARDS)
         card = VENUE_CARDS[index]
-        text = format_vk_text(card.get("fallback_html") or "")
+        text = card.get("fallback_html") or ""
         keyboard = _venues_card_keyboard(index)
         key = _venue_card_attachment_key(card)
         attachment = self.images.get(key) if key else None
@@ -2610,7 +2586,7 @@ class VKBotApp:
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(
             peer_id,
-            format_vk_text(_event_text(event)),
+            _event_text(event),
             keyboard=kb.as_json(),
             attachment=attachment,
         )
@@ -2725,7 +2701,7 @@ class VKBotApp:
                 "has_payment": bool(payment_url),
             },
         )
-        text = format_vk_text(_best_event_text_vk(event))
+        text = _best_event_text_vk(event)
         keyboard = _best_carousel_keyboard(
             venue,
             index,
@@ -2810,7 +2786,7 @@ class VKBotApp:
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(
             peer_id,
-            format_vk_text(_best_event_text_vk(event)),
+            _best_event_text_vk(event),
             keyboard=kb.as_json(),
             attachment=attachment,
         )
@@ -2905,7 +2881,7 @@ class VKBotApp:
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(
             peer_id,
-            format_vk_text(_event_text(event)),
+            _hitloto_event_text_vk(event),
             keyboard=kb.as_json(),
             attachment=attachment,
         )

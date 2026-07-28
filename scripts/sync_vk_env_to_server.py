@@ -66,7 +66,7 @@ def main() -> None:
         )
 
     payload.setdefault("VK_ENABLED", "1")
-    payload.setdefault("VK_API_VERSION", "5.199")
+    payload.setdefault("VK_API_VERSION", "5.251")
     payload.setdefault("VK_SYSTEM_IMAGES_CACHE", "data/storage/vk_system_images.json")
 
     print("Will sync keys:")

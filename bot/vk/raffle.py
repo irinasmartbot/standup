@@ -16,7 +16,6 @@ from bot.db.crud import (
     get_rozygrysh_used,
 )
 from bot.utils.ticket import now_msk, parse_event_datetime
-from bot.vk.formatting import format_vk_text
 from bot.vk.keyboards import VKKeyboardBuilder
 from bot.vk.media import download_image_bytes
 
@@ -47,18 +46,17 @@ SCREEN_ACCEPTED_TEXT = (
 
 def start_text(community_link: str) -> str:
     link = (community_link or "").strip() or "сообщество VK"
-    html = (
+    return (
         "Привет-привет 🥳 😊\n\n"
         "Что нужно сделать, чтобы получить билетик?\n\n"
         f"1. Быть подписанным на наше <a href=\"{link}\">сообщество ВКонтакте</a>\n"
         "2. Выложить в соцсети <b>пост со ссылкой на наш сайт</b> или <b>оставить отзыв</b> 😊\n\n"
         "Выбирай, какой вариант тебе ближе 👇"
     )
-    return format_vk_text(html)
 
 
-POST_TEXT = format_vk_text(
-    f"Выкладываем в соцсети пост со ссылкой на наш сайт <b>MoscowStandUpshow.ru</b> 😊\n\n"
+POST_TEXT = (
+    "Выкладываем в соцсети пост со ссылкой на наш сайт <b>MoscowStandUpshow.ru</b> 😊\n\n"
     "Если в Instagram* — обязательно сделай ссылку в сторис кликабельной 😉\n\n"
     "Затем нажимай кнопку ниже, отправляй скрин поста <b>одним фото</b> "
     "и выбирай любую дату ☺️ "
@@ -68,7 +66,7 @@ POST_TEXT = format_vk_text(
     "<i>*запрещено в РФ</i>"
 )
 
-REVIEW_TEXT = format_vk_text(
+REVIEW_TEXT = (
     f"Оставляем отзыв по ссылке:\n{AFISHA_REVIEW_URL}\n\n"
     "И обязательно нажать на вот эти кнопочки как на фото 😻\n\n"
     "Затем нажимайте кнопку ниже, отправляйте скрин отзыва <b>одним фото</b> "
@@ -77,7 +75,7 @@ REVIEW_TEXT = format_vk_text(
     "🎫 За 1 отзыв полагается 1 билет"
 )
 
-POST_REJECT_TEXT = format_vk_text(
+POST_REJECT_TEXT = (
     "К сожалению скрин не прошел модерацию. 😔\n\n"
     "Необходимо выложить в соцсети пост со ссылкой на наш сайт :\n\n"
     f"<b>{SITE_URL.replace('https://', '').replace('http://', '')}</b> 😊\n\n"
@@ -336,7 +334,7 @@ async def send_vk_text(vk_id: int, text: str, *, keyboard: str | None = None) ->
 
 
 RAFFLE_DATES_PAGE_SIZE = 4  # 2×2 + стрелки ≤ 6 рядов inline-клавиатуры VK
-RAFFLE_RULES_TEXT = format_vk_text(
+RAFFLE_RULES_TEXT = (
     "<b>Порядок посещения шоу:</b>\n\n"
     "1. Сбор гостей начинается за полчаса до начала шоу\n\n"
     "2. Рассадка осуществляется администратором рассадки на ближайшие к сцене свободные места. "
@@ -426,17 +424,9 @@ def event_card_keyboard(event_id: int) -> str:
 
 
 def event_card_text(event: dict) -> str:
-    from bot.utils.ticket import format_date
+    from bot.vk.event_texts import best_event_text
 
-    lines = [
-        format_date(event.get("date") or ""),
-        event.get("weekday") or "",
-        "",
-        event.get("time") or "",
-        event.get("address") or "",
-        event.get("description") or "",
-    ]
-    return "\n".join(line for line in lines if line is not None).strip()
+    return best_event_text(event)
 
 
 def get_active_raffle_booking_safe(vk_id: int):

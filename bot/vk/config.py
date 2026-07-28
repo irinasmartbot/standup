@@ -58,7 +58,8 @@ def load_vk_settings() -> VKSettings:
         enabled=_as_bool(os.getenv("VK_ENABLED"), default=False),
         group_id=_as_int(os.getenv("VK_GROUP_ID")),
         group_token=os.getenv("VK_GROUP_TOKEN", "").strip(),
-        api_version=os.getenv("VK_API_VERSION", "5.199").strip() or "5.199",
+        # 5.245+ нужен для format_data (жирный/курсив в сообщениях бота).
+        api_version=os.getenv("VK_API_VERSION", "5.251").strip() or "5.251",
         admin_peer_id=_as_int(os.getenv("VK_ADMIN_PEER_ID")),
         manager_link=os.getenv("VK_MANAGER_LINK", "https://vk.com/").strip(),
         community_link=os.getenv("VK_COMMUNITY_LINK", "https://vk.com/").strip(),

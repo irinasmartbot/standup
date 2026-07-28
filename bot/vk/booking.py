@@ -18,7 +18,6 @@ from bot.db.crud import (
 from bot.services.sheets import load_events
 from bot.utils.phone import normalize_phone
 from bot.utils.ticket import format_date, generate_ticket, guests_word, now_msk
-from bot.vk.formatting import format_vk_text
 from bot.vk.keyboards import VKKeyboardBuilder
 
 
@@ -44,7 +43,7 @@ def _payload(value: str, **extra) -> dict[str, Any]:
 
 def name_confirm_text(name: str) -> str:
     safe = (name or "").strip() or "Гость"
-    return format_vk_text(
+    return (
         "Для бронирования вам нужно заполнить некоторые данные\n\n"
         f"Ваше имя <b>{safe}</b>, верно?"
     )
@@ -282,7 +281,7 @@ async def issue_ticket(
 
     vk_manager = (manager_link or "").strip() or MANAGER_LINK
     vk_community = (community_link or "").strip() or CHANNEL_LINK
-    caption = format_vk_text(
+    caption = (
         "Отлично!\n\n"
         "<b>Данные по билету:</b>\n\n"
         f"<b>Ваше имя:</b> {name or ''}\n"

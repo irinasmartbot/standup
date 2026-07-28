@@ -52,17 +52,32 @@ class VKClient:
         *,
         keyboard: str | None = None,
         attachment: str | None = None,
+        format_data: str | None = None,
     ) -> int:
+        from bot.vk.formatting import prepare_vk_message
+
+        plain, auto_format = prepare_vk_message(text)
         params: dict[str, Any] = {
             "peer_id": peer_id,
             "random_id": random.randint(1, 2_147_483_647),
-            "message": text,
+            "message": plain,
         }
         if keyboard:
             params["keyboard"] = keyboard
         if attachment:
             params["attachment"] = attachment
-        response = await self.api("messages.send", **params)
+        fd = format_data if format_data is not None else auto_format
+        if fd:
+            params["format_data"] = fd
+        try:
+            response = await self.api("messages.send", **params)
+        except VKAPIError as exc:
+            # Старые API / клиенты: повторяем без format_data.
+            if fd and "format_data" in str(exc).lower():
+                params.pop("format_data", None)
+                response = await self.api("messages.send", **params)
+            else:
+                raise
         return int(response)
 
     async def edit_message(
@@ -74,6 +89,7 @@ class VKClient:
         conversation_message_id: int | None = None,
         keyboard: str | None = None,
         attachment: str | None = None,
+        format_data: str | None = None,
     ) -> bool:
         """Edit an existing message in place (text / keyboard / attachment).
 
@@ -82,9 +98,12 @@ class VKClient:
         """
         if not message_id and not conversation_message_id:
             return False
+        from bot.vk.formatting import prepare_vk_message
+
+        plain, auto_format = prepare_vk_message(text)
         params: dict[str, Any] = {
             "peer_id": int(peer_id),
-            "message": text,
+            "message": plain,
         }
         if message_id:
             params["message_id"] = int(message_id)
@@ -96,10 +115,20 @@ class VKClient:
             params["keyboard"] = keyboard
         if attachment is not None:
             params["attachment"] = attachment
+        fd = format_data if format_data is not None else auto_format
+        if fd:
+            params["format_data"] = fd
         try:
             response = await self.api("messages.edit", **params)
             return bool(response)
-        except VKAPIError:
+        except VKAPIError as exc:
+            if fd and "format_data" in str(exc).lower():
+                params.pop("format_data", None)
+                try:
+                    response = await self.api("messages.edit", **params)
+                    return bool(response)
+                except VKAPIError:
+                    pass
             logger.exception(
                 "messages.edit failed peer_id=%s message_id=%s cmid=%s",
                 peer_id,

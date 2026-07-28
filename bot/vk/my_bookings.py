@@ -16,7 +16,6 @@ from bot.db.crud import (
 from bot.handlers.start import MY_BOOKINGS_INTRO
 from bot.services.sheets import load_events
 from bot.utils.ticket import format_date, generate_ticket, now_msk, parse_event_datetime
-from bot.vk.formatting import format_vk_text
 from bot.vk.keyboards import VKKeyboardBuilder
 
 STEP_NEW_GUESTS = "waiting_new_guests"
@@ -63,16 +62,16 @@ def booking_card_text(row, *, page: int = 0, total: int = 1) -> str:
     ]
     if status == "confirmed":
         lines.extend(["", "✅ Бронь подтверждена"])
-    return format_vk_text("\n".join(lines))
+    return "\n".join(lines)
 
 
 def empty_bookings_text() -> str:
-    return format_vk_text(f"<b><i>{MY_BOOKINGS_INTRO}</i></b>\n\nАктивных броней пока нет.")
+    return f"<b><i>{MY_BOOKINGS_INTRO}</i></b>\n\nАктивных броней пока нет."
 
 
 def ticket_caption(row) -> str:
     _, format_name, _, event_date, event_time, _, location, *_ = row
-    return format_vk_text(
+    return (
         "<b>Билет по брони</b>\n\n"
         f"{_format_label(format_name)}\n"
         f"📅 {event_date} в {event_time}\n"
