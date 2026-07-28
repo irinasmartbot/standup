@@ -446,6 +446,7 @@ def render_events_tab(
       <form method="post" action="/admin/events/save" class="events-form" id="events-save-form" data-events-draft-key="events-draft:{_h(fmt)}">
         <input type="hidden" name="ef" value="{_h(fmt)}">
         {_table(bundle.get("active") or [], paid=paid, blank_rows=5, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)}
+        {"" if not can_resend_tickets else '''
         <div class="events-notify-box">
           <b>Сообщение гостям при скрытии / удалении</b>
           <span class="muted">Необязательно. Уйдёт только по строкам, где отмечено «скрыть» или «удалить».</span>
@@ -458,6 +459,7 @@ def render_events_tab(
             <label><input type="radio" name="notify_audience" value="both"> бронь + билет</label>
           </div>
         </div>
+        '''}
       </form>
       <div class="events-toolbar events-toolbar-bottom">
         <button type="submit" form="events-save-form" class="events-update-btn">Обновить</button>

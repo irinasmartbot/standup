@@ -3372,8 +3372,13 @@ async def events_save_page(request: web.Request) -> web.Response:
 
     post = await request.post()
     event_format, rows = parse_events_form(post)
-    notify_message = (post.get("notify_message") or "").strip()
-    notify_audience = (post.get("notify_audience") or "").strip()
+    # Guest cancel/notify mailing is owner-only (UI hidden for manager/client).
+    if _can_resend_tickets(request, config):
+        notify_message = (post.get("notify_message") or "").strip()
+        notify_audience = (post.get("notify_audience") or "").strip()
+    else:
+        notify_message = ""
+        notify_audience = ""
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, save_events_batch, event_format, rows)
     actor = _admin_role(request, config)
