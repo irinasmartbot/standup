@@ -146,7 +146,7 @@ def save_events_batch(event_format: str, rows: list[dict[str, Any]]) -> dict:
     Each row may have id (int|None), date, time, location, address, ...
     Empty required fields → skip. delete=True → status hidden.
     """
-    result = {"saved": 0, "hidden": 0, "deleted": 0, "errors": []}
+    result = {"saved": 0, "hidden": 0, "deleted": 0, "errors": [], "hidden_ids": [], "deleted_ids": []}
     if not _use_postgres():
         result["errors"].append("Мероприятия правятся только в PostgreSQL.")
         return result
@@ -193,6 +193,7 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
         )
         if cur.rowcount:
             result["deleted"] += 1
+            result.setdefault("deleted_ids", []).append(int(event_id))
         return
     if delete:
         if event_id:
@@ -206,6 +207,7 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
             )
             if cur.rowcount:
                 result["hidden"] += 1
+                result.setdefault("hidden_ids", []).append(int(event_id))
         return
 
     event_date = parse_admin_date(str(raw.get("date") or ""))

@@ -3171,6 +3171,13 @@ async def admin_page(request: web.Request) -> web.Response:
                 events_flash += (
                     f" Рассылка об отмене: успешно {n_ok or '0'}, ошибок {n_fail or '0'}."
                 )
+            c_ok = request.query.get("c_ok")
+            c_fail = request.query.get("c_fail")
+            if c_ok is not None or c_fail is not None:
+                events_flash += f" Отменено броней/билетов: {c_ok or '0'}"
+                if c_fail and c_fail != "0":
+                    events_flash += f", ошибок {c_fail}"
+                events_flash += "."
         elif saved_flag == "resend":
             ok = request.query.get("ok") or "0"
             fail = request.query.get("fail") or "0"
@@ -3405,28 +3412,37 @@ async def events_save_page(request: web.Request) -> web.Response:
         },
     )
     notify_result = None
-    if notify_message and notify_audience in {"booked", "confirmed", "both"}:
-        hide_ids = []
-        for r in rows:
-            eid = r.get("id")
-            if eid and (r.get("delete") or r.get("purge")):
-                try:
-                    hide_ids.append(int(eid))
-                except (TypeError, ValueError):
-                    pass
-        if hide_ids:
-            from bot.admin.event_notify import notify_event_guests_async
+    cancel_result = None
+    hidden_ids = [int(x) for x in (result.get("hidden_ids") or []) if x]
+    # Notify while bookings are still active, then cancel them.
+    if (
+        notify_message
+        and notify_audience in {"booked", "confirmed", "both"}
+        and hidden_ids
+    ):
+        from bot.admin.event_notify import notify_event_guests_async
 
-            notify_result = await notify_event_guests_async(
-                hide_ids, notify_message, notify_audience
-            )
-            log_admin_action(
-                actor_role=actor,
-                action="events_cancel_notify",
-                entity_type="event",
-                entity_id=",".join(str(i) for i in hide_ids),
-                details=notify_result,
-            )
+        notify_result = await notify_event_guests_async(
+            hidden_ids, notify_message, notify_audience
+        )
+        log_admin_action(
+            actor_role=actor,
+            action="events_cancel_notify",
+            entity_type="event",
+            entity_id=",".join(str(i) for i in hidden_ids),
+            details=notify_result,
+        )
+    if hidden_ids:
+        from bot.admin.event_notify import cancel_event_bookings_async
+
+        cancel_result = await cancel_event_bookings_async(hidden_ids)
+        log_admin_action(
+            actor_role=actor,
+            action="events_cancel_bookings",
+            entity_type="event",
+            entity_id=",".join(str(i) for i in hidden_ids),
+            details=cancel_result,
+        )
     if result.get("errors"):
         can_view_db = _can_view_db(request, config)
         can_view_ops = _can_view_ops(request, config)
@@ -3467,6 +3483,16 @@ async def events_save_page(request: web.Request) -> web.Response:
                 f"Рассылка об отмене: успешно {notify_result.get('ok', 0)}, "
                 f"ошибок {notify_result.get('fail', 0)}."
             )
+        if cancel_result and not cancel_result.get("skipped"):
+            flash = (flash + " " if flash else "") + (
+                f"Отменено броней/билетов: {cancel_result.get('cancelled', 0)}"
+                + (
+                    f", ошибок {cancel_result.get('fail', 0)}"
+                    if cancel_result.get("fail")
+                    else ""
+                )
+                + "."
+            )
         source_label = "PostgreSQL" if _use_postgres(config) else f"SQLite ({config.db_path})"
         return web.Response(
             text=render_admin_html(
@@ -3489,6 +3515,11 @@ async def events_save_page(request: web.Request) -> web.Response:
     q = f"/admin?tab=events&ef={quote(event_format)}&saved=1"
     if notify_result and not notify_result.get("skipped"):
         q += f"&n_ok={int(notify_result.get('ok') or 0)}&n_fail={int(notify_result.get('fail') or 0)}"
+    if cancel_result and not cancel_result.get("skipped"):
+        q += (
+            f"&c_ok={int(cancel_result.get('cancelled') or 0)}"
+            f"&c_fail={int(cancel_result.get('fail') or 0)}"
+        )
     raise web.HTTPFound(q)
 
 
