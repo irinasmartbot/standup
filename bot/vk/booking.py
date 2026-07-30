@@ -84,8 +84,7 @@ def guests_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     for n in (1, 2, 3, 4):
         kb.button(str(n), _payload("booking_guests", guests=n), color="primary")
-    kb.button("В главное меню", _payload("booking_cancel"))
-    kb.adjust(4, 1)
+    kb.adjust(4)
     return kb.as_json()
 
 
@@ -191,6 +190,17 @@ def manage_ticket_keyboard(booking_id: int, settings_manager_link: str) -> str:
     kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
     kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
     kb.button("Задать вопрос менеджеру", link=settings_manager_link)
+    kb.button("В главное меню", _payload("main_menu"))
+    kb.adjust(1)
+    return kb.as_json()
+
+
+def already_booked_keyboard(booking_id: int) -> str:
+    """Уже есть бронь на этот слот: отмена / смена даты / выбор другой даты Проверки."""
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
+    kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
+    kb.button("Выбрать другую", _payload("check"), color="primary")
     kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()

@@ -16,7 +16,7 @@ from bot.db.crud import (
     get_booking, get_active_booking_by_id, get_booking_by_id, create_booking,
     update_booking_status, update_booking_guests, get_total_guests,
     save_ticket_message_id, save_confirm_message_id, get_last_phone,
-    get_active_bookings_by_user,
+    get_active_bookings_by_user, get_booking_format,
 )
 from bot.services.sheets import load_events, get_event
 from bot.utils.bot_commands import refresh_user_commands
@@ -416,7 +416,7 @@ async def start_booking(call: CallbackQuery, state: FSMContext):
         kb = InlineKeyboardBuilder()
         kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{existing[0]}")
         kb.button(text="Изменить дату", callback_data=f"change_date_{existing[0]}")
-        kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+        kb.button(text="Выбрать другую", callback_data="check_dates")
         kb.adjust(1)
         await call.message.answer(
             f"⚠️ ВНИМАНИЕ, мы уже внесли Вас в списки гостей:\n\n"
@@ -499,14 +499,35 @@ async def process_name(message: Message, state: FSMContext):
     await state.set_state(BookingState.waiting_phone)
 
 
+def _guests_pick_kb(*, prefix: str) -> object:
+    """Зелёные кнопки 1–4; prefix: book_guests | new_guests."""
+    kb = InlineKeyboardBuilder()
+    for n in (1, 2, 3, 4):
+        kb.button(text=str(n), callback_data=f"{prefix}_{n}", style="success")
+    kb.adjust(4)
+    return kb.as_markup()
+
+
+async def _clear_reply_keyboard(message: Message) -> None:
+    """Telegram не даёт совместить ReplyKeyboardRemove и inline в одном сообщении."""
+    clear = await message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
+    try:
+        await clear.delete()
+    except Exception:
+        pass
+
+
 async def _ask_guests_after_phone(message: Message, state: FSMContext):
     data = await state.get_data()
-    await message.answer(
-        f"{data.get('name', '')}, напишите пожалуйста цифрой, на какое количество человек бронируете?\n\n"
+    await _clear_reply_keyboard(message)
+    ask = await message.answer(
+        f"{data.get('name', '')}, напишите цифрой или выберите кнопкой, "
+        f"на какое количество человек бронируете?\n\n"
         f"<b>Внимание, бронь на один билет максимум 4 человека</b>",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=_guests_pick_kb(prefix="book_guests"),
         parse_mode="HTML",
     )
+    await state.update_data(guests_ask_message_id=ask.message_id)
     await state.set_state(BookingState.waiting_guests)
 
 
@@ -552,16 +573,34 @@ async def phone_change(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@router.message(BookingState.waiting_guests)
-async def process_guests(message: Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("Пожалуйста, напишите цифрой количество гостей (от 1 до 4)")
-        return
-    guests = int(message.text)
-    if guests < 1 or guests > 4:
-        await message.answer("Максимум 4 человека на одну бронь. Напишите цифру от 1 до 4.")
-        return
+async def _strip_guests_ask_keyboard(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    ask_id = data.get("guests_ask_message_id")
+    chat_id = message.chat.id
+    targets = []
+    if ask_id:
+        targets.append(int(ask_id))
+    if message.message_id not in targets:
+        targets.append(message.message_id)
+    for mid in targets:
+        try:
+            await message.bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=mid,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
 
+
+async def _create_booking_after_guests(
+    message: Message,
+    state: FSMContext,
+    guests: int,
+    *,
+    telegram_id: int,
+    username: str,
+) -> None:
     data = await state.get_data()
     event_date = data.get("event_date")
     event_time = data.get("event_time")
@@ -574,22 +613,34 @@ async def process_guests(message: Message, state: FSMContext):
         if total + guests > event["max_seats"]:
             available = event["max_seats"] - total
             if available <= 0:
-                await message.answer("К сожалению, на это мероприятие места закончились 😔 Выбери другую дату!", reply_markup=await check_dates_kb())
+                await message.answer(
+                    "К сожалению, на это мероприятие места закончились 😔 Выбери другую дату!",
+                    reply_markup=await check_dates_kb(),
+                )
                 await state.clear()
                 return
-            else:
-                await message.answer(f"К сожалению, доступно только {available} мест. Укажите меньшее количество гостей.")
-                return
+            await message.answer(
+                f"К сожалению, доступно только {available} мест. Укажите меньшее количество гостей.",
+                reply_markup=_guests_pick_kb(prefix="book_guests"),
+            )
+            return
 
     event_address = event["address"] if event else ""
     event_location = event["location"] if event else ""
     booking_id = create_booking(
-        message.from_user.id, message.from_user.username or "",
-        name, phone, event_date, event_time, event_address, event_location, guests,
+        telegram_id,
+        username,
+        name,
+        phone,
+        event_date,
+        event_time,
+        event_address,
+        event_location,
+        guests,
     )
 
     date_str = format_date(event_date)
-    await state.update_data(booking_id=booking_id)
+    await state.update_data(booking_id=booking_id, guests_ask_message_id=None)
     await state.set_state(None)
 
     try:
@@ -637,7 +688,53 @@ async def process_guests(message: Message, state: FSMContext):
         )
     confirm_msg = await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
     save_confirm_message_id(booking_id, confirm_msg.message_id)
-    await refresh_user_commands(message.bot, message.from_user.id)
+    await refresh_user_commands(message.bot, telegram_id)
+
+
+@router.callback_query(BookingState.waiting_guests, F.data.startswith("book_guests_"))
+async def pick_guests_booking(call: CallbackQuery, state: FSMContext):
+    try:
+        guests = int(call.data.rsplit("_", 1)[-1])
+    except (TypeError, ValueError):
+        await call.answer()
+        return
+    if guests < 1 or guests > 4:
+        await call.answer("Выберите от 1 до 4", show_alert=True)
+        return
+    await _strip_guests_ask_keyboard(call.message, state)
+    await _create_booking_after_guests(
+        call.message,
+        state,
+        guests,
+        telegram_id=call.from_user.id,
+        username=call.from_user.username or "",
+    )
+    await call.answer()
+
+
+@router.message(BookingState.waiting_guests)
+async def process_guests(message: Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer(
+            "Пожалуйста, напишите цифрой количество гостей (от 1 до 4) или нажмите кнопку.",
+            reply_markup=_guests_pick_kb(prefix="book_guests"),
+        )
+        return
+    guests = int(message.text)
+    if guests < 1 or guests > 4:
+        await message.answer(
+            "Максимум 4 человека на одну бронь. Напишите цифру от 1 до 4 или нажмите кнопку.",
+            reply_markup=_guests_pick_kb(prefix="book_guests"),
+        )
+        return
+    await _strip_guests_ask_keyboard(message, state)
+    await _create_booking_after_guests(
+        message,
+        state,
+        guests,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username or "",
+    )
 
 
 @router.callback_query(F.data.startswith("get_ticket_"))
@@ -922,9 +1019,27 @@ async def change_date_select_back(call: CallbackQuery):
 
 # ─── ИЗМЕНИТЬ КОЛИЧЕСТВО ГОСТЕЙ ────────────────────────────────────────────────
 
+def _is_raffle_booking(booking_id: int) -> bool:
+    return (get_booking_format(booking_id) or "").strip().lower() == "rozygrysh"
+
+
+async def _reject_raffle_guest_change(call_or_message, booking_id: int) -> bool:
+    """Розыгрыш — всегда 1 гость, смену числа гостей блокируем."""
+    if not _is_raffle_booking(int(booking_id)):
+        return False
+    text = "В розыгрыше бронь только на 1 гостя — изменить количество нельзя."
+    if isinstance(call_or_message, CallbackQuery):
+        await call_or_message.answer(text, show_alert=True)
+    else:
+        await call_or_message.answer(text)
+    return True
+
+
 @router.callback_query(F.data.startswith("change_guests_confirm_"))
 async def change_guests_confirm(call: CallbackQuery):
     booking_id = call.data.replace("change_guests_confirm_", "")
+    if await _reject_raffle_guest_change(call, int(booking_id)):
+        return
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
@@ -946,6 +1061,8 @@ async def change_guests_confirm(call: CallbackQuery):
 )
 async def change_guests_select(call: CallbackQuery):
     booking_id = int(call.data.replace("change_guests_select_", ""))
+    if await _reject_raffle_guest_change(call, booking_id):
+        return
     booking = get_active_booking_by_id(booking_id)
     if not booking:
         await call.message.answer("Бронь не найдена.")
@@ -966,9 +1083,13 @@ async def change_guests_select(call: CallbackQuery):
 
 @router.callback_query(F.data == "change_guests_select_back")
 async def change_guests_select_back(call: CallbackQuery):
-    bookings = get_active_bookings_by_user(call.from_user.id)
+    bookings = [
+        b
+        for b in get_active_bookings_by_user(call.from_user.id)
+        if not _is_raffle_booking(int(b[0]))
+    ]
     if not bookings:
-        await call.message.answer("Активных броней не найдено.")
+        await call.message.answer("Нет броней, где можно менять число гостей.")
         await call.answer()
         return
     kb = InlineKeyboardBuilder()
@@ -986,33 +1107,32 @@ async def change_guests_select_back(call: CallbackQuery):
 @router.callback_query(F.data.startswith("change_guests_do_"))
 async def change_guests_do(call: CallbackQuery, state: FSMContext):
     booking_id = int(call.data.replace("change_guests_do_", ""))
+    if await _reject_raffle_guest_change(call, booking_id):
+        return
     booking = get_active_booking_by_id(booking_id)
     if not booking:
         await call.message.answer("Бронь не найдена.")
         await call.answer()
         return
-    await state.update_data(booking_id=booking_id)
-    await call.message.answer(
-        f"{booking[3]}, напишите пожалуйста цифрой, на какое количество человек бронируете?\n\n"
+    ask = await call.message.answer(
+        f"{booking[3]}, напишите цифрой или выберите кнопкой, "
+        f"на какое количество человек бронируете?\n\n"
         f"<b>Внимание, бронь на один билет максимум 4 человека</b>",
+        reply_markup=_guests_pick_kb(prefix="new_guests"),
         parse_mode="HTML",
     )
+    await state.update_data(booking_id=booking_id, guests_ask_message_id=ask.message_id)
     await state.set_state(BookingState.waiting_new_guests)
     await call.answer()
 
 
-@router.message(BookingState.waiting_new_guests)
-async def process_new_guests(message: Message, state: FSMContext):
-    if not message.text.isdigit():
-        await message.answer("Пожалуйста, напишите цифрой количество гостей (от 1 до 4)")
-        return
-    guests = int(message.text)
-    if guests < 1 or guests > 4:
-        await message.answer("Максимум 4 человека. Напишите цифру от 1 до 4.")
-        return
-
+async def _apply_new_guests(message: Message, state: FSMContext, guests: int) -> None:
     data = await state.get_data()
     booking_id = data.get("booking_id")
+    if booking_id and _is_raffle_booking(int(booking_id)):
+        await message.answer("В розыгрыше бронь только на 1 гостя — изменить количество нельзя.")
+        await state.clear()
+        return
     booking = get_active_booking_by_id(booking_id)
     if not booking:
         await message.answer("Бронь не найдена.")
@@ -1023,7 +1143,11 @@ async def process_new_guests(message: Message, state: FSMContext):
     if event:
         total = get_total_guests(booking[5], booking[6], exclude_id=booking_id)
         if total + guests > event["max_seats"]:
-            await message.answer(f"К сожалению, доступно только {event['max_seats'] - total} мест. Укажите меньшее количество.")
+            await message.answer(
+                f"К сожалению, доступно только {event['max_seats'] - total} мест. "
+                "Укажите меньшее количество.",
+                reply_markup=_guests_pick_kb(prefix="new_guests"),
+            )
             return
 
     update_booking_guests(booking_id, guests)
@@ -1040,6 +1164,40 @@ async def process_new_guests(message: Message, state: FSMContext):
         reply_markup=kb.as_markup(),
     )
     await state.clear()
+
+
+@router.callback_query(BookingState.waiting_new_guests, F.data.startswith("new_guests_"))
+async def pick_new_guests(call: CallbackQuery, state: FSMContext):
+    try:
+        guests = int(call.data.rsplit("_", 1)[-1])
+    except (TypeError, ValueError):
+        await call.answer()
+        return
+    if guests < 1 or guests > 4:
+        await call.answer("Выберите от 1 до 4", show_alert=True)
+        return
+    await _strip_guests_ask_keyboard(call.message, state)
+    await _apply_new_guests(call.message, state, guests)
+    await call.answer()
+
+
+@router.message(BookingState.waiting_new_guests)
+async def process_new_guests(message: Message, state: FSMContext):
+    if not message.text or not message.text.isdigit():
+        await message.answer(
+            "Пожалуйста, напишите цифрой количество гостей (от 1 до 4) или нажмите кнопку.",
+            reply_markup=_guests_pick_kb(prefix="new_guests"),
+        )
+        return
+    guests = int(message.text)
+    if guests < 1 or guests > 4:
+        await message.answer(
+            "Максимум 4 человека. Напишите цифру от 1 до 4 или нажмите кнопку.",
+            reply_markup=_guests_pick_kb(prefix="new_guests"),
+        )
+        return
+    await _strip_guests_ask_keyboard(message, state)
+    await _apply_new_guests(message, state, guests)
 
 
 @router.message(F.chat.type == "private")

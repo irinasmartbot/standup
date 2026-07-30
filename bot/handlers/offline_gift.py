@@ -147,16 +147,23 @@ async def _send_event_entries(call: CallbackQuery, event_id: int):
         return
     entries = get_offline_gift_entries(event_id)
     show_back_to_shows = _date_has_multiple_shows(event.get("date") or "")
-    await call.message.edit_text(
-        _entries_text(event, entries),
-        reply_markup=_event_keyboard(
-            event_id,
-            has_winner=bool(event.get("winner_name")),
-            show_back_to_shows=show_back_to_shows,
-        ),
-        parse_mode="HTML",
-        disable_web_page_preview=True,
+    text = _entries_text(event, entries)
+    markup = _event_keyboard(
+        event_id,
+        has_winner=bool(event.get("winner_name")),
+        show_back_to_shows=show_back_to_shows,
     )
+    try:
+        await call.message.edit_text(
+            text,
+            reply_markup=markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        # Тот же текст (один участник / тот же победитель) — Telegram ругается, кнопка «молчит».
+        if "message is not modified" not in str(exc).lower():
+            raise
 
 
 @router.callback_query(F.data == "og_dates")
@@ -193,7 +200,7 @@ async def og_event(call: CallbackQuery):
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("og_draw:"))
+@router.callback_query(F.data.startswith("og_draw:") & ~F.data.startswith("og_redraw:"))
 async def og_draw(call: CallbackQuery):
     event_id = int(call.data.split(":", 1)[1])
     winner = draw_offline_gift_winner(event_id, redraw=False)
@@ -207,9 +214,19 @@ async def og_draw(call: CallbackQuery):
 @router.callback_query(F.data.startswith("og_redraw:"))
 async def og_redraw(call: CallbackQuery):
     event_id = int(call.data.split(":", 1)[1])
+    entries = get_offline_gift_entries(event_id)
+    if not entries:
+        await call.answer("Пока нет участников", show_alert=True)
+        return
     winner = draw_offline_gift_winner(event_id, redraw=True)
     if not winner:
         await call.answer("Пока нет участников", show_alert=True)
         return
     await _send_event_entries(call, event_id)
-    await call.answer(f"Новый победитель: {winner['full_name']}", show_alert=True)
+    if len(entries) == 1:
+        await call.answer(
+            f"Участник один — победитель тот же: {winner['full_name']}",
+            show_alert=True,
+        )
+    else:
+        await call.answer(f"Новый победитель: {winner['full_name']}", show_alert=True)

@@ -177,22 +177,29 @@ def _date_label(date: str) -> str:
 
 
 def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) -> str:
+    """Главное меню VK. Лимит API: max 6 рядов.
+
+    Без «Мои брони» (6 рядов): бронь / купить / форматы / площадки|правила / канал / менеджер.
+    С «Мои брони» (тоже 6 рядов): канал и менеджер в одном ряду — иначе не влезает.
+    """
     kb = VKKeyboardBuilder(inline=True)
     kb.button("Забронировать места", _payload("book"), color="primary")
     kb.button("Купить билет", _payload("buy_ticket"), color="primary")
+    kb.button("Наши форматы шоу", _payload("formats"))
     if show_my_bookings:
         kb.button("Мои брони", _payload("my_bookings"))
-    kb.button("Наши форматы ШОУ", _payload("formats"))
-    kb.button("Наши площадки", _payload("venues"))
-    kb.button("Правила посещения шоу", _payload("rules"))
-    kb.button("Задать вопрос менеджеру", link=settings.manager_link)
+    kb.button("Площадки", _payload("venues"))
+    kb.button("Правила", _payload("rules"))
     kb.button("Канал анонсов", link=settings.community_link)
-    # Как на скрине TG/VK: площадки|правила и менеджер|канал в рядах по 2.
-    # VK: max 6 rows / 10 buttons. Розыгрыш — только по ссылке / слову «розыгрыш».
+    # В паре с каналом длинная подпись снова обрежется — короче только в этом случае.
+    manager_label = "Менеджеру" if show_my_bookings else "Задать вопрос менеджеру"
+    kb.button(manager_label, link=settings.manager_link)
+    # Розыгрыш — только по ссылке / слову «розыгрыш».
     if show_my_bookings:
+        # 1,1,1,1,2,2 — канал|менеджер рядом из‑за лимита 6 рядов
         kb.adjust(1, 1, 1, 1, 2, 2)
     else:
-        kb.adjust(1, 1, 1, 2, 2)
+        kb.adjust(1, 1, 1, 2, 1, 1)
     return kb.as_json()
 
 
@@ -743,10 +750,7 @@ class VKBotApp:
                     f"<b>Количество гостей:</b> {existing[9]} чел.\n\n"
                     "Вы не можете забронировать повторный билет на данное мероприятие"
                 ),
-                keyboard=vk_booking.manage_ticket_keyboard(
-                    int(existing[0]),
-                    self.settings.manager_link,
-                ),
+                keyboard=vk_booking.already_booked_keyboard(int(existing[0])),
             )
             return
 
@@ -859,10 +863,7 @@ class VKBotApp:
                             "⚠️ <b>ВНИМАНИЕ</b>, мы уже внесли Вас в списки гостей.\n"
                             "Вы не можете забронировать повторный билет на данное мероприятие"
                         ),
-                        keyboard=vk_booking.manage_ticket_keyboard(
-                            int(existing[0]),
-                            self.settings.manager_link,
-                        ),
+                        keyboard=vk_booking.already_booked_keyboard(int(existing[0])),
                     )
                 else:
                     await self.client.send_message(
@@ -1117,6 +1118,15 @@ class VKBotApp:
             booking = await self._mb_actionable(peer_id, vk_id, booking_id)
             if not booking:
                 return True
+            from bot.db.crud import get_booking_format
+
+            if (get_booking_format(booking_id) or "").strip().lower() == "rozygrysh":
+                await self._send_text(
+                    peer_id,
+                    "В розыгрыше бронь только на 1 гостя — изменить количество нельзя.",
+                    replace_nav=False,
+                )
+                return True
             date_label = f"{format_date(booking[5])} {booking[6]}"
             await self._send_text(
                 peer_id,
@@ -1132,6 +1142,15 @@ class VKBotApp:
             booking_id = int(payload.get("booking_id") or 0)
             booking = await self._mb_actionable(peer_id, vk_id, booking_id)
             if not booking:
+                return True
+            from bot.db.crud import get_booking_format
+
+            if (get_booking_format(booking_id) or "").strip().lower() == "rozygrysh":
+                await self._send_text(
+                    peer_id,
+                    "В розыгрыше бронь только на 1 гостя — изменить количество нельзя.",
+                    replace_nav=False,
+                )
                 return True
             vk_booking.clear_session(self.booking_sessions, vk_id)
             self.manage_sessions[vk_id] = {
@@ -1429,6 +1448,9 @@ class VKBotApp:
             return
         if utype == "group_join":
             await self._handle_group_join(update)
+            return
+        if utype == "group_leave":
+            await self._handle_group_leave(update)
             return
         if utype != "message_new":
             return
@@ -1936,6 +1958,36 @@ class VKBotApp:
             return
         logger.info("Offline gift group_join vk_id=%s event_id=%s", vk_id, event_id)
         await self._complete_offline_gift_entry(vk_id, vk_id, event_id)
+
+    async def _handle_group_leave(self, update: dict[str, Any]) -> None:
+        """Отписка до конца розыгрыша — выбывает из чек-листа."""
+        from bot.db.crud import remove_offline_gift_entries_for_vk
+
+        obj = update.get("object") or {}
+        if not isinstance(obj, dict):
+            return
+        try:
+            vk_id = int(obj.get("user_id") or 0)
+        except (TypeError, ValueError):
+            return
+        if not vk_id:
+            return
+        deleted = remove_offline_gift_entries_for_vk(vk_id)
+        if not deleted:
+            return
+        logger.info("Offline gift group_leave vk_id=%s removed_entries=%s", vk_id, deleted)
+        await self._delete_offline_gift_card(vk_id)
+        try:
+            await self._send_text(
+                vk_id,
+                (
+                    "🎁 Ты выбыл из розыгрыша подарка — подписка на сообщество снята.\n\n"
+                    "Если снова подпишешься и нажмёшь «Участвовать», вернёшься в список."
+                ),
+                replace_nav=False,
+            )
+        except Exception:
+            logger.exception("Failed to notify offline gift leave vk_id=%s", vk_id)
 
     async def _delete_offline_gift_card(self, peer_id: int) -> None:
         peer = int(peer_id)

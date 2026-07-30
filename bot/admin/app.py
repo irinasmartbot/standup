@@ -1419,6 +1419,16 @@ def _user_activity_html(activity_counts: list[dict], recent: list[dict] | None =
     return counts_html + recent_html
 
 
+def _looks_like_telegram_file_id(value: str) -> bool:
+    """TG file_id vs VK ref / url, stored historically in photo_file_id."""
+    v = (value or "").strip()
+    if not v or len(v) < 16:
+        return False
+    if v.startswith(("vk_", "http://", "https://", "photo")):
+        return False
+    return True
+
+
 def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
     used = bool(flags.get("rozygrysh_used"))
     used_html = (
@@ -1457,11 +1467,27 @@ def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
                 f'<p class="screen-card-reject"><b>Причина отклонения:</b> {_h(reason)}</p>'
             )
         file_html = ""
-        if row.get("photo_file_id"):
-            file_html = (
+        sid = row.get("id")
+        file_id = (row.get("photo_file_id") or "").strip()
+        if sid and file_id:
+            preview_url = f"/admin/raffle-screen/{int(sid)}"
+            if _looks_like_telegram_file_id(file_id):
+                file_html = (
+                    f'<div class="screen-preview">'
+                    f'<a class="pill" href="{_h(preview_url)}" target="_blank" rel="noopener">Показать скрин</a>'
+                    f'<img src="{_h(preview_url)}" alt="Скрин заявки #{_h(str(sid))}" loading="lazy" />'
+                    f"</div>"
+                )
+            else:
+                file_html = (
+                    '<p class="muted screen-preview-note">'
+                    "Превью недоступно для этой заявки — смотрите скрин в чате модерации."
+                    "</p>"
+                )
+            file_html += (
                 '<details class="screen-file-id">'
                 "<summary>file_id</summary>"
-                f"<code>{_h(row.get('photo_file_id'))}</code>"
+                f"<code>{_h(file_id)}</code>"
                 "</details>"
             )
         cards.append(
@@ -2726,6 +2752,13 @@ def render_admin_html(
       margin:8px 0 0; padding:8px 10px; border-radius:10px;
       background:#fef2f2; color:#b91c1c; font-size:12px; line-height:1.4;
     }}
+    .screen-preview {{ margin-top:8px; display:grid; gap:6px; }}
+    .screen-preview img {{
+      max-width:100%; max-height:220px; width:auto; height:auto;
+      border-radius:8px; border:1px solid var(--line); object-fit:contain;
+      background:#0f172a08;
+    }}
+    .screen-preview-note {{ margin:8px 0 0; font-size:12px; }}
     .screen-file-id {{ margin-top:6px; font-size:11px; }}
     .screen-file-id summary {{ cursor:pointer; color:var(--muted); list-style:none; }}
     .screen-file-id summary::-webkit-details-marker {{ display:none; }}
@@ -3562,6 +3595,72 @@ async def events_restore_page(request: web.Request) -> web.Response:
     raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}&saved=1")
 
 
+async def raffle_screen_page(request: web.Request) -> web.Response:
+    """Проксирует скрин заявки из Telegram по file_id — без сохранения на диск сервера."""
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        raise web.HTTPFound("/admin")
+    if not _can_view_ops(request, config):
+        raise web.HTTPForbidden(text="Недостаточно прав")
+
+    try:
+        submission_id = int(request.match_info["submission_id"])
+    except (TypeError, ValueError, KeyError):
+        raise web.HTTPBadRequest(text="Некорректный id заявки") from None
+
+    from bot.db.crud import get_raffle_submission
+
+    row = await asyncio.get_running_loop().run_in_executor(
+        None, get_raffle_submission, submission_id
+    )
+    if not row:
+        raise web.HTTPNotFound(text="Заявка не найдена")
+
+    # id, telegram_id, username, full_name, kind, status, photo_file_id, ...
+    file_id = (row[6] or "").strip() if len(row) > 6 else ""
+    if not _looks_like_telegram_file_id(file_id):
+        raise web.HTTPNotFound(
+            text=(
+                "Превью недоступно: в заявке нет Telegram file_id. "
+                "Для старых VK-заявок откройте скрин в чате модерации."
+            )
+        )
+
+    token = (os.getenv("BOT_TOKEN") or "").strip()
+    if not token:
+        raise web.HTTPServiceUnavailable(text="BOT_TOKEN не задан на сервере админки")
+
+    from aiogram import Bot
+
+    bot = Bot(token=token)
+    try:
+        tg_file = await bot.get_file(file_id)
+        if not tg_file or not tg_file.file_path:
+            raise web.HTTPNotFound(text="Файл не найден в Telegram")
+        buf = await bot.download_file(tg_file.file_path)
+        data = buf.read() if hasattr(buf, "read") else bytes(buf or b"")
+        if not data:
+            raise web.HTTPNotFound(text="Пустой файл")
+        path = (tg_file.file_path or "").lower()
+        if path.endswith(".png"):
+            ctype = "image/png"
+        elif path.endswith(".webp"):
+            ctype = "image/webp"
+        else:
+            ctype = "image/jpeg"
+        return web.Response(
+            body=data,
+            content_type=ctype,
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+    except web.HTTPException:
+        raise
+    except Exception:
+        raise web.HTTPNotFound(text="Не удалось загрузить скрин из Telegram") from None
+    finally:
+        await bot.session.close()
+
+
 async def login_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     data = await request.post()
@@ -3631,6 +3730,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app["config"] = config or load_config()
     app.router.add_get("/", index_page)
     app.router.add_get("/admin", admin_page)
+    app.router.add_get("/admin/raffle-screen/{submission_id}", raffle_screen_page)
     app.router.add_get("/admin/events/hide-preview", events_hide_preview_page)
     app.router.add_post("/admin/events/save", events_save_page)
     app.router.add_post("/admin/events/restore", events_restore_page)

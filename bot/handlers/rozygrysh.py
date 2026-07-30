@@ -760,7 +760,20 @@ async def _send_to_moderation(
             reply_markup=kb.as_markup(),
             parse_mode="HTML",
         )
-        save_raffle_moderation_message(submission_id, chat_id, sent.message_id)
+        # Сохраняем TG file_id с карточки модерации — по нему админка может показать превью
+        # (в т.ч. для VK-заявок, где в БД сначала лежал vk-ref, а не file_id бота).
+        tg_file_id = None
+        if getattr(sent, "photo", None):
+            try:
+                tg_file_id = sent.photo[-1].file_id
+            except (IndexError, TypeError, AttributeError):
+                tg_file_id = None
+        save_raffle_moderation_message(
+            submission_id,
+            chat_id,
+            sent.message_id,
+            photo_file_id=tg_file_id,
+        )
         return True
     except Exception:
         logger.exception("Failed to send screenshot to moderation chat %s", chat_id)
