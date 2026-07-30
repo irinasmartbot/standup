@@ -1441,6 +1441,67 @@ def ensure_offline_gift_tables():
                 WHERE is_winner
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vk_offline_gift_pending (
+                    vk_id BIGINT PRIMARY KEY,
+                    event_id BIGINT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+        conn.commit()
+
+
+def set_offline_gift_pending(*, vk_id: int, event_id: int) -> None:
+    if not _use_postgres():
+        return
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vk_offline_gift_pending (vk_id, event_id, created_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (vk_id) DO UPDATE
+                SET event_id = EXCLUDED.event_id,
+                    created_at = now()
+                """,
+                (int(vk_id), int(event_id)),
+            )
+        conn.commit()
+
+
+def pop_offline_gift_pending(vk_id: int) -> int | None:
+    """Returns pending event_id and clears the row, or None."""
+    if not _use_postgres():
+        return None
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM vk_offline_gift_pending
+                WHERE vk_id = %s
+                RETURNING event_id
+                """,
+                (int(vk_id),),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return int(row[0]) if row else None
+
+
+def clear_offline_gift_pending(vk_id: int) -> None:
+    if not _use_postgres():
+        return
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM vk_offline_gift_pending WHERE vk_id = %s",
+                (int(vk_id),),
+            )
         conn.commit()
 
 

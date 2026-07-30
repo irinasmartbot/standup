@@ -37,20 +37,18 @@ def _event_label(event: dict) -> str:
     )
 
 
-def _dates_keyboard(dates: list[dict]) -> str:
+def _dates_keyboard(dates: list[dict]):
     kb = InlineKeyboardBuilder()
     for item in dates[:14]:
         label = f"{item['date']}"
-        if item.get("weekday"):
-            label += f" ({item['weekday']})"
         if int(item.get("events_count") or 0) > 1:
             label += f" · {item['events_count']} шоу"
         kb.button(text=label, callback_data=f"og_date:{item['date']}")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
-def _events_keyboard(events: list[dict]) -> str:
+def _events_keyboard(events: list[dict]):
     kb = InlineKeyboardBuilder()
     for event in events[:20]:
         count = int(event.get("entries_count") or 0)
@@ -59,27 +57,36 @@ def _events_keyboard(events: list[dict]) -> str:
             callback_data=f"og_event:{event['id']}",
         )
     kb.button(text="⬅️ К датам", callback_data="og_dates")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 
-def _event_keyboard(event_id: int, *, has_winner: bool = False) -> str:
+def _event_keyboard(
+    event_id: int,
+    *,
+    has_winner: bool = False,
+    show_back_to_shows: bool = True,
+):
     kb = InlineKeyboardBuilder()
     kb.button(text="🎁 Выбрать победителя", callback_data=f"og_draw:{event_id}")
     if has_winner:
         kb.button(text="🔁 Перевыбрать", callback_data=f"og_redraw:{event_id}")
-    kb.button(text="⬅️ К шоу", callback_data=f"og_back_event:{event_id}")
+    if show_back_to_shows:
+        kb.button(text="⬅️ К шоу", callback_data=f"og_back_event:{event_id}")
     kb.button(text="⬅️ К датам", callback_data="og_dates")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
+
+
+def _date_has_multiple_shows(event_date: str) -> bool:
+    return len(get_offline_gift_events_for_date(event_date)) > 1
 
 
 def _entries_text(event: dict, entries: list[dict]) -> str:
     lines = [
         "🎁 <b>VK чек-лист участников</b>",
         "",
-        f"<b>Дата:</b> {escape(event.get('date') or '')}"
-        + (f" ({escape(event.get('weekday') or '')})" if event.get("weekday") else ""),
+        f"<b>Дата:</b> {escape(event.get('date') or '')}",
         f"<b>Шоу:</b> {escape(_event_label(event))}",
         "",
         f"<b>Участников:</b> {len(entries)}",
@@ -115,8 +122,17 @@ async def _send_events_for_date(message_or_call, event_date: str):
     events = get_offline_gift_events_for_date(event_date)
     target = message_or_call.message if isinstance(message_or_call, CallbackQuery) else message_or_call
     if not events:
-        await target.answer("На эту дату нет активных шоу.")
+        text = "На эту дату нет активных шоу."
+        if isinstance(message_or_call, CallbackQuery):
+            await target.edit_text(text)
+        else:
+            await target.answer(text)
         return
+
+    if len(events) == 1 and isinstance(message_or_call, CallbackQuery):
+        await _send_event_entries(message_or_call, int(events[0]["id"]))
+        return
+
     text = f"Выберите шоу на <b>{escape(event_date)}</b>:"
     if isinstance(message_or_call, CallbackQuery):
         await target.edit_text(text, reply_markup=_events_keyboard(events), parse_mode="HTML")
@@ -130,9 +146,14 @@ async def _send_event_entries(call: CallbackQuery, event_id: int):
         await call.answer("Шоу не найдено", show_alert=True)
         return
     entries = get_offline_gift_entries(event_id)
+    show_back_to_shows = _date_has_multiple_shows(event.get("date") or "")
     await call.message.edit_text(
         _entries_text(event, entries),
-        reply_markup=_event_keyboard(event_id, has_winner=bool(event.get("winner_name"))),
+        reply_markup=_event_keyboard(
+            event_id,
+            has_winner=bool(event.get("winner_name")),
+            show_back_to_shows=show_back_to_shows,
+        ),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
