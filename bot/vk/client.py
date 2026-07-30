@@ -183,7 +183,7 @@ class VKClient:
         await self.api("messages.sendMessageEventAnswer", **params)
 
     async def ensure_long_poll_events(self) -> None:
-        """Включает message_new + message_event для Bots Long Poll."""
+        """Включает message_new + message_event + group_join для Bots Long Poll."""
         if not self.settings.group_id:
             return
         try:
@@ -195,6 +195,7 @@ class VKClient:
                 message_new=1,
                 message_event=1,
                 message_reply=0,
+                group_join=1,
             )
         except VKAPIError:
             logger.exception("Failed to set VK long poll event types")

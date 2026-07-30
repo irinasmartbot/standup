@@ -150,6 +150,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_vk_offline_gift_winner
     ON vk_offline_gift_entries (event_id)
     WHERE is_winner;
 
+-- Pending join for offline gift: wait for group_join then auto-add
+CREATE TABLE IF NOT EXISTS vk_offline_gift_pending (
+    vk_id BIGINT PRIMARY KEY,
+    event_id BIGINT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 
 -- Product analytics (funnel / admin dashboard)
 CREATE TABLE IF NOT EXISTS analytics_events (
