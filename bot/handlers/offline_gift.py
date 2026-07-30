@@ -57,7 +57,7 @@ def _events_keyboard(events: list[dict]):
             callback_data=f"og_event:{event['id']}",
         )
     kb.button(text="⬅️ К датам", callback_data="og_dates")
-    kb.adjust(2)
+    kb.adjust(1)
     return kb.as_markup()
 
 
@@ -74,7 +74,7 @@ def _event_keyboard(
     if show_back_to_shows:
         kb.button(text="⬅️ К шоу", callback_data=f"og_back_event:{event_id}")
     kb.button(text="⬅️ К датам", callback_data="og_dates")
-    kb.adjust(2)
+    kb.adjust(1)
     return kb.as_markup()
 
 
