@@ -1717,12 +1717,33 @@ def get_offline_gift_entries(event_id: int) -> list[dict]:
             ]
 
 
+def remove_offline_gift_entries_for_vk(vk_id: int) -> int:
+    """Убрать участника из всех чек-листов (отписка от сообщества)."""
+    if not _use_postgres():
+        return 0
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM vk_offline_gift_entries WHERE vk_id = %s",
+                (int(vk_id),),
+            )
+            deleted = cur.rowcount or 0
+            cur.execute(
+                "DELETE FROM vk_offline_gift_pending WHERE vk_id = %s",
+                (int(vk_id),),
+            )
+        conn.commit()
+    return int(deleted)
+
+
 def draw_offline_gift_winner(event_id: int, *, redraw: bool = False) -> dict | None:
     if not _use_postgres():
         return None
     ensure_offline_gift_tables()
     with _pg_connect() as conn:
         with conn.cursor() as cur:
+            prev_winner_id = None
             if not redraw:
                 cur.execute(
                     """
@@ -1742,21 +1763,60 @@ def draw_offline_gift_winner(event_id: int, *, redraw: bool = False) -> dict | N
                         "is_winner": bool(existing[3]),
                         "already_had_winner": True,
                     }
+            else:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM vk_offline_gift_entries
+                    WHERE event_id = %s AND is_winner = true
+                    LIMIT 1
+                    """,
+                    (int(event_id),),
+                )
+                prev = cur.fetchone()
+                if prev:
+                    prev_winner_id = int(prev[0])
             cur.execute(
                 "UPDATE vk_offline_gift_entries SET is_winner = false WHERE event_id = %s",
                 (int(event_id),),
             )
-            cur.execute(
-                """
-                SELECT id
-                FROM vk_offline_gift_entries
-                WHERE event_id = %s
-                ORDER BY random()
-                LIMIT 1
-                """,
-                (int(event_id),),
-            )
-            picked = cur.fetchone()
+            # Перевыбор: если участников > 1, стараемся взять другого
+            if redraw and prev_winner_id is not None:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM vk_offline_gift_entries
+                    WHERE event_id = %s AND id <> %s
+                    ORDER BY random()
+                    LIMIT 1
+                    """,
+                    (int(event_id), prev_winner_id),
+                )
+                picked = cur.fetchone()
+                if not picked:
+                    cur.execute(
+                        """
+                        SELECT id
+                        FROM vk_offline_gift_entries
+                        WHERE event_id = %s
+                        ORDER BY random()
+                        LIMIT 1
+                        """,
+                        (int(event_id),),
+                    )
+                    picked = cur.fetchone()
+            else:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM vk_offline_gift_entries
+                    WHERE event_id = %s
+                    ORDER BY random()
+                    LIMIT 1
+                    """,
+                    (int(event_id),),
+                )
+                picked = cur.fetchone()
             if not picked:
                 conn.commit()
                 return None
@@ -1780,19 +1840,37 @@ def draw_offline_gift_winner(event_id: int, *, redraw: bool = False) -> dict | N
     }
 
 
-def save_raffle_moderation_message(submission_id, chat_id, message_id):
+def save_raffle_moderation_message(
+    submission_id,
+    chat_id,
+    message_id,
+    *,
+    photo_file_id: str | None = None,
+):
     if not _use_postgres():
         return
     with _pg_connect() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE raffle_submissions
-                SET moderation_chat_id = %s, moderation_message_id = %s
-                WHERE id = %s
-                """,
-                (chat_id, message_id, submission_id),
-            )
+            if photo_file_id:
+                cur.execute(
+                    """
+                    UPDATE raffle_submissions
+                    SET moderation_chat_id = %s,
+                        moderation_message_id = %s,
+                        photo_file_id = %s
+                    WHERE id = %s
+                    """,
+                    (chat_id, message_id, photo_file_id, submission_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE raffle_submissions
+                    SET moderation_chat_id = %s, moderation_message_id = %s
+                    WHERE id = %s
+                    """,
+                    (chat_id, message_id, submission_id),
+                )
         conn.commit()
 
 

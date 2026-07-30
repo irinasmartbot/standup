@@ -578,7 +578,7 @@ async def start_booking(call: CallbackQuery, state: FSMContext):
         kb = InlineKeyboardBuilder()
         kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{existing[0]}")
         kb.button(text="Изменить дату", callback_data=f"change_date_{existing[0]}")
-        kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+        kb.button(text="Выбрать другую", callback_data="check_dates")
         kb.adjust(1)
         await call.message.answer(
             f"⚠️ ВНИМАНИЕ, мы уже внесли Вас в списки гостей:\n\n"

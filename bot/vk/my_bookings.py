@@ -220,6 +220,10 @@ async def delete_ticket_message(client, peer_id: int, booking_id: int) -> None:
 
 
 async def apply_new_guests(*, booking_id: int, guests: int) -> tuple[bool, str]:
+    from bot.db.crud import get_booking_format
+
+    if (get_booking_format(booking_id) or "").strip().lower() == "rozygrysh":
+        return False, "В розыгрыше бронь только на 1 гостя — изменить количество нельзя."
     booking = get_active_booking_by_id(booking_id)
     if not booking:
         return False, "Бронь не найдена."
