@@ -396,6 +396,7 @@ class VKBotApp:
         self.peer_my_bookings_message_ids: dict[int, int] = {}
         self.peer_dates_message_ids: dict[int, int] = {}
         self.peer_venues_message_ids: dict[int, int] = {}
+        self.peer_offline_gift_message_ids: dict[int, int] = {}
         # cmid кнопки из текущего message_event — переживает рестарт бота.
         self._peer_event_cmid: dict[int, int] = {}
         self._seen_event_ids: dict[str, float] = {}
@@ -1873,6 +1874,7 @@ class VKBotApp:
     async def _send_offline_gift_events(self, peer_id: int) -> None:
         from bot.db.crud import get_offline_gift_today_events
 
+        await self._delete_offline_gift_card(peer_id)
         events = get_offline_gift_today_events()
         if not events:
             await self._send_text(
@@ -1935,6 +1937,20 @@ class VKBotApp:
         logger.info("Offline gift group_join vk_id=%s event_id=%s", vk_id, event_id)
         await self._complete_offline_gift_entry(vk_id, vk_id, event_id)
 
+    async def _delete_offline_gift_card(self, peer_id: int) -> None:
+        peer = int(peer_id)
+        prev = self.peer_offline_gift_message_ids.pop(peer, None)
+        if not prev:
+            return
+        try:
+            await self.client.delete_messages(peer, [int(prev)])
+        except Exception:
+            logger.exception(
+                "Failed to delete offline gift card peer_id=%s msg_id=%s",
+                peer,
+                prev,
+            )
+
     async def _send_offline_gift_pending_hint(
         self,
         peer_id: int,
@@ -1967,12 +1983,15 @@ class VKBotApp:
                 "Выполни задание ведущего — и будешь в списке.\n\n"
                 f"<b>Шоу:</b> {html.escape(_gift_event_label(event))}"
             )
-        await self._send_text(
+        await self._delete_offline_gift_card(peer_id)
+        mid = await self._send_text(
             peer_id,
             text,
             keyboard=kb.as_json(),
             replace_nav=False,
         )
+        if mid:
+            self.peer_offline_gift_message_ids[int(peer_id)] = int(mid)
 
     async def _complete_offline_gift_entry(
         self, peer_id: int, vk_id: int, event_id: int
@@ -1985,6 +2004,7 @@ class VKBotApp:
 
         event = get_offline_gift_event(int(event_id))
         if not event:
+            await self._delete_offline_gift_card(peer_id)
             await self._send_text(
                 peer_id,
                 "Шоу не найдено или уже недоступно. Выбери актуальное шоу 👇",
@@ -2004,6 +2024,7 @@ class VKBotApp:
             full_name=full_name,
         )
         clear_offline_gift_pending(int(vk_id))
+        await self._delete_offline_gift_card(peer_id)
         if not result:
             await self._send_text(peer_id, "Не удалось добавить в список. Покажи это администратору.")
             return
@@ -2013,7 +2034,7 @@ class VKBotApp:
             if result.get("inserted")
             else "Ты уже есть в списке участников ✅"
         )
-        await self._send_text(
+        mid = await self._send_text(
             peer_id,
             (
                 f"🎁 <b>{status}</b>\n\n"
@@ -2024,6 +2045,8 @@ class VKBotApp:
             ),
             replace_nav=False,
         )
+        if mid:
+            self.peer_offline_gift_message_ids[int(peer_id)] = int(mid)
 
     async def _join_offline_gift_event(
         self,
