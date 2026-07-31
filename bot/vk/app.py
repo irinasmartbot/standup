@@ -18,6 +18,8 @@ from bot.db.analytics import (
     EVENT_BROWSE_DATES,
     EVENT_BROWSE_VENUES,
     EVENT_CMD_BUY_TICKET,
+    EVENT_CMD_CHANNEL,
+    EVENT_CMD_HELP,
     EVENT_CMD_MAIN_MENU,
     EVENT_CMD_MY_BOOKINGS,
     EVENT_HELP_QUESTION,
@@ -190,10 +192,11 @@ def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) 
         kb.button("Мои брони", _payload("my_bookings"))
     kb.button("Площадки", _payload("venues"))
     kb.button("Правила", _payload("rules"))
-    kb.button("Канал анонсов", link=settings.community_link)
+    # Callback + open_link в event answer — иначе клик по open_link бот не видит и аналитика пустая.
+    kb.button("Канал анонсов", _payload("channel"))
     # В паре с каналом длинная подпись снова обрежется — короче только в этом случае.
     manager_label = "Менеджеру" if show_my_bookings else "Задать вопрос менеджеру"
-    kb.button(manager_label, link=settings.manager_link)
+    kb.button(manager_label, _payload("manager"))
     # Розыгрыш — только по ссылке / слову «розыгрыш».
     if show_my_bookings:
         # 1,1,1,1,2,2 — канал|менеджер рядом из‑за лимита 6 рядов
@@ -1539,17 +1542,42 @@ class VKBotApp:
         if not peer_id or not event_id:
             return
 
+        raw_payload = obj.get("payload")
+        if isinstance(raw_payload, dict):
+            payload = raw_payload
+        else:
+            payload = _parse_payload(raw_payload if isinstance(raw_payload, str) else None)
+
+        # Канал / менеджер: трек в аналитику и сразу открыть ссылку (без лишнего сообщения).
+        link_cmd = str(payload.get("cmd") or "").strip()
+        if link_cmd in {"channel", "manager"}:
+            if link_cmd == "channel":
+                link = (self.settings.community_link or "").strip()
+                self._track(user_id, EVENT_CMD_CHANNEL, props={"via": "menu"})
+            else:
+                link = (self.settings.manager_link or "").strip()
+                self._track(user_id, EVENT_CMD_HELP, props={"via": "menu_manager"})
+            event_data = None
+            if link:
+                event_data = {"type": "open_link", "link": link}
+            try:
+                await self.client.send_message_event_answer(
+                    event_id, user_id, peer_id, event_data=event_data
+                )
+            except Exception:
+                logger.exception(
+                    "sendMessageEventAnswer open_link failed peer_id=%s cmd=%s",
+                    peer_id,
+                    link_cmd,
+                )
+            return
+
         # Always answer quickly so VK stops the loading animation on the button.
         try:
             await self.client.send_message_event_answer(event_id, user_id, peer_id)
         except Exception:
             logger.exception("sendMessageEventAnswer failed peer_id=%s", peer_id)
 
-        raw_payload = obj.get("payload")
-        if isinstance(raw_payload, dict):
-            payload = raw_payload
-        else:
-            payload = _parse_payload(raw_payload if isinstance(raw_payload, str) else None)
         try:
             cmid = int(obj.get("conversation_message_id") or 0) or None
         except (TypeError, ValueError):
