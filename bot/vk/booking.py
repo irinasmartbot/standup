@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -20,6 +21,7 @@ from bot.utils.phone import normalize_phone
 from bot.utils.ticket import format_date, generate_ticket, guests_word, now_msk
 from bot.vk.keyboards import VKKeyboardBuilder
 
+logger = logging.getLogger(__name__)
 
 STEP_NAME = "waiting_name"
 STEP_PHONE = "waiting_phone"
@@ -104,6 +106,19 @@ def booking_cancel_keyboard() -> str:
     return kb.as_json()
 
 
+def _adjust_within_vk_rows(kb: VKKeyboardBuilder, *, pair_last_links: bool) -> None:
+    """VK inline: max 6 rows. If 7+ buttons, pair link buttons on one row."""
+    n = kb.total_buttons
+    if n <= 6:
+        kb.adjust(1)
+        return
+    if pair_last_links and n >= 3:
+        # …singles, [link|link], menu
+        kb.adjust(*([1] * (n - 3) + [2, 1]))
+        return
+    kb.adjust(*([1] * (n - 2) + [2]))
+
+
 def after_booking_keyboard(
     booking_id: int,
     *,
@@ -125,12 +140,18 @@ def after_booking_keyboard(
         "Изменить количество гостей",
         _payload("mb_change_guests_confirm", booking_id=booking_id),
     )
-    if (manager_link or "").strip():
-        kb.button("💬 Задать вопрос менеджеру", link=manager_link.strip())
-    if (community_link or "").strip():
-        kb.button("📢 Заглянуть в наше сообщество", link=community_link.strip())
+    has_manager = bool((manager_link or "").strip())
+    has_community = bool((community_link or "").strip())
+    # Короче в паре — иначе подписи обрежутся в одном ряду.
+    pair_links = has_manager and has_community
+    if has_manager:
+        label = "💬 Менеджеру" if pair_links else "💬 Задать вопрос менеджеру"
+        kb.button(label, link=manager_link.strip())
+    if has_community:
+        label = "📢 Сообщество" if pair_links else "📢 Заглянуть в наше сообщество"
+        kb.button(label, link=community_link.strip())
     kb.button("В главное меню", _payload("main_menu"))
-    kb.adjust(1)
+    _adjust_within_vk_rows(kb, pair_last_links=pair_links)
     return kb.as_json()
 
 
@@ -151,12 +172,17 @@ def after_raffle_booking_keyboard(
         )
     kb.button("Что, если я хочу прийти не один?", _payload("rz_not_alone"))
     kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
-    if (manager_link or "").strip():
-        kb.button("Задать вопрос менеджеру", link=manager_link.strip())
-    if (community_link or "").strip():
-        kb.button("Заглянуть в наше сообщество", link=community_link.strip())
+    has_manager = bool((manager_link or "").strip())
+    has_community = bool((community_link or "").strip())
+    pair_links = has_manager and has_community
+    if has_manager:
+        label = "Менеджеру" if pair_links else "Задать вопрос менеджеру"
+        kb.button(label, link=manager_link.strip())
+    if has_community:
+        label = "Сообщество" if pair_links else "Заглянуть в наше сообщество"
+        kb.button(label, link=community_link.strip())
     kb.button("В главное меню", _payload("main_menu"))
-    kb.adjust(1)
+    _adjust_within_vk_rows(kb, pair_last_links=pair_links)
     return kb.as_json()
 
 
@@ -370,11 +396,29 @@ async def complete_booking(
             community_link=community_link,
         )
 
-    await client.send_message(
-        peer_id,
-        text,
-        keyboard=keyboard,
-    )
+    try:
+        await client.send_message(peer_id, text, keyboard=keyboard)
+    except Exception:
+        # Бронь уже в БД — не роняем весь complete_booking (иначе «не удалось создать»).
+        logger.exception(
+            "VK after-booking message failed booking_id=%s peer_id=%s",
+            booking_id,
+            peer_id,
+        )
+        fallback = VKKeyboardBuilder(inline=True)
+        if offer_ticket:
+            fallback.button(
+                "🎟 Получить билет",
+                _payload("booking_get_ticket", booking_id=booking_id),
+                color="positive",
+            )
+        fallback.button("В главное меню", _payload("main_menu"))
+        fallback.adjust(1)
+        await client.send_message(
+            peer_id,
+            text,
+            keyboard=fallback.as_json(),
+        )
     return booking_id
 
 
