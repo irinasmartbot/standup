@@ -257,26 +257,42 @@ async def _resend_ticket_vk(row: dict, *, updated: bool, extra_note: str = "") -
     return {"ok": True, "error": "", "booking_id": booking_id}
 
 
+def _booking_audit_item(row: dict | None, booking_id: int | None = None) -> dict:
+    row = row or {}
+    return {
+        "booking_id": row.get("booking_id") or booking_id,
+        "name": (row.get("name") or "").strip(),
+        "date": row.get("event_date") or "",
+        "time": row.get("event_time") or "",
+        "location": (row.get("location") or "").strip(),
+        "event_id": row.get("event_id"),
+    }
+
+
 async def resend_ticket_async(
     booking_id: int, *, updated: bool = True, extra_note: str = ""
 ) -> dict:
-    """Send ticket photo to the guest (Telegram or VK). Returns {ok, error, booking_id}."""
+    """Send ticket photo to the guest (Telegram or VK). Returns {ok, error, booking_id, ...}."""
     row = get_booking_for_ticket_resend(booking_id)
+    meta = _booking_audit_item(row, booking_id)
     if not row:
-        return {"ok": False, "error": "бронь не найдена", "booking_id": booking_id}
+        return {"ok": False, "error": "бронь не найдена", **meta}
     if row.get("status") != "confirmed":
         return {
             "ok": False,
             "error": f"статус «{row.get('status')}», нужен confirmed",
-            "booking_id": booking_id,
+            **meta,
         }
     try:
         if _is_vk_booking(row):
-            return await _resend_ticket_vk(row, updated=updated, extra_note=extra_note)
-        return await _resend_ticket_telegram(row, updated=updated, extra_note=extra_note)
+            result = await _resend_ticket_vk(row, updated=updated, extra_note=extra_note)
+        else:
+            result = await _resend_ticket_telegram(row, updated=updated, extra_note=extra_note)
+        result.update(meta)
+        return result
     except Exception as exc:
         logger.exception("resend_ticket failed for booking %s", booking_id)
-        return {"ok": False, "error": str(exc), "booking_id": booking_id}
+        return {"ok": False, "error": str(exc), **meta}
 
 
 def resend_ticket(booking_id: int, *, updated: bool = True, extra_note: str = "") -> dict:
@@ -287,11 +303,14 @@ async def resend_tickets_for_event_async(
     event_id: int, *, updated: bool = True, extra_note: str = ""
 ) -> dict:
     holders = list_event_ticket_holders(event_id)
-    result = {"ok": 0, "fail": 0, "errors": [], "total": len(holders)}
+    result = {"ok": 0, "fail": 0, "errors": [], "total": len(holders), "items": []}
     for row in holders:
         one = await resend_ticket_async(
             int(row["booking_id"]), updated=updated, extra_note=extra_note
         )
+        item = _booking_audit_item(one, one.get("booking_id"))
+        item["ok"] = bool(one.get("ok"))
+        result["items"].append(item)
         if one.get("ok"):
             result["ok"] += 1
         else:
@@ -300,6 +319,14 @@ async def resend_tickets_for_event_async(
                 f"#{one.get('booking_id')}: {one.get('error') or 'ошибка'}"
             )
         await asyncio.sleep(0.05)
+    if holders:
+        first = holders[0]
+        result["event"] = {
+            "id": event_id,
+            "date": first.get("event_date") or "",
+            "time": first.get("event_time") or "",
+            "location": (first.get("location") or "").strip(),
+        }
     return result
 
 

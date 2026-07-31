@@ -140,13 +140,51 @@ def _serialize_event(row: dict) -> dict:
     }
 
 
+def _audit_event_item(
+    event_id,
+    event_date=None,
+    event_time=None,
+    location: str = "",
+) -> dict:
+    date_s = (
+        event_date.strftime("%d.%m.%Y")
+        if hasattr(event_date, "strftime")
+        else str(event_date or "")
+    )
+    time_s = (
+        event_time.strftime("%H:%M")
+        if hasattr(event_time, "strftime")
+        else str(event_time or "")[:5]
+    )
+    try:
+        eid = int(event_id) if event_id is not None else None
+    except (TypeError, ValueError):
+        eid = None
+    return {
+        "id": eid,
+        "date": date_s,
+        "time": time_s,
+        "location": (location or "").strip(),
+    }
+
+
 def save_events_batch(event_format: str, rows: list[dict[str, Any]]) -> dict:
     """
     Upsert/update/hide events from admin form rows.
     Each row may have id (int|None), date, time, location, address, ...
     Empty required fields → skip. delete=True → status hidden.
     """
-    result = {"saved": 0, "hidden": 0, "deleted": 0, "errors": [], "hidden_ids": [], "deleted_ids": []}
+    result = {
+        "saved": 0,
+        "hidden": 0,
+        "deleted": 0,
+        "errors": [],
+        "hidden_ids": [],
+        "deleted_ids": [],
+        "saved_items": [],
+        "hidden_items": [],
+        "deleted_items": [],
+    }
     if not _use_postgres():
         result["errors"].append("Мероприятия правятся только в PostgreSQL.")
         return result
@@ -188,15 +226,45 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
             )
             return
         cur.execute(
+            """
+            SELECT event_date, event_time, location
+            FROM events
+            WHERE id = %s AND format = %s
+            """,
+            (event_id, event_format),
+        )
+        meta = cur.fetchone()
+        cur.execute(
             "DELETE FROM events WHERE id = %s AND format = %s",
             (event_id, event_format),
         )
         if cur.rowcount:
             result["deleted"] += 1
             result.setdefault("deleted_ids", []).append(int(event_id))
+            if meta:
+                result.setdefault("deleted_items", []).append(
+                    _audit_event_item(event_id, meta[0], meta[1], meta[2] or "")
+                )
         return
     if delete:
         if event_id:
+            form_date = parse_admin_date(str(raw.get("date") or ""))
+            form_time = parse_admin_time(str(raw.get("time") or ""))
+            form_loc = (raw.get("location") or "").strip()
+            if not form_date or not form_time or not form_loc:
+                cur.execute(
+                    """
+                    SELECT event_date, event_time, location
+                    FROM events
+                    WHERE id = %s AND format = %s
+                    """,
+                    (event_id, event_format),
+                )
+                meta = cur.fetchone()
+                if meta:
+                    form_date = form_date or meta[0]
+                    form_time = form_time or meta[1]
+                    form_loc = form_loc or (meta[2] or "")
             cur.execute(
                 """
                 UPDATE events
@@ -208,6 +276,9 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
             if cur.rowcount:
                 result["hidden"] += 1
                 result.setdefault("hidden_ids", []).append(int(event_id))
+                result.setdefault("hidden_items", []).append(
+                    _audit_event_item(event_id, form_date, form_time, form_loc)
+                )
         return
 
     event_date = parse_admin_date(str(raw.get("date") or ""))
@@ -292,6 +363,9 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
         )
         if cur.rowcount:
             result["saved"] += 1
+            result.setdefault("saved_items", []).append(
+                _audit_event_item(event_id, event_date, event_time, location)
+            )
         else:
             result["errors"].append(f"Мероприятие #{event_id} не найдено")
         return
@@ -318,6 +392,7 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
             status = EXCLUDED.status,
             source_sheet = 'admin',
             updated_at = now()
+        RETURNING id
         """,
         (
             event_format,
@@ -335,12 +410,16 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
             status,
         ),
     )
+    new_id = (cur.fetchone() or [None])[0]
     result["saved"] += 1
+    result.setdefault("saved_items", []).append(
+        _audit_event_item(new_id, event_date, event_time, location)
+    )
 
 
 def restore_events(event_format: str, event_ids: list[int]) -> dict:
     """Bring hidden (or past) events back to afisha."""
-    result = {"restored": 0, "errors": []}
+    result = {"restored": 0, "errors": [], "restored_items": []}
     if not _use_postgres():
         result["errors"].append("Мероприятия правятся только в PostgreSQL.")
         return result
@@ -367,7 +446,7 @@ def restore_events(event_format: str, event_ids: list[int]) -> dict:
                 for event_id in ids:
                     cur.execute(
                         """
-                        SELECT event_date, status
+                        SELECT event_date, event_time, location, status
                         FROM events
                         WHERE id = %s AND format = %s
                         """,
@@ -377,7 +456,7 @@ def restore_events(event_format: str, event_ids: list[int]) -> dict:
                     if not row:
                         result["errors"].append(f"#{event_id} не найдено")
                         continue
-                    event_date, status = row[0], row[1]
+                    event_date, event_time, location, status = row[0], row[1], row[2], row[3]
                     if status not in {"hidden", "past"}:
                         continue
                     new_status = "past" if event_date < today else "active"
@@ -391,6 +470,9 @@ def restore_events(event_format: str, event_ids: list[int]) -> dict:
                     )
                     if cur.rowcount:
                         result["restored"] += 1
+                        result.setdefault("restored_items", []).append(
+                            _audit_event_item(event_id, event_date, event_time, location or "")
+                        )
             conn.commit()
     except Exception as exc:
         logger.exception("restore_events failed")

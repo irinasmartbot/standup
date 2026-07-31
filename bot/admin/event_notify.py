@@ -48,6 +48,7 @@ def list_event_notify_recipients(event_id: int, audience: str) -> list[dict]:
                         u.telegram_id,
                         u.vk_id,
                         u.name,
+                        e.id AS event_id,
                         e.event_date,
                         e.event_time,
                         e.location
@@ -138,6 +139,21 @@ async def _delete_vk_ticket(vk_id: int, ticket_message_id) -> None:
         pass
 
 
+def _recipient_audit_item(row: dict) -> dict:
+    d = row.get("event_date")
+    t = row.get("event_time")
+    date_s = d.strftime("%d.%m.%Y") if hasattr(d, "strftime") else str(d or "")
+    time_s = t.strftime("%H:%M") if hasattr(t, "strftime") else str(t or "")[:5]
+    return {
+        "booking_id": row.get("booking_id"),
+        "name": (row.get("name") or "").strip(),
+        "date": date_s,
+        "time": time_s,
+        "location": (row.get("location") or "").strip(),
+        "event_id": row.get("event_id"),
+    }
+
+
 async def notify_event_guests_async(
     event_ids: list[int],
     message: str,
@@ -145,11 +161,32 @@ async def notify_event_guests_async(
 ) -> dict:
     text = (message or "").strip()
     if not text or not audience or not event_ids:
-        return {"ok": 0, "fail": 0, "skipped": True}
-    result = {"ok": 0, "fail": 0, "errors": [], "skipped": False}
+        return {"ok": 0, "fail": 0, "skipped": True, "items": [], "events": []}
+    result = {
+        "ok": 0,
+        "fail": 0,
+        "errors": [],
+        "skipped": False,
+        "items": [],
+        "events": [],
+        "audience": audience,
+        "message_preview": text[:160],
+    }
     seen: set[tuple[str, int]] = set()
+    seen_events: set[int] = set()
     for eid in event_ids:
         for row in list_event_notify_recipients(int(eid), audience):
+            if int(eid) not in seen_events:
+                seen_events.add(int(eid))
+                item = _recipient_audit_item(row)
+                result["events"].append(
+                    {
+                        "id": int(eid),
+                        "date": item["date"],
+                        "time": item["time"],
+                        "location": item["location"],
+                    }
+                )
             source = (row.get("booking_source") or "").strip().lower()
             tid = row.get("telegram_id")
             vid = row.get("vk_id")
@@ -171,6 +208,7 @@ async def notify_event_guests_async(
                     seen.add(key)
                     await _send_tg(int(tid), text)
                 result["ok"] += 1
+                result["items"].append(_recipient_audit_item(row))
             except Exception as exc:
                 result["fail"] += 1
                 result["errors"].append(f"#{row.get('booking_id')}: {exc}")
@@ -181,16 +219,35 @@ async def notify_event_guests_async(
 async def cancel_event_bookings_async(event_ids: list[int]) -> dict:
     """Cancel booked+confirmed for hidden events: stop reminders, void tickets."""
     if not event_ids:
-        return {"cancelled": 0, "fail": 0, "errors": [], "skipped": True}
+        return {"cancelled": 0, "fail": 0, "errors": [], "skipped": True, "items": [], "events": []}
     from bot.db.crud import get_active_raffle_booking, set_rozygrysh_used, update_booking_status
 
-    result = {"cancelled": 0, "fail": 0, "errors": [], "skipped": False}
+    result = {
+        "cancelled": 0,
+        "fail": 0,
+        "errors": [],
+        "skipped": False,
+        "items": [],
+        "events": [],
+    }
+    seen_events: set[int] = set()
     for eid in event_ids:
         rows = list_event_notify_recipients(int(eid), "both")
         for row in rows:
             booking_id = row.get("booking_id")
             if not booking_id:
                 continue
+            if int(eid) not in seen_events:
+                seen_events.add(int(eid))
+                item = _recipient_audit_item(row)
+                result["events"].append(
+                    {
+                        "id": int(eid),
+                        "date": item["date"],
+                        "time": item["time"],
+                        "location": item["location"],
+                    }
+                )
             source = (row.get("booking_source") or "").strip().lower()
             tid = row.get("telegram_id")
             vid = row.get("vk_id")
@@ -215,6 +272,7 @@ async def cancel_event_bookings_async(event_ids: list[int]) -> dict:
                     except Exception:
                         logger.exception("raffle flag reset failed for booking %s", booking_id)
                 result["cancelled"] += 1
+                result["items"].append(_recipient_audit_item(row))
             except Exception as exc:
                 result["fail"] += 1
                 result["errors"].append(f"#{booking_id}: {exc}")

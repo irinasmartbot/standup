@@ -1267,10 +1267,62 @@ def _audit_num(details: dict, *keys, default=None):
     return default
 
 
-def _audit_friendly_details(action: str, details: dict) -> str:
-    action = (action or "").strip()
-    if action == "login":
+def _audit_event_line(item: dict) -> str:
+    if not isinstance(item, dict):
         return ""
+    parts = [
+        str(item.get("date") or "").strip(),
+        str(item.get("time") or "").strip(),
+        str(item.get("location") or "").strip(),
+    ]
+    label = " · ".join(p for p in parts if p)
+    eid = item.get("id") if item.get("id") is not None else item.get("event_id")
+    if eid is not None and str(eid).strip():
+        return f"{label} (#{eid})" if label else f"#{eid}"
+    return label
+
+
+def _audit_booking_line(item: dict) -> str:
+    if not isinstance(item, dict):
+        return ""
+    bid = item.get("booking_id")
+    name = str(item.get("name") or "").strip()
+    event_bits = [
+        str(item.get("date") or "").strip(),
+        str(item.get("time") or "").strip(),
+        str(item.get("location") or "").strip(),
+    ]
+    event_s = " · ".join(p for p in event_bits if p)
+    head = f"#{bid}" if bid is not None else "бронь"
+    if name:
+        head = f"{head} · {name}"
+    if event_s:
+        head = f"{head} · {event_s}"
+    if "ok" in item:
+        head = f"{head} — {'ок' if item.get('ok') else 'ошибка'}"
+    return head
+
+
+def _audit_item_lines(items, *, kind: str = "event", limit: int = 12) -> list[str]:
+    if not isinstance(items, list) or not items:
+        return []
+    lines = []
+    for item in items[:limit]:
+        line = _audit_event_line(item) if kind == "event" else _audit_booking_line(item)
+        if line:
+            lines.append(line)
+    extra = len(items) - limit
+    if extra > 0:
+        lines.append(f"…и ещё {extra}")
+    return lines
+
+
+def _audit_friendly_detail_lines(action: str, details: dict) -> list[str]:
+    """Summary + optional bullet lines for the journal feed."""
+    action = (action or "").strip()
+    details = details or {}
+    if action == "login":
+        return []
     if action == "events_save":
         parts = []
         saved = _audit_num(details, "saved")
@@ -1291,23 +1343,44 @@ def _audit_friendly_details(action: str, details: dict) -> str:
                 "гостям",
             )
             parts.append(f"рассылка {aud}")
-        return " · ".join(parts)
+        lines = [" · ".join(parts)] if parts else []
+        saved_items = _audit_item_lines(details.get("saved_items"), kind="event")
+        if saved_items:
+            lines.append("Сохранённые даты:")
+            lines.extend(saved_items)
+        hidden_items = _audit_item_lines(details.get("hidden_items"), kind="event")
+        if hidden_items:
+            lines.append("Скрытые даты:")
+            lines.extend(hidden_items)
+        deleted_items = _audit_item_lines(details.get("deleted_items"), kind="event")
+        if deleted_items:
+            lines.append("Удалённые даты:")
+            lines.extend(deleted_items)
+        return lines
     if action == "events_restore":
         parts = []
         restored = _audit_num(details, "restored")
         errors = _audit_num(details, "errors")
-        ids = details.get("ids") or []
         if restored is not None:
             parts.append(f"возвращено дат: {restored}")
-        if isinstance(ids, list) and ids:
-            shown = ", ".join(f"#{x}" for x in ids[:5])
-            parts.append(f"id: {shown}" + ("…" if len(ids) > 5 else ""))
         if errors:
             parts.append(f"ошибок: {errors}")
-        return " · ".join(parts)
+        lines = [" · ".join(parts)] if parts else []
+        restored_items = _audit_item_lines(
+            details.get("restored_items") or [],
+            kind="event",
+        )
+        if restored_items:
+            lines.extend(restored_items)
+        elif details.get("ids"):
+            ids = details.get("ids") or []
+            if isinstance(ids, list) and ids:
+                shown = ", ".join(f"#{x}" for x in ids[:8])
+                lines.append(f"id: {shown}" + ("…" if len(ids) > 8 else ""))
+        return lines
     if action == "events_cancel_notify":
         if details.get("skipped"):
-            return "рассылка пропущена"
+            return ["рассылка пропущена"]
         parts = []
         ok = _audit_num(details, "ok")
         fail = _audit_num(details, "fail")
@@ -1315,10 +1388,25 @@ def _audit_friendly_details(action: str, details: dict) -> str:
             parts.append(f"доставлено: {ok}")
         if fail:
             parts.append(f"ошибок: {fail}")
-        return " · ".join(parts) or "рассылка выполнена"
+        aud = _AUDIT_AUDIENCE_LABELS.get(str(details.get("audience") or ""), "")
+        if aud:
+            parts.append(aud)
+        lines = [" · ".join(parts)] if parts else ["рассылка выполнена"]
+        event_lines = _audit_item_lines(details.get("events"), kind="event")
+        if event_lines:
+            lines.append("Даты:")
+            lines.extend(event_lines)
+        guest_lines = _audit_item_lines(details.get("items"), kind="booking")
+        if guest_lines:
+            lines.append("Гости:")
+            lines.extend(guest_lines)
+        preview = str(details.get("message_preview") or "").strip()
+        if preview:
+            lines.append(f"Текст: {preview}")
+        return lines
     if action == "events_cancel_bookings":
         if details.get("skipped"):
-            return "отмена пропущена"
+            return ["отмена пропущена"]
         parts = []
         cancelled = _audit_num(details, "cancelled")
         fail = _audit_num(details, "fail")
@@ -1326,34 +1414,125 @@ def _audit_friendly_details(action: str, details: dict) -> str:
             parts.append(f"отменено броней: {cancelled}")
         if fail:
             parts.append(f"ошибок: {fail}")
-        return " · ".join(parts) or "брони обработаны"
-    if action in {"resend_ticket", "resend_tickets_event"}:
-        parts = []
-        if action == "resend_ticket":
-            parts.append("успешно" if details.get("ok") else "не удалось")
-        else:
-            ok = _audit_num(details, "ok")
-            fail = _audit_num(details, "fail")
-            if ok is not None:
-                parts.append(f"успешно: {ok}")
-            if fail:
-                parts.append(f"ошибок: {fail}")
+        lines = [" · ".join(parts)] if parts else ["брони обработаны"]
+        event_lines = _audit_item_lines(details.get("events"), kind="event")
+        if event_lines:
+            lines.append("Даты:")
+            lines.extend(event_lines)
+        guest_lines = _audit_item_lines(details.get("items"), kind="booking")
+        if guest_lines:
+            lines.append("Брони:")
+            lines.extend(guest_lines)
+        return lines
+    if action == "resend_ticket":
+        parts = ["успешно" if details.get("ok") else "не удалось"]
         if details.get("extra_note"):
             parts.append("с доп. текстом")
-        return " · ".join(parts)
+        lines = [" · ".join(parts)]
+        guest = _audit_booking_line(details)
+        if guest and guest != "бронь":
+            lines.append(guest)
+        err = str(details.get("error") or "").strip()
+        if err and not details.get("ok"):
+            lines.append(f"ошибка: {err}")
+        return lines
+    if action == "resend_tickets_event":
+        parts = []
+        ok = _audit_num(details, "ok")
+        fail = _audit_num(details, "fail")
+        if ok is not None:
+            parts.append(f"успешно: {ok}")
+        if fail:
+            parts.append(f"ошибок: {fail}")
+        if details.get("extra_note"):
+            parts.append("с доп. текстом")
+        lines = [" · ".join(parts)] if parts else []
+        event = details.get("event") if isinstance(details.get("event"), dict) else {}
+        event_line = _audit_event_line(event) if event else ""
+        if event_line:
+            lines.append(f"Дата: {event_line}")
+        guest_lines = _audit_item_lines(details.get("items"), kind="booking")
+        if guest_lines:
+            lines.append("Брони:")
+            lines.extend(guest_lines)
+        return lines
     # Fallback: short readable key=value list, not raw JSON dump
     if not details:
-        return ""
+        return []
     bits = []
     for key, value in list(details.items())[:6]:
-        if value in ("", None, [], {}):
+        if value in ("", None, [], {}) or isinstance(value, (list, dict)):
             continue
         bits.append(f"{key}: {value}")
-    return " · ".join(bits)
+    return [" · ".join(bits)] if bits else []
 
 
-def _audit_friendly_title(action: str, entity_type: str, entity_id: str) -> str:
+def _audit_friendly_details(action: str, details: dict) -> str:
+    """Plain-text summary (first line) — kept for any callers/tests."""
+    lines = _audit_friendly_detail_lines(action, details)
+    return lines[0] if lines else ""
+
+
+def _audit_friendly_details_html(action: str, details: dict) -> str:
+    lines = _audit_friendly_detail_lines(action, details)
+    if not lines:
+        return ""
+    summary = lines[0]
+    rest = lines[1:]
+    html = f'<p class="audit-item-details">{_h(summary)}</p>'
+    if rest:
+        items = []
+        for line in rest:
+            if line.endswith(":") and not line.startswith("…"):
+                items.append(f'<li class="audit-item-group">{_h(line)}</li>')
+            else:
+                items.append(f"<li>{_h(line)}</li>")
+        html += f'<ul class="audit-item-list">{"".join(items)}</ul>'
+    return html
+
+
+def _audit_friendly_title(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    details: dict | None = None,
+) -> str:
     label, _tone = _audit_action_meta(action)
+    details = details or {}
+    action = (action or "").strip()
+
+    if action in {"events_cancel_notify", "events_cancel_bookings"}:
+        events = details.get("events") or details.get("hidden_items") or []
+        if isinstance(events, list) and events:
+            lines = [_audit_event_line(e) for e in events[:2] if isinstance(e, dict)]
+            lines = [x for x in lines if x]
+            if lines:
+                more = f" и ещё {len(events) - 2}" if len(events) > 2 else ""
+                return f"{label}: {'; '.join(lines)}{more}"
+
+    if action == "resend_ticket":
+        bits = [
+            f"#{entity_id}" if entity_id else "",
+            str(details.get("name") or "").strip(),
+            " · ".join(
+                p
+                for p in [
+                    str(details.get("date") or "").strip(),
+                    str(details.get("time") or "").strip(),
+                ]
+                if p
+            ),
+        ]
+        target = " · ".join(p for p in bits if p)
+        if target:
+            return f"{label}: {target}"
+
+    if action == "resend_tickets_event":
+        event = details.get("event") if isinstance(details.get("event"), dict) else {}
+        event_line = _audit_event_line(event) if event else ""
+        if event_line:
+            return f"{label}: {event_line}"
+
     target = _audit_target_label(entity_type, entity_id)
     if target and action != "login":
         return f"{label}: {target}"
@@ -1406,14 +1585,16 @@ def _audit_tab(rows: list[dict] | None) -> str:
     for row in rows:
         action = (row.get("action") or "").strip()
         details = _audit_details_dict(row)
-        title = _audit_friendly_title(action, row.get("entity_type") or "", row.get("entity_id") or "")
+        title = _audit_friendly_title(
+            action,
+            row.get("entity_type") or "",
+            row.get("entity_id") or "",
+            details,
+        )
         _, tone = _audit_action_meta(action)
         role = _audit_role_label(row.get("actor_role") or "")
         when = _fmt_msk(row.get("created_at"))
-        detail_txt = _audit_friendly_details(action, details)
-        detail_html = (
-            f'<p class="audit-item-details">{_h(detail_txt)}</p>' if detail_txt else ""
-        )
+        detail_html = _audit_friendly_details_html(action, details)
         items.append(
             f'<article class="audit-item audit-item--{tone}">'
             f'<div class="audit-item-top">'
@@ -3354,6 +3535,9 @@ def render_admin_html(
     .audit-when {{ font-size:12px; white-space:nowrap; }}
     .audit-item-title {{ margin:8px 0 0; font-size:15px; font-weight:700; line-height:1.35; }}
     .audit-item-details {{ margin:6px 0 0; font-size:13px; color:var(--muted); line-height:1.4; }}
+    .audit-item-list {{ margin:6px 0 0; padding:0 0 0 1.1em; font-size:13px; color:var(--muted); line-height:1.45; }}
+    .audit-item-list li {{ margin:2px 0; }}
+    .audit-item-list .audit-item-group {{ margin-top:6px; list-style:none; margin-left:-1.1em; font-weight:600; color:var(--text); }}
     .audit-empty {{ margin:8px 0 0; }}
     .ticket-card .ticket-loc {{ white-space:normal; word-break:break-word; }}
     .ticket-card-note {{
@@ -4022,6 +4206,8 @@ async def events_resend_ticket_page(request: web.Request) -> web.Response:
                 "ok": result.get("ok"),
                 "fail": result.get("fail"),
                 "extra_note": bool(extra_note),
+                "event": result.get("event") or {},
+                "items": (result.get("items") or [])[:40],
             },
         )
         q = urlencode(
@@ -4047,7 +4233,17 @@ async def events_resend_ticket_page(request: web.Request) -> web.Response:
             action="resend_ticket",
             entity_type="booking",
             entity_id=booking_id_raw,
-            details={"ok": bool(one.get("ok")), "extra_note": bool(extra_note)},
+            details={
+                "ok": bool(one.get("ok")),
+                "extra_note": bool(extra_note),
+                "booking_id": one.get("booking_id") or int(booking_id_raw),
+                "name": one.get("name") or "",
+                "date": one.get("date") or "",
+                "time": one.get("time") or "",
+                "location": one.get("location") or "",
+                "event_id": one.get("event_id"),
+                "error": (one.get("error") or "")[:200],
+            },
         )
         err = (one.get("error") or "")[:200]
         if back == "user" and user_key:
@@ -4104,6 +4300,7 @@ async def events_save_page(request: web.Request) -> web.Response:
         for r in rows
         if r.get("id") and (r.get("delete") or r.get("purge") or r.get("date"))
     ]
+    hidden_items = (result.get("hidden_items") or [])[:40]
     log_admin_action(
         actor_role=actor,
         action="events_save",
@@ -4117,6 +4314,9 @@ async def events_save_page(request: web.Request) -> web.Response:
             "notify_audience": notify_audience or "",
             "notify": bool(notify_message and notify_audience),
             "rows": len(rows),
+            "saved_items": (result.get("saved_items") or [])[:40],
+            "hidden_items": hidden_items,
+            "deleted_items": (result.get("deleted_items") or [])[:40],
         },
     )
     notify_result = None
@@ -4138,7 +4338,16 @@ async def events_save_page(request: web.Request) -> web.Response:
             action="events_cancel_notify",
             entity_type="event",
             entity_id=",".join(str(i) for i in hidden_ids),
-            details=notify_result,
+            details={
+                "ok": notify_result.get("ok"),
+                "fail": notify_result.get("fail"),
+                "skipped": notify_result.get("skipped"),
+                "audience": notify_result.get("audience") or notify_audience,
+                "message_preview": notify_result.get("message_preview") or "",
+                "events": notify_result.get("events") or hidden_items,
+                "items": (notify_result.get("items") or [])[:40],
+                "errors": (notify_result.get("errors") or [])[:20],
+            },
         )
     if hidden_ids:
         from bot.admin.event_notify import cancel_event_bookings_async
@@ -4149,7 +4358,14 @@ async def events_save_page(request: web.Request) -> web.Response:
             action="events_cancel_bookings",
             entity_type="event",
             entity_id=",".join(str(i) for i in hidden_ids),
-            details=cancel_result,
+            details={
+                "cancelled": cancel_result.get("cancelled"),
+                "fail": cancel_result.get("fail"),
+                "skipped": cancel_result.get("skipped"),
+                "events": cancel_result.get("events") or hidden_items,
+                "items": (cancel_result.get("items") or [])[:40],
+                "errors": (cancel_result.get("errors") or [])[:20],
+            },
         )
     if result.get("errors"):
         can_view_db = _can_view_db(request, config)
@@ -4252,7 +4468,12 @@ async def events_restore_page(request: web.Request) -> web.Response:
         action="events_restore",
         entity_type="afisha",
         entity_id=event_format,
-        details={"restored": result.get("restored"), "errors": len(result.get("errors") or []), "ids": list(ids or [])},
+        details={
+            "restored": result.get("restored"),
+            "errors": len(result.get("errors") or []),
+            "ids": list(ids or []),
+            "restored_items": (result.get("restored_items") or [])[:40],
+        },
     )
     if result.get("errors") and not result.get("restored"):
         raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}&saved=0")
