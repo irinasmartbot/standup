@@ -53,7 +53,7 @@ from bot.utils.ticket import MONTHS, format_date, now_msk
 from bot.vk import booking as vk_booking
 from bot.vk import my_bookings as vk_mb
 from bot.vk import raffle as vk_raffle
-from bot.vk.client import VKClient
+from bot.vk.client import VKAPIError, VKClient
 from bot.vk.config import VKSettings
 from bot.vk.event_texts import best_event_text as _best_event_text_vk
 from bot.vk.event_texts import event_card_text as _event_text
@@ -614,10 +614,43 @@ class VKBotApp:
         attachment: str | None = None,
         replace_nav: bool = True,
     ) -> int | None:
+        cmid = self._callback_cmid(peer_id) if replace_nav else None
+        # Callback-кнопка: правим то же сообщение, без delete+send (иначе мигает «два экрана»).
+        if replace_nav and cmid and self._keyboard_is_inline(keyboard):
+            ok = await self.client.edit_message(
+                peer_id,
+                text,
+                conversation_message_id=int(cmid),
+                keyboard=keyboard,
+                attachment=attachment,
+            )
+            if ok:
+                peer = int(peer_id)
+                self.peer_nav_message_ids.pop(peer, None)
+                self.peer_dates_message_ids.pop(peer, None)
+                await self._delete_pending(peer_id)
+                return None
+            # Без вложения — частый случай, когда edit с photo падает; пробуем текст+кнопки.
+            if attachment:
+                ok = await self.client.edit_message(
+                    peer_id,
+                    text,
+                    conversation_message_id=int(cmid),
+                    keyboard=keyboard,
+                    attachment=None,
+                )
+                if ok:
+                    peer = int(peer_id)
+                    self.peer_nav_message_ids.pop(peer, None)
+                    self.peer_dates_message_ids.pop(peer, None)
+                    await self._delete_pending(peer_id)
+                    return None
+
         if replace_nav:
             await self._delete_nav(peer_id)
         clear_id: int | None = None
-        if self._keyboard_is_inline(keyboard):
+        # Сброс reply-клавиатуры только вне callback: иначе лишний flash-сообщение.
+        if self._keyboard_is_inline(keyboard) and not cmid:
             # Важно: сброс reply-клавиатуры должен остаться до отправки inline-карточки.
             # Если удалить служебное сообщение слишком рано, VK снова показывает старое меню.
             clear_id = await self._clear_reply_keyboard(peer_id)
@@ -629,11 +662,13 @@ class VKBotApp:
                 keyboard=keyboard,
                 attachment=attachment,
             )
-        except Exception:
+        except Exception as exc:
             if not attachment:
                 raise
-            # Только реальные ошибки API/сети. Не повторять, если сообщение уже ушло
-            # (иначе в чате появляется дубль без картинки).
+            # Не ретраить сетевые обрывы после успешной отправки — будет дубль.
+            # Только явная ошибка VK API по вложению.
+            if not isinstance(exc, VKAPIError):
+                raise
             logger.exception("Failed to send VK message with attachment, retrying without it")
             message_id = await self.client.send_message(peer_id, text, keyboard=keyboard)
         if clear_id:
@@ -1770,7 +1805,7 @@ class VKBotApp:
                         "best_date_page",
                         "best_venues",
                         dates_label="📅 Выбрать по дате",
-                        venues_label="📍 Выбор по локации",
+                        venues_label="📍 Выбор по площадке",
                     ),
                     attachment=self._random_cover_attachment(),
                 )
@@ -3001,7 +3036,7 @@ class VKBotApp:
                     "best_date_page",
                     "best_venues",
                     dates_label="📅 Выбрать по дате",
-                    venues_label="📍 Выбор по локации",
+                    venues_label="📍 Выбор по площадке",
                 ),
             )
             return
