@@ -3369,7 +3369,7 @@ def render_admin_html(
         background:#f8fafc; padding:0;
       }}
       .events-afisha-help > summary {{
-        list-style:none; cursor:pointer; padding:10px 12px; font-size:13px; font-weight:700;
+        display:block; list-style:none; cursor:pointer; padding:10px 12px; font-size:13px; font-weight:700;
       }}
       .events-afisha-help > summary::-webkit-details-marker {{ display:none; }}
       .events-afisha-help > summary::after {{ content:" ▾"; color:var(--muted); font-weight:600; }}
