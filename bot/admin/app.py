@@ -3060,20 +3060,22 @@ def render_admin_html(
     hidden_order = f'<input type="hidden" name="order" value="{_h(filters.get("order"))}">' if filters.get("sort") else ""
     summary_html = ""
     show_booking_chrome = tab in {"date", "bookings"}
+    role_class = "role-ops" if can_view_ops else "role-manager"
     if show_booking_chrome:
+        # KPI-карточки нужны owner/client; менеджеру на смене они не принципиальны.
         summary_block = ""
-        if tab in {"date", "bookings"}:
+        if can_view_ops:
             summary_block = f"""
-    <div class="summary">
+    <div class="summary booking-summary">
       <div class="metric"><span>Мероприятий</span><b>{totals["events"]}</b></div>
       <div class="metric"><span>Всего броней</span><b>{totals["bookings"]}</b></div>
       <div class="metric"><span>Активные брони, гостей</span><b>{totals["reserved_guests"]}</b></div>
       <div class="metric"><span>Подтвердили билеты</span><b>{totals["confirmed_guests"]}</b></div>
     </div>"""
         summary_html = summary_block + f"""
-    <div class="filters">
-      <div>{_status_filter(filters)}</div>
-      <form method="get" action="/admin">
+    <div class="filters booking-filters">
+      <div class="filter-status-pills">{_status_filter(filters)}</div>
+      <form method="get" action="/admin" class="booking-filters-form">
         <input type="hidden" name="tab" value="{_h(filters.get('tab') or 'date')}">
         {date_input}
         {event_select}
@@ -3337,11 +3339,36 @@ def render_admin_html(
         white-space:normal; overflow:visible; text-overflow:clip;
         position:static; box-shadow:none;
       }}
-      .events-tpls {{ flex-wrap:wrap; overflow:visible; margin-top:8px; gap:6px; }}
-      .events-tpl {{ padding:8px 12px; font-size:13px; }}
+      table.events-edit td.events-time-cell,
+      table.events-edit td.events-loc-cell {{
+        grid-template-columns:72px minmax(0,1fr);
+        grid-template-areas:"label field" "tpls tpls";
+      }}
+      table.events-edit td.events-time-cell::before,
+      table.events-edit td.events-loc-cell::before {{
+        grid-area:label; padding-top:8px;
+      }}
+      table.events-edit td.events-time-cell > input,
+      table.events-edit td.events-loc-cell > input {{
+        grid-area:field; min-height:40px; font-size:16px; padding:8px 10px;
+      }}
+      table.events-edit td.events-time-cell > .events-tpls,
+      table.events-edit td.events-loc-cell > .events-tpls {{
+        grid-area:tpls; display:flex; flex-direction:row; flex-wrap:nowrap;
+        gap:6px; margin-top:6px; overflow-x:auto; -webkit-overflow-scrolling:touch;
+        padding-bottom:2px;
+      }}
+      .events-tpl {{
+        flex:0 0 auto; padding:6px 10px; font-size:12px; white-space:nowrap;
+      }}
+      table.events-edit td {{
+        grid-template-columns:72px minmax(0,1fr); padding:6px 0; font-size:13px;
+      }}
+      table.events-edit td::before {{ font-size:11px; padding-top:8px; }}
+      table.events-edit tr {{ padding:10px 10px 6px; margin:0 0 10px; border-radius:12px; }}
       table.events-edit td.events-del {{
-        display:flex; flex-wrap:wrap; gap:10px 14px; align-items:center;
-        padding-top:12px; margin-top:4px; border-top:1px dashed #e2e8f0;
+        display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center;
+        padding-top:10px; margin-top:2px; border-top:1px dashed #e2e8f0;
         border-bottom:0;
       }}
       table.events-edit td.events-del::before {{
@@ -3349,12 +3376,12 @@ def render_admin_html(
       }}
       table.events-edit .events-del label {{
         display:inline-flex; align-items:center; gap:8px;
-        min-height:44px; font-size:15px; padding:0 4px;
+        min-height:40px; font-size:13px; padding:0 4px;
       }}
       table.events-edit .events-del input[type="checkbox"] {{
-        width:20px; height:20px; min-height:0; padding:0;
+        width:18px; height:18px; min-height:0; padding:0;
       }}
-      .events-tickets-link {{ min-height:40px; display:inline-flex; align-items:center; }}
+      .events-tickets-link {{ min-height:36px; display:inline-flex; align-items:center; font-size:12px; }}
       .events-toolbar:not(.events-toolbar-bottom) {{ display:none; }}
       .events-toolbar-bottom {{
         position:fixed; left:0; right:0; bottom:0; z-index:40;
@@ -3364,15 +3391,15 @@ def render_admin_html(
         display:flex; gap:8px; align-items:center; flex-wrap:nowrap;
       }}
       .events-toolbar-bottom .events-update-btn {{
-        flex:1 1 auto; min-height:46px; font-size:16px; font-weight:700;
+        flex:1 1 auto; min-height:44px; font-size:15px; font-weight:700;
       }}
       .events-toolbar-bottom .pill {{
-        min-height:46px; display:inline-flex; align-items:center; padding:10px 12px;
+        min-height:44px; display:inline-flex; align-items:center; padding:10px 12px;
       }}
-      .events-toolbar-bottom .muted {{ font-size:12px; white-space:nowrap; }}
+      .events-toolbar-bottom .muted {{ font-size:11px; white-space:nowrap; }}
       .events-notify-audience {{ flex-direction:column; gap:10px; }}
       .events-notify-audience label {{
-        display:flex; align-items:center; gap:10px; min-height:40px; font-size:15px;
+        display:flex; align-items:center; gap:10px; min-height:40px; font-size:14px;
       }}
       .events-notify-box textarea {{ max-width:none; font-size:16px; }}
     }}
@@ -3646,16 +3673,69 @@ def render_admin_html(
       .branch-metric b {{ font-size:18px; }}
     }}
     @media (max-width: 780px) {{
-      header {{ padding:22px 18px; }}
-      main {{ padding:16px; }}
-      .summary, .analytics-summary, .analytics-audience {{ grid-template-columns:1fr; }}
+      body {{ font-size:14px; }}
+      header {{ padding:14px 14px 12px; }}
+      header h1 {{ font-size:20px; margin:0 0 4px; }}
+      header p {{ font-size:12px; line-height:1.35; }}
+      main {{ padding:12px; }}
+      .tabs {{ gap:6px; margin:0 0 12px; padding-left:0; }}
+      .tab, .pill {{ padding:7px 11px; font-size:13px; }}
+      .booking-summary {{
+        grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px; margin-bottom:12px;
+      }}
+      .booking-summary .metric {{ padding:10px 12px; border-radius:12px; }}
+      .booking-summary .metric span {{ font-size:11px; }}
+      .booking-summary .metric b {{ margin-top:4px; font-size:18px; }}
+      .analytics-summary, .analytics-audience {{ grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px; }}
+      .metric {{ padding:12px; border-radius:12px; }}
+      .metric span {{ font-size:12px; }}
+      .metric b {{ margin-top:4px; font-size:20px; }}
+      .booking-filters {{
+        flex-direction:column; align-items:stretch; gap:10px; padding:12px;
+        margin-bottom:12px; border-radius:14px;
+      }}
+      .filter-status-pills {{
+        display:flex; gap:6px; flex-wrap:nowrap; overflow-x:auto;
+        -webkit-overflow-scrolling:touch; padding-bottom:2px; width:100%;
+      }}
+      .filter-status-pills .pill {{
+        flex:0 0 auto; white-space:nowrap; font-size:12px; padding:6px 10px;
+      }}
+      .booking-filters-form {{
+        display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%;
+        align-items:stretch;
+      }}
+      .booking-filters-form input[type="date"],
+      .booking-filters-form select {{
+        grid-column:1 / -1; width:100%; min-width:0; font-size:16px; padding:8px 10px;
+      }}
+      .booking-filters-form button,
+      .booking-filters-form > .pill {{
+        width:100%; text-align:center; justify-content:center;
+        display:inline-flex; align-items:center; min-height:40px; font-size:14px;
+      }}
+      .card {{ padding:14px; margin-bottom:12px; border-radius:14px; }}
       .event-head {{ display:block; }}
+      .event-head h2 {{
+        font-size:15px; line-height:1.35; white-space:normal; word-break:break-word;
+      }}
+      .event-head p {{ font-size:12px; margin-top:4px; white-space:normal; }}
+      .format {{ font-size:11px; padding:4px 8px; display:inline-block; margin-top:6px; }}
+      .counters, .mini-metrics {{ gap:6px; margin:10px 0; }}
+      .counter, .mini-metrics span {{
+        font-size:11px; padding:5px 8px; white-space:nowrap;
+      }}
+      .capacity-line {{ font-size:13px; margin-top:12px; }}
+      .empty-state {{ padding:22px 14px; }}
+      .empty-state h2 {{ font-size:16px; }}
+      .empty-state p {{ font-size:13px; }}
       .details-summary {{ display:block; }}
       .details-action {{ display:inline-block; margin-top:10px; }}
+      h2 {{ font-size:16px; }}
     }}
   </style>
 </head>
-<body class="tab-{_h(tab)}">
+<body class="tab-{_h(tab)} {_h(role_class)}">
   <header>
     <h1>Стендап бронирование</h1>
     <p>Автообновление каждые 30 секунд · источник данных: {_h(source_label)} · <a href="/admin/logout">выйти</a></p>
