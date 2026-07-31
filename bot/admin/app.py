@@ -109,6 +109,7 @@ DB_VIEW_TABLES = (
     "analytics_events",
 )
 DB_PAGE_SIZE = 50
+USERS_PAGE_SIZE = 50
 
 
 def _load_env_file(path=".env"):
@@ -149,7 +150,7 @@ def load_config() -> AdminConfig:
         bookings_source=os.getenv("BOOKINGS_SOURCE", "postgres" if database_url else "sqlite"),
         # Manager: only «Мероприятия»
         admin_token=os.getenv("ADMIN_TOKEN", "").strip(),
-        # Client: bookings/users/analytics/events (no DB, no ticket resend)
+        # Client: bookings/users/analytics/events/journal (no DB, no ticket resend)
         client_token=os.getenv("ADMIN_CLIENT_TOKEN", "").strip(),
         # Owner: full admin + DB + ticket resend
         owner_token=os.getenv("ADMIN_OWNER_TOKEN", "").strip(),
@@ -670,67 +671,221 @@ def build_dashboard(rows: list[dict]) -> dict:
     return {"events": list(events.values()), "bookings": bookings, "users": users, "totals": totals}
 
 
-def fetch_directory_users(config: AdminConfig, limit: int = 3000) -> list[dict]:
-    """All bot entrants from users table (not only those with bookings)."""
+def _user_from_directory_row(row: dict) -> dict:
+    uid = int(row["id"])
+    key = str(uid)
+    source = (row.get("source") or "").strip() or (
+        "vkontakte" if row.get("vk_id") else "telegram"
+    )
+    counts = Counter(
+        {
+            "booked": int(row.get("cnt_booked") or 0),
+            "confirmed": int(row.get("cnt_confirmed") or 0),
+            "cancelled": int(row.get("cnt_cancelled") or 0),
+            "annulled": int(row.get("cnt_annulled") or 0),
+        }
+    )
+    return {
+        "key": key,
+        "user_id": uid,
+        "name": row.get("name") or "",
+        "username": row.get("username") or "",
+        "phone": row.get("phone") or "",
+        "telegram_id": row.get("telegram_id"),
+        "vk_id": row.get("vk_id"),
+        "source": source,
+        "bookings": [],
+        "status_counts": counts,
+        "guests_confirmed": 0,
+        "guests_reserved": 0,
+        "bookings_total": int(row.get("bookings_total") or sum(counts.values())),
+    }
+
+
+def _users_directory_where(q: str, status: str) -> tuple[str, dict]:
+    where = ["TRUE"]
+    params: dict = {}
+    q = (q or "").strip()
+    if q:
+        q_user = q[1:].strip() if q.startswith("@") else q
+        params["q_like"] = f"%{q}%"
+        params["q_user_like"] = f"%{q_user}%"
+        phone_digits = "".join(ch for ch in q if ch.isdigit())
+        parts = [
+            "COALESCE(u.name, '') ILIKE %(q_like)s",
+            "COALESCE(u.username, '') ILIKE %(q_user_like)s",
+            "COALESCE(u.phone, '') ILIKE %(q_like)s",
+        ]
+        # Телефон без +, пробелов и скобок: 8900… найдёт +7 (900) …
+        if len(phone_digits) >= 3:
+            params["q_phone_digits"] = f"%{phone_digits}%"
+            parts.append(
+                "regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE %(q_phone_digits)s"
+            )
+        where.append("(" + " OR ".join(parts) + ")")
+    if status in STATUSES:
+        params["status"] = status
+        where.append(
+            "EXISTS ("
+            "SELECT 1 FROM bookings b2 "
+            "WHERE b2.user_id = u.id AND b2.status = %(status)s"
+            ")"
+        )
+    return " AND ".join(where), params
+
+
+def fetch_users_page(
+    config: AdminConfig,
+    *,
+    q: str = "",
+    page: int = 1,
+    status: str = "",
+) -> dict:
+    """Paginated users directory with search — safe for 10k+ guests."""
+    empty = {
+        "users": [],
+        "total": 0,
+        "page": 1,
+        "pages": 1,
+        "q": (q or "").strip(),
+        "page_size": USERS_PAGE_SIZE,
+    }
     if not _use_postgres(config):
+        return empty
+    page = max(1, _parse_int(page, 1))
+    where_sql, base_params = _users_directory_where(q, status)
+    try:
+        with psycopg.connect(config.database_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT COUNT(*) AS n FROM users u WHERE {where_sql}",
+                    base_params,
+                )
+                total = int((cur.fetchone() or {}).get("n") or 0)
+                pages = max(1, (total + USERS_PAGE_SIZE - 1) // USERS_PAGE_SIZE)
+                page = min(page, pages)
+                list_params = {
+                    **base_params,
+                    "limit": USERS_PAGE_SIZE,
+                    "offset": (page - 1) * USERS_PAGE_SIZE,
+                }
+                cur.execute(
+                    f"""
+                    SELECT
+                        u.id,
+                        u.telegram_id,
+                        u.vk_id,
+                        u.name,
+                        u.username,
+                        u.phone,
+                        u.source,
+                        COUNT(b.id) AS bookings_total,
+                        COUNT(b.id) FILTER (WHERE b.status = 'booked') AS cnt_booked,
+                        COUNT(b.id) FILTER (WHERE b.status = 'confirmed') AS cnt_confirmed,
+                        COUNT(b.id) FILTER (WHERE b.status = 'cancelled') AS cnt_cancelled,
+                        COUNT(b.id) FILTER (WHERE b.status = 'annulled') AS cnt_annulled
+                    FROM users u
+                    LEFT JOIN bookings b ON b.user_id = u.id
+                    WHERE {where_sql}
+                    GROUP BY u.id
+                    ORDER BY COALESCE(u.last_active_at, u.created_at) DESC NULLS LAST, u.id DESC
+                    LIMIT %(limit)s OFFSET %(offset)s
+                    """,
+                    list_params,
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+        return {
+            "users": [_user_from_directory_row(r) for r in rows],
+            "total": total,
+            "page": page,
+            "pages": pages,
+            "q": (q or "").strip(),
+            "page_size": USERS_PAGE_SIZE,
+        }
+    except Exception:
+        return empty
+
+
+def fetch_one_directory_user(config: AdminConfig, user_id: int) -> dict | None:
+    if not _use_postgres(config) or not user_id:
+        return None
+    try:
+        with psycopg.connect(config.database_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        u.id,
+                        u.telegram_id,
+                        u.vk_id,
+                        u.name,
+                        u.username,
+                        u.phone,
+                        u.source,
+                        COUNT(b.id) AS bookings_total,
+                        COUNT(b.id) FILTER (WHERE b.status = 'booked') AS cnt_booked,
+                        COUNT(b.id) FILTER (WHERE b.status = 'confirmed') AS cnt_confirmed,
+                        COUNT(b.id) FILTER (WHERE b.status = 'cancelled') AS cnt_cancelled,
+                        COUNT(b.id) FILTER (WHERE b.status = 'annulled') AS cnt_annulled
+                    FROM users u
+                    LEFT JOIN bookings b ON b.user_id = u.id
+                    WHERE u.id = %(user_id)s
+                    GROUP BY u.id
+                    """,
+                    {"user_id": int(user_id)},
+                )
+                row = cur.fetchone()
+                return _user_from_directory_row(dict(row)) if row else None
+    except Exception:
+        return None
+
+
+def fetch_user_booking_rows(config: AdminConfig, user_id: int) -> list[dict]:
+    """All bookings for one guest (users tab detail)."""
+    if not _use_postgres(config) or not user_id:
         return []
     try:
         with psycopg.connect(config.database_url, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, telegram_id, vk_id, name, username, phone, source
-                    FROM users
-                    ORDER BY COALESCE(last_active_at, created_at) DESC NULLS LAST, id DESC
-                    LIMIT %(limit)s
+                    SELECT
+                        e.id AS event_id,
+                        e.format AS event_format,
+                        to_char(e.event_date, 'DD.MM.YYYY') AS event_date,
+                        to_char(e.event_time, 'HH24:MI') AS event_time,
+                        e.location,
+                        e.address,
+                        e.max_seats,
+                        b.id AS booking_id,
+                        b.format AS booking_format,
+                        b.source,
+                        b.status,
+                        b.guests,
+                        b.created_at::text,
+                        b.confirmed_at::text,
+                        b.cancelled_at::text,
+                        b.annulled_at::text,
+                        b.updated_at::text,
+                        b.reminder_24h_sent,
+                        b.reminder_day_sent,
+                        u.id AS user_id,
+                        u.telegram_id,
+                        u.vk_id,
+                        u.username,
+                        u.name,
+                        u.phone
+                    FROM bookings b
+                    JOIN users u ON u.id = b.user_id
+                    JOIN events e ON e.id = b.event_id
+                    WHERE u.id = %(user_id)s
+                    ORDER BY e.event_date DESC, e.event_time DESC, b.id DESC
                     """,
-                    {"limit": max(1, min(int(limit or 3000), 10000))},
+                    {"user_id": int(user_id)},
                 )
                 return [dict(row) for row in cur.fetchall()]
     except Exception:
         return []
-
-
-def merge_directory_users(dashboard: dict, directory: list[dict]) -> None:
-    """Add users who entered the bot but have no bookings yet."""
-    users = dashboard.setdefault("users", {})
-    known_ids: set[int] = set()
-    for user in users.values():
-        uid = user.get("user_id")
-        if uid is None:
-            continue
-        try:
-            known_ids.add(int(uid))
-        except (TypeError, ValueError):
-            pass
-    for row in directory or []:
-        try:
-            uid = int(row.get("id"))
-        except (TypeError, ValueError):
-            continue
-        if uid in known_ids:
-            continue
-        key = str(uid)
-        if key in users:
-            continue
-        source = (row.get("source") or "").strip() or (
-            "vkontakte" if row.get("vk_id") else "telegram"
-        )
-        users[key] = {
-            "key": key,
-            "user_id": uid,
-            "name": row.get("name") or "",
-            "username": row.get("username") or "",
-            "phone": row.get("phone") or "",
-            "telegram_id": row.get("telegram_id"),
-            "vk_id": row.get("vk_id"),
-            "source": source,
-            "bookings": [],
-            "status_counts": Counter(),
-            "guests_confirmed": 0,
-            "guests_reserved": 0,
-        }
-        known_ids.add(uid)
 
 
 def _query_link(filters: dict, **updates) -> str:
@@ -940,15 +1095,20 @@ def _tabs(
             ("date", "По дате"),
             ("events", "Мероприятия"),
             ("analytics", "Аналитика"),
+            ("audit", "Журнал"),
         ]
         if can_view_db:
             tabs.append(("db", "База"))
     else:
-        tabs = [("events", "Мероприятия")]
+        # Manager: афиша + быстрый просмотр броней по дате
+        tabs = [
+            ("date", "По дате"),
+            ("events", "Мероприятия"),
+        ]
     current = filters.get("tab") or ("date" if can_view_ops else "events")
     return "".join(
         f'<a class="tab {"active" if current == key else ""}" '
-        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="", date_from="", date_to="", channel="", ef="", tickets="")}">{label}</a>'
+        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="", date_from="", date_to="", channel="", ef="", tickets="", q="")}">{label}</a>'
         for key, label in tabs
     )
 
@@ -1026,7 +1186,182 @@ def _cell_value(value) -> str:
     return _h(text)
 
 
+_AUDIT_ROLE_LABELS = {
+    "owner": "Владелец",
+    "client": "Клиент",
+    "manager": "Менеджер",
+}
+_AUDIT_ACTION_META = {
+    "login": ("Вход в админку", "login"),
+    "events_save": ("Сохранил афишу", "save"),
+    "events_restore": ("Вернул даты в афишу", "restore"),
+    "events_cancel_notify": ("Разослал сообщение об отмене", "notify"),
+    "events_cancel_bookings": ("Отменил брони по скрытым датам", "cancel"),
+    "resend_ticket": ("Переотправил билет", "ticket"),
+    "resend_tickets_event": ("Массово переотправил билеты", "ticket"),
+}
+_AUDIT_AFISHA_LABELS = {
+    "best": "BEST",
+    "proverka": "Проверка",
+    "hitloto": "Hit Loto",
+    "rozygrysh": "Розыгрыш",
+}
+_AUDIT_AUDIENCE_LABELS = {
+    "booked": "гостям с бронью",
+    "confirmed": "гостям с билетом",
+    "both": "гостям с бронью и билетом",
+}
+
+
+def _audit_details_dict(row: dict) -> dict:
+    details = row.get("details") or {}
+    if isinstance(details, dict):
+        return details
+    if isinstance(details, str):
+        try:
+            import json as _json
+
+            parsed = _json.loads(details)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _audit_role_label(role: str) -> str:
+    return _AUDIT_ROLE_LABELS.get((role or "").strip(), (role or "").strip() or "—")
+
+
+def _audit_action_meta(action: str) -> tuple[str, str]:
+    return _AUDIT_ACTION_META.get((action or "").strip(), ((action or "Действие").strip() or "Действие", "other"))
+
+
+def _audit_target_label(entity_type: str, entity_id: str) -> str:
+    et = (entity_type or "").strip()
+    eid = (entity_id or "").strip()
+    if et == "afisha":
+        fmt = _AUDIT_AFISHA_LABELS.get(eid, eid or "афиша")
+        return f"афиша «{fmt}»"
+    if et == "event":
+        if not eid:
+            return "мероприятие"
+        if "," in eid:
+            ids = [x.strip() for x in eid.split(",") if x.strip()]
+            if len(ids) == 1:
+                return f"мероприятие #{ids[0]}"
+            return f"мероприятия #{', #'.join(ids[:4])}" + ("…" if len(ids) > 4 else "")
+        return f"мероприятие #{eid}"
+    if et == "booking":
+        return f"бронь #{eid}" if eid else "бронь"
+    if et == "admin":
+        return ""
+    if et or eid:
+        return f"{et} {eid}".strip()
+    return ""
+
+
+def _audit_num(details: dict, *keys, default=None):
+    for key in keys:
+        if key in details and details.get(key) is not None:
+            return details.get(key)
+    return default
+
+
+def _audit_friendly_details(action: str, details: dict) -> str:
+    action = (action or "").strip()
+    if action == "login":
+        return ""
+    if action == "events_save":
+        parts = []
+        saved = _audit_num(details, "saved")
+        hidden = _audit_num(details, "hidden")
+        deleted = _audit_num(details, "deleted")
+        errors = _audit_num(details, "errors")
+        if saved is not None:
+            parts.append(f"сохранено: {saved}")
+        if hidden:
+            parts.append(f"скрыто: {hidden}")
+        if deleted:
+            parts.append(f"удалено: {deleted}")
+        if errors:
+            parts.append(f"ошибок: {errors}")
+        if details.get("notify"):
+            aud = _AUDIT_AUDIENCE_LABELS.get(
+                str(details.get("notify_audience") or ""),
+                "гостям",
+            )
+            parts.append(f"рассылка {aud}")
+        return " · ".join(parts)
+    if action == "events_restore":
+        parts = []
+        restored = _audit_num(details, "restored")
+        errors = _audit_num(details, "errors")
+        ids = details.get("ids") or []
+        if restored is not None:
+            parts.append(f"возвращено дат: {restored}")
+        if isinstance(ids, list) and ids:
+            shown = ", ".join(f"#{x}" for x in ids[:5])
+            parts.append(f"id: {shown}" + ("…" if len(ids) > 5 else ""))
+        if errors:
+            parts.append(f"ошибок: {errors}")
+        return " · ".join(parts)
+    if action == "events_cancel_notify":
+        if details.get("skipped"):
+            return "рассылка пропущена"
+        parts = []
+        ok = _audit_num(details, "ok")
+        fail = _audit_num(details, "fail")
+        if ok is not None:
+            parts.append(f"доставлено: {ok}")
+        if fail:
+            parts.append(f"ошибок: {fail}")
+        return " · ".join(parts) or "рассылка выполнена"
+    if action == "events_cancel_bookings":
+        if details.get("skipped"):
+            return "отмена пропущена"
+        parts = []
+        cancelled = _audit_num(details, "cancelled")
+        fail = _audit_num(details, "fail")
+        if cancelled is not None:
+            parts.append(f"отменено броней: {cancelled}")
+        if fail:
+            parts.append(f"ошибок: {fail}")
+        return " · ".join(parts) or "брони обработаны"
+    if action in {"resend_ticket", "resend_tickets_event"}:
+        parts = []
+        if action == "resend_ticket":
+            parts.append("успешно" if details.get("ok") else "не удалось")
+        else:
+            ok = _audit_num(details, "ok")
+            fail = _audit_num(details, "fail")
+            if ok is not None:
+                parts.append(f"успешно: {ok}")
+            if fail:
+                parts.append(f"ошибок: {fail}")
+        if details.get("extra_note"):
+            parts.append("с доп. текстом")
+        return " · ".join(parts)
+    # Fallback: short readable key=value list, not raw JSON dump
+    if not details:
+        return ""
+    bits = []
+    for key, value in list(details.items())[:6]:
+        if value in ("", None, [], {}):
+            continue
+        bits.append(f"{key}: {value}")
+    return " · ".join(bits)
+
+
+def _audit_friendly_title(action: str, entity_type: str, entity_id: str) -> str:
+    label, _tone = _audit_action_meta(action)
+    target = _audit_target_label(entity_type, entity_id)
+    if target and action != "login":
+        return f"{label}: {target}"
+    return label
+
+
 def _audit_section(rows: list[dict] | None) -> str:
+    """Technical table for owner DB tab (raw codes kept for debugging)."""
     rows = rows or []
     body = []
     for row in rows:
@@ -1055,11 +1390,50 @@ def _audit_section(rows: list[dict] | None) -> str:
         body.append('<tr><td colspan="5" class="muted">Пока пусто — действия появятся здесь.</td></tr>')
     return (
         '<section class="card audit-log">'
-        "<h2>Журнал действий</h2>"
-        '<p class="muted">Кто что менял в админке (сохранение афиши, переотправка билетов, рассылки).</p>'
+        "<h2>Журнал действий (технический)</h2>"
+        '<p class="muted">Сырые коды для отладки. Удобный вид — во вкладке «Журнал».</p>'
         '<div class="table-wrap"><table><thead><tr>'
         "<th>Когда</th><th>Роль</th><th>Действие</th><th>Объект</th><th>Детали</th>"
         f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+        "</section>"
+    )
+
+
+def _audit_tab(rows: list[dict] | None) -> str:
+    """Client-friendly activity feed for owner/client."""
+    rows = rows or []
+    items = []
+    for row in rows:
+        action = (row.get("action") or "").strip()
+        details = _audit_details_dict(row)
+        title = _audit_friendly_title(action, row.get("entity_type") or "", row.get("entity_id") or "")
+        _, tone = _audit_action_meta(action)
+        role = _audit_role_label(row.get("actor_role") or "")
+        when = _fmt_msk(row.get("created_at"))
+        detail_txt = _audit_friendly_details(action, details)
+        detail_html = (
+            f'<p class="audit-item-details">{_h(detail_txt)}</p>' if detail_txt else ""
+        )
+        items.append(
+            f'<article class="audit-item audit-item--{tone}">'
+            f'<div class="audit-item-top">'
+            f'<span class="audit-role audit-role--{(row.get("actor_role") or "other")}">{_h(role)}</span>'
+            f'<time class="audit-when muted">{_h(when)}</time>'
+            f"</div>"
+            f'<h3 class="audit-item-title">{_h(title)}</h3>'
+            f"{detail_html}"
+            "</article>"
+        )
+    feed = (
+        "".join(items)
+        if items
+        else '<p class="muted audit-empty">Пока записей нет — здесь появятся сохранения афиши, рассылки и переотправки билетов.</p>'
+    )
+    return (
+        '<section class="card audit-feed">'
+        "<h2>Журнал действий</h2>"
+        '<p class="muted">Кто что менял в админке: афиша, отмены, рассылки, переотправка билетов.</p>'
+        f'<div class="audit-list">{feed}</div>'
         "</section>"
     )
 
@@ -1150,11 +1524,14 @@ def _format_select(filters: dict) -> str:
 
 
 def _status_filter(filters: dict) -> str:
-    links = [f'<a class="pill {"active" if not filters.get("status") else ""}" href="{_query_link(filters, status="")}">Все статусы</a>']
+    links = [
+        f'<a class="pill {"active" if not filters.get("status") else ""}" '
+        f'href="{_query_link(filters, status="", page="")}">Все статусы</a>'
+    ]
     for status in STATUSES:
         links.append(
             f'<a class="pill {"active" if filters.get("status") == status else ""}" '
-            f'href="{_query_link(filters, status=status)}">{_h(STATUS_LABELS[status])}</a>'
+            f'href="{_query_link(filters, status=status, page="")}">{_h(STATUS_LABELS[status])}</a>'
         )
     return "".join(links)
 
@@ -1637,19 +2014,20 @@ def _users_tab(
     stage_by_user: dict | None = None,
 ) -> str:
     status = filters.get("status") or ""
-    users = sorted(
-        dashboard["users"].values(),
-        key=lambda u: (_parse_int(u.get("user_id")), u["name"] or "", u["phone"] or ""),
-    )
+    meta = dashboard.get("users_meta") or {}
+    list_keys = meta.get("list_keys") or []
+    if list_keys:
+        list_users = [
+            dashboard["users"][key]
+            for key in list_keys
+            if key in dashboard["users"]
+        ]
+    else:
+        list_users = sorted(
+            dashboard["users"].values(),
+            key=lambda u: (_parse_int(u.get("user_id")), u["name"] or "", u["phone"] or ""),
+        )
     selected_key = filters.get("u", "")
-    list_users = users
-    if status:
-        list_users = [user for user in users if user["status_counts"].get(status, 0) > 0]
-        # Keep the opened guest in the list even if they have 0 bookings of this status.
-        if selected_key and selected_key in dashboard["users"]:
-            selected = dashboard["users"][selected_key]
-            if all(user["key"] != selected_key for user in list_users):
-                list_users = [selected] + list_users
     stage_by_user = stage_by_user or {}
     rows = []
     for user in list_users:
@@ -1661,24 +2039,62 @@ def _users_tab(
             except (TypeError, ValueError):
                 last_event = None
         stage_text = _user_stage_line(user, last_event)
+        total_bookings = user.get("bookings_total")
+        if total_bookings is None:
+            total_bookings = len(user.get("bookings") or [])
         rows.append(
             "<tr>"
             f"<td>{_h(user.get('user_id') or '—')}</td>"
-            f"<td><a href='{_query_link(filters, u=user['key'])}'>{_h(user['name'] or 'Без имени')}</a>"
+            f"<td><a href='{_query_link(filters, u=user['key'], page=filters.get('page') or '1')}'>{_h(user['name'] or 'Без имени')}</a>"
             f"<br><span class='muted'>{_h(user['source'])}</span></td>"
             f"<td>{_h(user['phone'])}<br><span class='muted'>@{_h(user['username'])}</span></td>"
-            f"<td>{len(user['bookings'])}</td>"
+            f"<td>{int(total_bookings)}</td>"
             f"<td>{user['status_counts'].get('booked', 0)}</td>"
             f"<td>{user['status_counts'].get('confirmed', 0)}</td>"
             f"<td>{user['status_counts'].get('cancelled', 0)}</td>"
             f"<td>{_h(stage_text)}</td>"
             "</tr>"
         )
+    q_val = filters.get("q") or meta.get("q") or ""
+    page = int(meta.get("page") or _parse_int(filters.get("page"), 1) or 1)
+    pages = int(meta.get("pages") or 1)
+    total = int(meta.get("total") or len(list_users))
+    prev_link = (
+        f'<a class="pill" href="{_query_link(filters, page=str(page - 1))}">← Назад</a>'
+        if page > 1
+        else ""
+    )
+    next_link = (
+        f'<a class="pill" href="{_query_link(filters, page=str(page + 1))}">Вперёд →</a>'
+        if page < pages
+        else ""
+    )
+    pager = (
+        '<div class="users-pager">'
+        f"{prev_link}"
+        f'<span class="muted">Страница <b>{page}</b> из <b>{pages}</b> · найдено <b>{total}</b></span>'
+        f"{next_link}"
+        "</div>"
+    )
+    search_bar = (
+        '<div class="filters users-filters">'
+        f"<div>{_status_filter(filters)}</div>"
+        '<form method="get" action="/admin" class="users-search-form">'
+        '<input type="hidden" name="tab" value="users">'
+        f'<input type="hidden" name="status" value="{_h(status)}">'
+        f'<input type="search" name="q" value="{_h(q_val)}" '
+        'placeholder="Имя, @username или телефон" '
+        'autocomplete="off">'
+        '<button type="submit">Найти</button>'
+        f'<a class="pill" href="/admin?tab=users">Сбросить</a>'
+        "</form>"
+        "</div>"
+    )
     table = (
         '<div class="table-wrap"><table class="users">'
         "<thead><tr><th>user_id</th><th>Клиент</th><th>Контакт</th><th>Всего</th><th>Активные</th>"
         "<th>Билеты</th><th>Отмены</th><th>Этап</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"muted\">Пользователей пока нет</td></tr>'}</tbody>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"muted\">Никого не найдено — измените поиск или фильтр</td></tr>'}</tbody>"
         "</table></div>"
     )
     flash_html = f'<p class="events-flash">{_h(flash)}</p>' if flash else ""
@@ -1722,7 +2138,15 @@ def _users_tab(
             f'{_booking_table(bookings, show_format=True)}'
             "</section>"
         )
-    return flash_html + detail + f'<section class="card"><h2>Пользователи</h2>{table}</section>'
+    return (
+        flash_html
+        + detail
+        + '<section class="card">'
+        "<h2>Пользователи</h2>"
+        '<p class="muted">Поиск и страницы по 50 человек — база не выводится целиком.</p>'
+        f"{search_bar}{pager}{table}{pager}"
+        "</section>"
+    )
 
 
 def _metric_pair(metric: dict | None) -> str:
@@ -1797,13 +2221,26 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "</div>"
     )
 
+    if channel == "vkontakte":
+        cmd_labels = {
+            "cmd_my_bookings": "Мои брони",
+            "cmd_main_menu": "Главное меню",
+            "cmd_buy_ticket": "Купить билет",
+            "cmd_help": "Задать вопрос · менеджеру",
+            "cmd_channel": "Канал анонсов",
+            "bot_start": "Зашли в бот",
+        }
+    else:
+        cmd_labels = {
+            "cmd_my_bookings": "/my_bookings · Мои брони",
+            "cmd_main_menu": "/main_menu · Главное меню",
+            "cmd_buy_ticket": "/buy_ticket · Купить билет",
+            "cmd_help": "/help · Задать вопрос",
+            "cmd_channel": "/channel · Канал анонсов",
+            "bot_start": "Зашли в бот (/start)",
+        }
     event_labels = {
-        "bot_start": "Зашли в бот (/start)",
-        "cmd_my_bookings": "/my_bookings · Мои брони",
-        "cmd_main_menu": "/main_menu · Главное меню",
-        "cmd_buy_ticket": "/buy_ticket · Купить билет",
-        "cmd_help": "/help · Задать вопрос",
-        "cmd_channel": "/channel · Канал анонсов",
+        **cmd_labels,
         "help_open": "Открыли Help / FAQ",
         "help_question": "Написали в поддержку",
         "branch_best": "BEST · вход",
@@ -2091,6 +2528,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "</div></details></section>"
     )
 
+    is_vk_channel = channel == "vkontakte"
     command_blocks = []
     for name, cmd, title, tone in (
         ("cmd_my_bookings", "/my_bookings", "Мои брони", "tone-cmd-bookings"),
@@ -2102,21 +2540,33 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         metric = by_name.get(name) or {"events": 0, "uniques": 0}
         events = int(metric.get("events") or 0)
         uniques = int(metric.get("uniques") or 0)
+        cmd_html = (
+            ""
+            if is_vk_channel
+            else f'<div class="command-block-cmd">{_h(cmd)}</div>'
+        )
         command_blocks.append(
             f'<div class="command-block {tone}">'
-            f'<div class="command-block-cmd">{_h(cmd)}</div>'
+            f"{cmd_html}"
             f'<div class="command-block-title">{_h(title)}</div>'
             f'<b>{events}</b>'
             f'<small class="muted">{uniques} уник.</small>'
             "</div>"
         )
+    if is_vk_channel:
+        commands_hint = (
+            "Переходы из меню VK · «Задать вопрос» — кнопка менеджеру, "
+            "«Канал анонсов» — кнопка канала · заходы и уникальные люди"
+        )
+    else:
+        commands_hint = "Переходы по командам из меню Telegram · заходы и уникальные люди"
     commands_table = (
         '<section class="card details-card analytics-section">'
         '<details data-persist-key="analytics:menu-commands">'
         '<summary class="details-summary">'
         "<div>"
         "<strong>Запуск команд меню</strong>"
-        '<span class="muted">Переходы по командам из меню Telegram · заходы и уникальные люди</span>'
+        f'<span class="muted">{_h(commands_hint)}</span>'
         "</div>"
         '<span class="details-action"><span class="closed-label">Развернуть</span>'
         '<span class="open-label">Свернуть</span></span>'
@@ -2379,6 +2829,9 @@ def _content(
             ticket_holders=ticket_holders if can_resend_tickets else None,
             can_resend_tickets=can_resend_tickets,
         )
+    if tab == "audit":
+        db_data = db_data or {"audit": []}
+        return _audit_tab(db_data.get("audit") or [])
     if tab == "db":
         db_data = db_data or {"tables": [], "browse": None, "audit": []}
         return _db_tab(
@@ -2410,9 +2863,14 @@ def render_admin_html(
     totals = dashboard["totals"]
     tab = filters.get("tab") or "date"
     is_db = tab == "db"
+    is_audit = tab == "audit"
     is_analytics = tab == "analytics"
     is_events = tab == "events"
-    filters = _normalize_event_filter(dashboard, filters) if not is_analytics and not is_events else filters
+    filters = (
+        _normalize_event_filter(dashboard, filters)
+        if not is_analytics and not is_events and not is_db and not is_audit
+        else filters
+    )
     date_value = _date_to_input(filters.get("date", ""))
     date_input = '<input name="date" type="date" value="{}">'.format(_h(date_value))
     event_select = _event_select(dashboard, filters)
@@ -2420,7 +2878,7 @@ def render_admin_html(
     hidden_sort = f'<input type="hidden" name="sort" value="{_h(filters.get("sort"))}">' if filters.get("sort") else ""
     hidden_order = f'<input type="hidden" name="order" value="{_h(filters.get("order"))}">' if filters.get("sort") else ""
     summary_html = ""
-    show_booking_chrome = tab in {"date", "bookings", "users"}
+    show_booking_chrome = tab in {"date", "bookings"}
     if show_booking_chrome:
         summary_block = ""
         if tab in {"date", "bookings"}:
@@ -2446,7 +2904,11 @@ def render_admin_html(
         <a class="pill" href="/admin?tab={_h(filters.get('tab') or 'date')}">Сбросить</a>
       </form>
     </div>"""
-    refresh_meta = "" if is_db or is_analytics or is_events else '<meta http-equiv="refresh" content="30">'
+    refresh_meta = (
+        ""
+        if is_db or is_audit or is_analytics or is_events or tab == "users"
+        else '<meta http-equiv="refresh" content="30">'
+    )
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -2509,6 +2971,18 @@ def render_admin_html(
     .tone-cmd-help .command-block-cmd {{ color:#7e22ce; }}
     .tone-cmd-channel {{ background:#f0fdf4; border-color:#bbf7d0; }}
     .tone-cmd-channel .command-block-cmd {{ color:#15803d; }}
+    .users-filters {{ margin:12px 0 14px; }}
+    .users-search-form {{
+      display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px;
+    }}
+    .users-search-form input[type="search"] {{
+      flex:1 1 260px; min-width:200px; height:42px; padding:0 12px;
+      border:1px solid var(--line); border-radius:10px; font:inherit;
+    }}
+    .users-pager {{
+      display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+      margin:10px 0 12px;
+    }}
     .events-subtabs {{ display:flex; gap:8px; flex-wrap:wrap; }}
     .events-filters {{ margin-bottom:16px; }}
     .events-toolbar {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:12px 0; }}
@@ -2635,6 +3109,91 @@ def render_admin_html(
     .events-raffle-badge {{
       display:inline-block; margin-left:6px; padding:2px 7px; border-radius:999px;
       background:#fef3c7; color:#92400e; font-size:11px; font-weight:600;
+    }}
+    @media (max-width: 820px) {{
+      body.tab-events main {{ padding-bottom:88px; }}
+      body.tab-events .analytics-section > .muted {{ font-size:13px; }}
+      .events-table-scroll-top {{ display:none; }}
+      .events-table-wrap {{ overflow:visible; }}
+      table.events-edit {{
+        display:block; min-width:0; width:100%; table-layout:auto;
+      }}
+      table.events-edit thead {{ display:none; }}
+      table.events-edit tbody {{ display:block; }}
+      table.events-edit tr {{
+        display:block; background:#fff; border:1px solid var(--line);
+        border-radius:14px; padding:12px 12px 8px; margin:0 0 12px;
+        box-shadow:0 4px 14px rgba(15,23,42,.04);
+      }}
+      table.events-edit tr.events-row-new {{
+        border-color:#f6e05e; background:#fffbeb;
+      }}
+      table.events-edit td {{
+        display:grid; grid-template-columns:84px minmax(0,1fr); gap:8px 10px;
+        align-items:start; width:auto !important; max-width:none;
+        padding:8px 0; border:0; border-bottom:1px solid #f1f5f9;
+      }}
+      table.events-edit td:last-child {{ border-bottom:0; }}
+      table.events-edit td::before {{
+        content:attr(data-label); font-size:12px; font-weight:700;
+        color:var(--muted); line-height:1.3; padding-top:10px;
+      }}
+      table.events-edit td.events-id {{
+        grid-template-columns:84px auto 1fr; align-items:center;
+      }}
+      table.events-edit .events-weekday {{ margin:0; }}
+      table.events-edit input,
+      table.events-edit input[type="date"],
+      table.events-edit input[type="time"],
+      table.events-edit input[name="e_location"],
+      table.events-edit input[name="e_price"],
+      table.events-edit input[name="e_seats"],
+      table.events-edit input.events-grow,
+      table.events-edit input.events-grow:focus,
+      table.events-edit input.events-grow.events-grow-open {{
+        width:100% !important; max-width:none !important;
+        min-height:44px; font-size:16px; padding:10px 12px;
+        white-space:normal; overflow:visible; text-overflow:clip;
+        position:static; box-shadow:none;
+      }}
+      .events-tpls {{ flex-wrap:wrap; overflow:visible; margin-top:8px; gap:6px; }}
+      .events-tpl {{ padding:8px 12px; font-size:13px; }}
+      table.events-edit td.events-del {{
+        display:flex; flex-wrap:wrap; gap:10px 14px; align-items:center;
+        padding-top:12px; margin-top:4px; border-top:1px dashed #e2e8f0;
+        border-bottom:0;
+      }}
+      table.events-edit td.events-del::before {{
+        width:100%; padding-top:0; flex:0 0 100%;
+      }}
+      table.events-edit .events-del label {{
+        display:inline-flex; align-items:center; gap:8px;
+        min-height:44px; font-size:15px; padding:0 4px;
+      }}
+      table.events-edit .events-del input[type="checkbox"] {{
+        width:20px; height:20px; min-height:0; padding:0;
+      }}
+      .events-tickets-link {{ min-height:40px; display:inline-flex; align-items:center; }}
+      .events-toolbar:not(.events-toolbar-bottom) {{ display:none; }}
+      .events-toolbar-bottom {{
+        position:fixed; left:0; right:0; bottom:0; z-index:40;
+        margin:0; padding:10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+        background:rgba(255,255,255,.96); border-top:1px solid var(--line);
+        box-shadow:0 -8px 24px rgba(15,23,42,.08);
+        display:flex; gap:8px; align-items:center; flex-wrap:nowrap;
+      }}
+      .events-toolbar-bottom .events-update-btn {{
+        flex:1 1 auto; min-height:46px; font-size:16px; font-weight:700;
+      }}
+      .events-toolbar-bottom .pill {{
+        min-height:46px; display:inline-flex; align-items:center; padding:10px 12px;
+      }}
+      .events-toolbar-bottom .muted {{ font-size:12px; white-space:nowrap; }}
+      .events-notify-audience {{ flex-direction:column; gap:10px; }}
+      .events-notify-audience label {{
+        display:flex; align-items:center; gap:10px; min-height:40px; font-size:15px;
+      }}
+      .events-notify-box textarea {{ max-width:none; font-size:16px; }}
     }}
     .metric.tone-bot-start {{
       background:#eef2ff; border-color:#c7d2fe; color:#312e81;
@@ -2771,6 +3330,31 @@ def render_admin_html(
     }}
     .screen-card-nav {{ margin-top:8px; font-size:11px; }}
     .screen-carousel-hint {{ margin:0; font-size:12px; }}
+    .audit-feed h2 {{ margin:0 0 6px; }}
+    .audit-list {{ display:grid; gap:10px; margin-top:14px; }}
+    .audit-item {{
+      background:#fff; border:1px solid var(--line); border-left-width:4px;
+      border-radius:14px; padding:12px 14px;
+    }}
+    .audit-item--save {{ border-left-color:#2563eb; }}
+    .audit-item--restore {{ border-left-color:#0d9488; }}
+    .audit-item--notify {{ border-left-color:#d97706; }}
+    .audit-item--cancel {{ border-left-color:#ef4444; }}
+    .audit-item--ticket {{ border-left-color:#7c3aed; }}
+    .audit-item--login {{ border-left-color:#94a3b8; }}
+    .audit-item--other {{ border-left-color:#64748b; }}
+    .audit-item-top {{ display:flex; justify-content:space-between; gap:10px; align-items:center; }}
+    .audit-role {{
+      display:inline-block; font-size:11px; font-weight:700; letter-spacing:.02em;
+      padding:3px 8px; border-radius:999px; background:#f1f5f9; color:#334155;
+    }}
+    .audit-role--owner {{ background:#111827; color:#fff; }}
+    .audit-role--client {{ background:#dbeafe; color:#1d4ed8; }}
+    .audit-role--manager {{ background:#ffedd5; color:#c2410c; }}
+    .audit-when {{ font-size:12px; white-space:nowrap; }}
+    .audit-item-title {{ margin:8px 0 0; font-size:15px; font-weight:700; line-height:1.35; }}
+    .audit-item-details {{ margin:6px 0 0; font-size:13px; color:var(--muted); line-height:1.4; }}
+    .audit-empty {{ margin:8px 0 0; }}
     .ticket-card .ticket-loc {{ white-space:normal; word-break:break-word; }}
     .ticket-card-note {{
       margin:8px 0 0; padding:8px 10px; border-radius:10px; font-size:12px; line-height:1.4;
@@ -2994,6 +3578,7 @@ def _filters_from_request(request: web.Request) -> dict:
         "all": "1" if all_period else "",
         "ef": ef,
         "tickets": request.query.get("tickets", "").strip(),
+        "q": request.query.get("q", "").strip(),
     }
 
 
@@ -3059,7 +3644,7 @@ def _can_view_db(request: web.Request, config: AdminConfig) -> bool:
 
 
 def _can_view_ops(request: web.Request, config: AdminConfig) -> bool:
-    """Bookings / users / analytics (not events-only manager)."""
+    """Full ops: users / bookings / analytics / journal (not manager)."""
     return _admin_role(request, config) in {"owner", "client"}
 
 
@@ -3139,11 +3724,11 @@ async def admin_page(request: web.Request) -> web.Response:
         filters["status"] = ""
     if filters.get("format") and filters["format"] not in FORMAT_OPTIONS:
         filters["format"] = ""
-    if filters.get("tab") not in {"date", "bookings", "users", "analytics", "events", "db"}:
+    if filters.get("tab") not in {"date", "bookings", "users", "analytics", "events", "audit", "db"}:
         filters["tab"] = "date"
-    # Manager: only «Мероприятия». Client/owner: ops tabs, tickets only for owner.
+    # Manager: «Мероприятия» + «По дате». Client/owner: full ops; tickets only for owner.
     if not can_view_ops:
-        if filters.get("tab") != "events":
+        if filters.get("tab") not in {"events", "date"}:
             raise web.HTTPFound("/admin?tab=events")
         filters["tickets"] = ""
     elif filters.get("tab") == "db" and not can_view_db:
@@ -3166,7 +3751,13 @@ async def admin_page(request: web.Request) -> web.Response:
         "users": {},
         "totals": {"events": 0, "bookings": 0, "reserved_guests": 0, "confirmed_guests": 0},
     }
-    if filters.get("tab") == "db":
+    if filters.get("tab") == "audit":
+        from bot.db.admin_audit import fetch_admin_audit
+
+        audit_rows = await loop.run_in_executor(None, fetch_admin_audit, 120)
+        db_data = {"audit": audit_rows}
+        dashboard = empty_dashboard
+    elif filters.get("tab") == "db":
         from bot.db.admin_audit import fetch_admin_audit
 
         tables = await loop.run_in_executor(None, list_db_tables, config)
@@ -3231,19 +3822,52 @@ async def admin_page(request: web.Request) -> web.Response:
                 events_flash += f" ({err[:200]})"
         else:
             events_flash = ""
-    else:
-        # With a date selected, load all shows that day (even empty) so the show picker is complete.
-        include_empty_events = bool(filters.get("date")) and filters.get("tab") in {"date", "bookings"}
-        # Users tab needs every booking to keep the selected guest visible when status filter changes.
-        fetch_filters = dict(filters)
-        if filters.get("tab") == "users":
-            fetch_filters["status"] = ""
-        rows = await loop.run_in_executor(None, fetch_admin_rows, config, fetch_filters, include_empty_events)
-        dashboard = build_dashboard(rows)
-        if filters.get("tab") == "users":
-            directory = await loop.run_in_executor(None, fetch_directory_users, config)
-            merge_directory_users(dashboard, directory)
-        if filters.get("tab") == "users" and saved_flag == "resend":
+    elif filters.get("tab") == "users":
+        def _load_users_directory():
+            page_data = fetch_users_page(
+                config,
+                q=filters.get("q") or "",
+                page=filters.get("page") or 1,
+                status=filters.get("status") or "",
+            )
+            users_map = {u["key"]: u for u in page_data["users"]}
+            list_keys = [u["key"] for u in page_data["users"]]
+            selected_key = (filters.get("u") or "").strip()
+            selected_uid = int(selected_key) if selected_key.isdigit() else None
+            if selected_uid and selected_key not in users_map:
+                one = fetch_one_directory_user(config, selected_uid)
+                if one:
+                    users_map[one["key"]] = one
+            if selected_uid and selected_key in users_map:
+                booking_rows = fetch_user_booking_rows(config, selected_uid)
+                detail_dash = build_dashboard(booking_rows)
+                detail_user = (detail_dash.get("users") or {}).get(selected_key)
+                if detail_user:
+                    users_map[selected_key] = detail_user
+                elif selected_key in users_map:
+                    # гость без броней — оставляем карточку из directory
+                    pass
+            return {
+                "events": [],
+                "bookings": [],
+                "users": users_map,
+                "totals": {
+                    "events": 0,
+                    "bookings": 0,
+                    "reserved_guests": 0,
+                    "confirmed_guests": 0,
+                },
+                "users_meta": {
+                    "total": page_data["total"],
+                    "page": page_data["page"],
+                    "pages": page_data["pages"],
+                    "q": page_data["q"],
+                    "list_keys": list_keys,
+                },
+            }
+
+        dashboard = await loop.run_in_executor(None, _load_users_directory)
+        if saved_flag == "resend":
             ok = request.query.get("ok") or "0"
             fail = request.query.get("fail") or "0"
             err = (request.query.get("err") or "").strip()
@@ -3252,17 +3876,35 @@ async def admin_page(request: web.Request) -> web.Response:
                 if ok == "1" and fail == "0"
                 else f"Не удалось переотправить билет{': ' + err[:200] if err else '.'}"
             )
+    else:
+        # With a date selected, load all shows that day (even empty) so the show picker is complete.
+        include_empty_events = bool(filters.get("date")) and filters.get("tab") in {"date", "bookings"}
+        fetch_filters = dict(filters)
+        rows = await loop.run_in_executor(
+            None, fetch_admin_rows, config, fetch_filters, include_empty_events
+        )
+        dashboard = build_dashboard(rows)
     user_extras = None
     user_stage_by_user: dict = {}
     if filters.get("tab") == "users":
+        meta = dashboard.get("users_meta") or {}
         user_ids = []
-        for u in (dashboard.get("users") or {}).values():
+        for key in meta.get("list_keys") or []:
+            u = (dashboard.get("users") or {}).get(key) or {}
             uid = u.get("user_id")
             if uid:
                 try:
                     user_ids.append(int(uid))
                 except (TypeError, ValueError):
                     pass
+        selected_key = (filters.get("u") or "").strip()
+        if selected_key and selected_key.isdigit():
+            try:
+                sid = int(selected_key)
+            except (TypeError, ValueError):
+                sid = None
+            if sid is not None and sid not in user_ids:
+                user_ids.append(sid)
 
         def _load_user_stages():
             from bot.db.analytics import fetch_users_last_events
@@ -3271,8 +3913,8 @@ async def admin_page(request: web.Request) -> web.Response:
 
         user_stage_by_user = await loop.run_in_executor(None, _load_user_stages)
 
-        if filters.get("u"):
-            selected = (dashboard.get("users") or {}).get(filters.get("u") or "")
+        if selected_key:
+            selected = (dashboard.get("users") or {}).get(selected_key)
             if selected:
                 telegram_id = selected.get("telegram_id")
                 vk_id = selected.get("vk_id")
@@ -3280,12 +3922,32 @@ async def admin_page(request: web.Request) -> web.Response:
 
                 def _load_user_extras():
                     from bot.db.analytics import fetch_user_activity, fetch_user_activity_counts
-                    from bot.db.crud import get_raffle_submissions_for_telegram, get_user_raffle_flags
+                    from bot.db.crud import (
+                        get_raffle_submissions_for_telegram,
+                        get_raffle_submissions_for_vk,
+                        get_user_raffle_flags,
+                    )
 
                     tid = int(telegram_id) if telegram_id else None
                     vid = int(vk_id) if vk_id else None
                     uid = int(user_id) if user_id else None
                     last_event = user_stage_by_user.get(uid) if uid is not None else None
+                    submissions = []
+                    if tid:
+                        submissions.extend(get_raffle_submissions_for_telegram(tid))
+                    if vid:
+                        submissions.extend(get_raffle_submissions_for_vk(vid))
+                    if tid and vid and submissions:
+                        by_id = {}
+                        for row in submissions:
+                            sid = row.get("id")
+                            if sid is not None:
+                                by_id[sid] = row
+                        submissions = sorted(
+                            by_id.values(),
+                            key=lambda r: int(r.get("id") or 0),
+                            reverse=True,
+                        )[:20]
                     return {
                         "activity_counts": fetch_user_activity_counts(
                             user_id=uid, telegram_id=tid, vk_id=vid
@@ -3293,8 +3955,10 @@ async def admin_page(request: web.Request) -> web.Response:
                         "activity_recent": fetch_user_activity(
                             user_id=uid, telegram_id=tid, vk_id=vid, limit=20
                         ),
-                        "submissions": get_raffle_submissions_for_telegram(tid) if tid else [],
-                        "flags": get_user_raffle_flags(telegram_id=tid, user_id=uid),
+                        "submissions": submissions,
+                        "flags": get_user_raffle_flags(
+                            telegram_id=tid, user_id=uid, vk_id=vid
+                        ),
                         "last_event": last_event,
                     }
 

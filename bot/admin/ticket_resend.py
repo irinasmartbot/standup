@@ -149,18 +149,15 @@ def _ticket_bytes(row: dict) -> bytes:
     return buf.getvalue()
 
 
-def _caption(row: dict, *, updated: bool, extra_note: str = "") -> str:
+def _caption(row: dict, *, updated: bool) -> str:
     place = f"{row.get('location') or ''}, {row.get('address') or ''}".strip(", ")
     head = (
         "Обновлённый билет\n\nДанные мероприятия изменились — актуальный билет ниже.\n\n"
         if updated
         else "Билет\n\n"
     )
-    note = (extra_note or "").strip()
-    note_block = f"{escape(note)}\n\n" if note else ""
     return (
         f"{head}"
-        f"{note_block}"
         f"<b>Данные по билету:</b>\n\n"
         f"<b>Ваше имя:</b> {escape(row.get('name') or '')}\n"
         f"<b>Дата:</b> {escape(row.get('event_date') or '')}\n"
@@ -192,6 +189,9 @@ async def _resend_ticket_telegram(row: dict, *, updated: bool, extra_note: str =
 
     bot = Bot(token=token)
     try:
+        note = (extra_note or "").strip()
+        if note:
+            await bot.send_message(chat_id=int(telegram_id), text=note)
         photo = BufferedInputFile(
             _ticket_bytes(row),
             filename=f"ticket_{booking_id}.jpg",
@@ -199,7 +199,7 @@ async def _resend_ticket_telegram(row: dict, *, updated: bool, extra_note: str =
         msg = await bot.send_photo(
             chat_id=int(telegram_id),
             photo=photo,
-            caption=_caption(row, updated=updated, extra_note=extra_note),
+            caption=_caption(row, updated=updated),
             parse_mode="HTML",
         )
         save_ticket_message_id(booking_id, msg.message_id)
@@ -217,7 +217,7 @@ async def _resend_ticket_vk(row: dict, *, updated: bool, extra_note: str = "") -
     from bot.db.crud import save_ticket_message_id
     from bot.vk.client import VKClient
     from bot.vk.config import load_vk_settings
-    from bot.vk.keyboards import format_vk_text
+    from bot.vk.formatting import format_vk_text
 
     settings = load_vk_settings()
     if not settings.is_configured:
@@ -233,11 +233,8 @@ async def _resend_ticket_vk(row: dict, *, updated: bool, extra_note: str = "") -
         if updated
         else "Билет\n\n"
     )
-    note = (extra_note or "").strip()
-    note_block = f"{note}\n\n" if note else ""
     caption = format_vk_text(
         f"{head}"
-        f"{note_block}"
         f"<b>Данные по билету:</b>\n\n"
         f"<b>Ваше имя:</b> {row.get('name') or ''}\n"
         f"<b>Дата:</b> {row.get('event_date') or ''}\n"
@@ -247,6 +244,9 @@ async def _resend_ticket_vk(row: dict, *, updated: bool, extra_note: str = "") -
     )
     client = VKClient(settings)
     peer_id = int(vk_id)
+    note = (extra_note or "").strip()
+    if note:
+        await client.send_message(peer_id, note)
     attachment = await client.upload_message_photo(
         peer_id,
         _ticket_bytes(row),

@@ -106,25 +106,11 @@ def _row_html(
     host = "" if blank else (e.get("host") or "")
     weekday = "" if blank else (e.get("weekday") or "")
 
-    paid_cells = ""
-    if paid:
-        paid_cells = (
-            f'<td class="events-col-price"><input name="e_price" type="number" min="0" step="1" value="{_h(price)}" placeholder="0"></td>'
-            f'<td class="events-col-url"><input class="events-grow" name="e_payment" value="{_h(pay)}" placeholder="https://…" title="{_h(pay)}"></td>'
-            f'<td class="events-col-host"><input class="events-grow" name="e_host" value="{_h(host)}" placeholder="Кто в составе" title="{_h(host)}"></td>'
-        )
-    else:
-        paid_cells = (
-            '<input type="hidden" name="e_price" value="0">'
-            '<input type="hidden" name="e_payment" value="">'
-            '<input type="hidden" name="e_host" value="">'
-        )
-
     seats_cell = ""
     if show_seats:
         seats_cell = (
-            f'<td class="events-col-seats">'
-            f'<input name="e_seats" type="number" min="0" value="{_h(seats)}" placeholder="мест"></td>'
+            f'<td class="events-col-seats" data-label="Мест">'
+            f'<input name="e_seats" type="number" min="0" value="{_h(seats)}" placeholder="мест" inputmode="numeric"></td>'
         )
     else:
         seats_cell = f'<input type="hidden" name="e_seats" value="{_h(seats or "0")}">'
@@ -138,14 +124,14 @@ def _row_html(
             )
         del_class = "events-del" + (" events-del-with-tickets" if show_tickets else "")
         delete_cell = (
-            f'<td class="{del_class}">'
+            f'<td class="{del_class}" data-label="Действия">'
             f'<label><input type="checkbox" name="e_delete" value="{_h(eid)}"> скрыть</label>'
             f'<label class="events-purge"><input type="checkbox" name="e_purge" value="{_h(eid)}"> удалить</label>'
             f"{tickets_link}"
             f"</td>"
         )
     else:
-        delete_cell = '<td class="muted">новая</td>'
+        delete_cell = '<td class="muted events-del events-del-new" data-label="Статус">новая</td>'
 
     # datalist once per row is redundant; keep one global in table footer via first row only — use shared ids
     loc_presets = "".join(
@@ -158,23 +144,42 @@ def _row_html(
         for t in TIME_PRESETS
     )
 
+    if paid:
+        paid_cells = (
+            f'<td class="events-col-price events-col-more" data-label="Цена">'
+            f'<input name="e_price" type="number" min="0" step="1" value="{_h(price)}" placeholder="0" inputmode="numeric"></td>'
+            f'<td class="events-col-url events-col-more" data-label="Оплата">'
+            f'<input class="events-grow" name="e_payment" value="{_h(pay)}" placeholder="https://…" title="{_h(pay)}"></td>'
+            f'<td class="events-col-host events-col-more" data-label="Состав">'
+            f'<input class="events-grow" name="e_host" value="{_h(host)}" placeholder="Кто в составе" title="{_h(host)}"></td>'
+        )
+    else:
+        paid_cells = (
+            '<input type="hidden" name="e_price" value="0">'
+            '<input type="hidden" name="e_payment" value="">'
+            '<input type="hidden" name="e_host" value="">'
+        )
+
     return (
         "<tr" + (' class="events-row-new"' if blank else "") + ">"
-        f'<td class="events-id"><input type="hidden" name="e_id" value="{_h(eid)}">'
+        f'<td class="events-id" data-label="ID"><input type="hidden" name="e_id" value="{_h(eid)}">'
         f'<span class="muted">{_h(eid or "—")}</span>'
         f'<div class="muted events-weekday">{_h(weekday)}</div></td>'
-        f'<td class="events-col-date"><input name="e_date" type="date" value="{_h(date_val)}"></td>'
-        f'<td class="events-col-time events-time-cell">'
+        f'<td class="events-col-date" data-label="Дата"><input name="e_date" type="date" value="{_h(date_val)}"></td>'
+        f'<td class="events-col-time events-time-cell" data-label="Время">'
         f'<input name="e_time" type="time" value="{_h(time_val)}" list="events-time-presets">'
         f'<div class="events-tpls">{time_presets}</div></td>'
-        f'<td class="events-col-loc events-loc-cell">'
+        f'<td class="events-col-loc events-loc-cell" data-label="Площадка">'
         f'<input name="e_location" value="{_h(loc)}" placeholder="Площадка" list="events-location-presets">'
         f'<div class="events-tpls">{loc_presets}</div></td>'
-        f'<td class="events-col-addr"><input class="events-grow" name="e_address" value="{_h(addr)}" placeholder="Адрес" title="{_h(addr)}"></td>'
+        f'<td class="events-col-addr" data-label="Адрес">'
+        f'<input class="events-grow" name="e_address" value="{_h(addr)}" placeholder="Адрес" title="{_h(addr)}"></td>'
         f"{seats_cell}"
         f"{paid_cells}"
-        f'<td class="events-col-desc"><input class="events-grow" name="e_description" value="{_h(desc)}" placeholder="Описание" title="{_h(desc)}"></td>'
-        f'<td class="events-col-url"><input class="events-grow" name="e_image" value="{_h(image)}" placeholder="URL картинки" title="{_h(image)}"></td>'
+        f'<td class="events-col-desc events-col-more" data-label="Описание">'
+        f'<input class="events-grow" name="e_description" value="{_h(desc)}" placeholder="Описание" title="{_h(desc)}"></td>'
+        f'<td class="events-col-url events-col-more" data-label="Картинка">'
+        f'<input class="events-grow" name="e_image" value="{_h(image)}" placeholder="URL картинки" title="{_h(image)}"></td>'
         f"{delete_cell}"
         "</tr>"
     )
@@ -277,7 +282,7 @@ def render_events_tab(
             "<b>Смена времени или площадки:</b> правьте нужную строку и нажмите «Обновить» — "
             "изменения появятся в боте.<br>"
             "«Скрыть» убирает из бота и <b>отменяет активные брони/билеты</b> по этому шоу "
-            "(напоминания тоже прекращаются); «удалить» — насовсем (только если нет броней). "
+            "(напоминания тоже прекращаются); «удалить» — насовсем. "
             "Вернуть скрытые — в блоке «Скрытые».</p>"
             f"{always_update}"
         )
@@ -288,7 +293,7 @@ def render_events_tab(
             "<b>Смена времени или площадки:</b> правьте нужную строку и нажмите «Обновить» — "
             "изменения появятся в боте.<br>"
             "«Скрыть» убирает из бота и <b>отменяет активные брони/билеты</b> по этому шоу "
-            "(напоминания тоже прекращаются); «удалить» — насовсем (только если нет броней). "
+            "(напоминания тоже прекращаются); «удалить» — насовсем. "
             "Вернуть скрытые — в блоке «Скрытые».</p>"
             f"{always_update}"
         )
