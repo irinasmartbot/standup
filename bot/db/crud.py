@@ -2130,7 +2130,7 @@ def get_manager_stata_dates(limit: int = 16) -> list[str]:
 
 
 def get_manager_stata_bookings_for_date(event_date: str) -> list[dict]:
-    """Активные брони проверки материала на дату, по шоу (время → площадка)."""
+    """Подтверждённые брони проверки (билет забран) на дату, по шоу."""
     if not _use_postgres():
         return []
     try:
@@ -2157,7 +2157,7 @@ def get_manager_stata_bookings_for_date(event_date: str) -> list[dict]:
                 WHERE e.event_date = %s
                   AND e.format = 'proverka'
                   AND b.format = 'proverka'
-                  AND b.status IN ('booked', 'confirmed')
+                  AND b.status = 'confirmed'
                 ORDER BY e.event_time, e.location, b.id
                 """,
                 (parsed,),

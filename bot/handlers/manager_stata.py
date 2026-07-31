@@ -1,4 +1,4 @@
-"""Списки активных броней «Проверка» для менеджера: ?start=new_stata."""
+"""Списки подтверждённых броней «Проверка» для менеджера: ?start=new_stata."""
 
 from __future__ import annotations
 
@@ -17,18 +17,16 @@ from bot.db.crud import get_manager_stata_bookings_for_date, get_manager_stata_d
 router = Router()
 
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
-STATUS_LABEL = {
-    "booked": "бронь",
-    "confirmed": "билет",
-}
 TG_TEXT_LIMIT = 3500
+NAME_COL_MIN = 12
+NAME_COL_MAX = 22
 
 CHOOSE_DATE_TEXT = (
-    "Выбери дату, на которую нужно получить список активных броней "
-    "на проверку материала.\n\n"
+    "Выбери дату, на которую нужно получить список гостей "
+    "с билетом на проверку материала.\n\n"
     "Если нужной даты нет — напиши в формате DD.MM.YYYY"
 )
-EMPTY_TEXT = "Нет активных броней на указанную дату"
+EMPTY_TEXT = "Нет подтверждённых броней на указанную дату"
 ACCESS_DENIED = "Нет доступа к этой команде."
 
 
@@ -64,60 +62,96 @@ def _phone_digits(phone: str) -> str:
     return re.sub(r"\D+", "", phone or "")
 
 
-def _guest_line(row: dict) -> str:
+def _tel_href(digits: str) -> str | None:
+    if not digits:
+        return None
+    d = digits
+    if len(d) == 11 and d.startswith("8"):
+        d = "7" + d[1:]
+    if not d.startswith("+"):
+        d = "+" + d
+    return f"tel:{d}"
+
+
+def _phone_html(phone: str) -> str:
+    digits = _phone_digits(phone)
+    if not digits:
+        return "—"
+    href = _tel_href(digits)
+    label = escape(digits)
+    if not href:
+        return label
+    return f'<a href="{escape(href, quote=True)}">{label}</a>'
+
+
+def _name_width(rows: list[dict]) -> int:
+    lengths = [len((r.get("name") or "").strip() or "—") for r in rows]
+    if not lengths:
+        return NAME_COL_MIN
+    return max(NAME_COL_MIN, min(NAME_COL_MAX, max(lengths)))
+
+
+def _guest_line(row: dict, name_w: int) -> str:
     name = (row.get("name") or "").strip() or "—"
-    phone = _phone_digits(row.get("phone") or "") or "—"
+    if len(name) > name_w:
+        name = name[: name_w - 1] + "…"
+    pad = " " * max(0, name_w - len(name))
     guests = int(row.get("guests") or 0)
-    status = STATUS_LABEL.get(row.get("status") or "", row.get("status") or "бронь")
-    return f"{escape(name)} {escape(phone)} {guests} / {escape(status)}"
+    return f"<code>{escape(name)}{pad}</code> {_phone_html(row.get('phone') or '')}  <code>{guests}</code>"
 
 
 def _show_header(row: dict) -> str:
     time = (row.get("event_time") or "").strip()
     location = (row.get("location") or "").strip()
     address = (row.get("address") or "").strip()
-    venue = ", ".join(part for part in (location, address) if part)
+    if address and location and address.lower().startswith(location.lower()):
+        venue = address
+    elif location and address:
+        venue = f"{location}, {address}"
+    else:
+        venue = location or address
     if time and venue:
-        return f"{escape(time)} - {escape(venue)}"
+        return f"<b>{escape(time)} - {escape(venue)}</b>"
     if time:
-        return escape(time)
-    return escape(venue or "Шоу")
+        return f"<b>{escape(time)}</b>"
+    return f"<b>{escape(venue or 'Шоу')}</b>"
 
 
 def build_stata_report(rows: list[dict]) -> str:
     if not rows:
         return EMPTY_TEXT
 
-    blocks: list[str] = []
+    groups: list[tuple[dict, list[dict]]] = []
     current_key = None
-    current_lines: list[str] = []
-    current_guests = 0
-    day_guests = 0
-
-    def flush():
-        nonlocal current_lines, current_guests
-        if not current_lines:
-            return
-        current_lines.append(f"Итого: {current_guests}")
-        blocks.append("\n".join(current_lines))
-        current_lines = []
-        current_guests = 0
+    current_header_row = None
+    current_rows: list[dict] = []
 
     for row in rows:
         key = (row.get("event_id"), row.get("event_time"), row.get("location"), row.get("address"))
         if key != current_key:
-            flush()
+            if current_header_row is not None:
+                groups.append((current_header_row, current_rows))
             current_key = key
-            current_lines = [_show_header(row), ""]
-        current_lines.append(_guest_line(row))
-        guests = int(row.get("guests") or 0)
-        current_guests += guests
-        day_guests += guests
+            current_header_row = row
+            current_rows = [row]
+        else:
+            current_rows.append(row)
+    if current_header_row is not None:
+        groups.append((current_header_row, current_rows))
 
-    flush()
+    blocks: list[str] = []
+    day_guests = 0
+    for header_row, group_rows in groups:
+        name_w = _name_width(group_rows)
+        guests_sum = sum(int(r.get("guests") or 0) for r in group_rows)
+        day_guests += guests_sum
+        lines = [_show_header(header_row), ""]
+        lines.extend(_guest_line(r, name_w) for r in group_rows)
+        lines.append(f"<b>Итого:</b> {guests_sum}")
+        blocks.append("\n".join(lines))
 
     if len(blocks) > 1:
-        blocks.append(f"Всего за день: {day_guests}")
+        blocks.append(f"<b>Всего за день:</b> {day_guests}")
     return "\n\n".join(blocks)
 
 
@@ -136,6 +170,24 @@ def _split_text(text: str, limit: int = TG_TEXT_LIMIT) -> list[str]:
         chunks.append(rest[:cut].rstrip())
         rest = rest[cut:].lstrip()
     return chunks
+
+
+async def _answer_html(message: Message, text: str, reply_markup=None):
+    await message.answer(
+        text,
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+async def _edit_html(message: Message, text: str, reply_markup=None):
+    await message.edit_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 
 async def send_manager_stata_start(message: Message, state: FSMContext):
@@ -177,7 +229,7 @@ async def _send_report(message: Message, state: FSMContext, event_date: str, *, 
 
     if edit and len(chunks) == 1:
         try:
-            await message.edit_text(chunks[0], reply_markup=markup)
+            await _edit_html(message, chunks[0], reply_markup=markup)
             return
         except Exception as exc:
             if "message is not modified" in str(exc).lower():
@@ -185,17 +237,17 @@ async def _send_report(message: Message, state: FSMContext, event_date: str, *, 
 
     if edit and len(chunks) > 1:
         try:
-            await message.edit_text(chunks[0])
+            await _edit_html(message, chunks[0])
         except Exception:
-            await message.answer(chunks[0])
+            await _answer_html(message, chunks[0])
         for idx, chunk in enumerate(chunks[1:], start=1):
             is_last = idx == len(chunks) - 1
-            await message.answer(chunk, reply_markup=markup if is_last else None)
+            await _answer_html(message, chunk, reply_markup=markup if is_last else None)
         return
 
     for idx, chunk in enumerate(chunks):
         is_last = idx == len(chunks) - 1
-        await message.answer(chunk, reply_markup=markup if is_last else None)
+        await _answer_html(message, chunk, reply_markup=markup if is_last else None)
 
 
 @router.callback_query(F.data == "nst:back")
