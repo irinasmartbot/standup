@@ -454,7 +454,8 @@ def render_events_tab(
         <b>Вы начали редактирование.</b> Чтобы изменения появились в боте, нажмите синюю кнопку «Обновить».
       </p>
       {toolbar}
-      <form method="post" action="/admin/events/save" class="events-form" id="events-save-form" data-events-draft-key="events-draft:{_h(fmt)}">
+      <form method="post" action="/admin/events/save" class="events-form" id="events-save-form"
+            data-events-draft-key="events-draft:{_h(fmt)}" data-events-paid="{1 if paid else 0}">
         <input type="hidden" name="ef" value="{_h(fmt)}">
         {_table(bundle.get("active") or [], paid=paid, blank_rows=5, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)}
         {"" if not can_resend_tickets else '''
@@ -702,9 +703,6 @@ def render_events_tab(
           showEditHint();
           saveDraft(form);
         }});
-        form.addEventListener("submit", function () {{
-          clearDraft(form);
-        }});
         form.addEventListener("click", function (ev) {{
           var btn = ev.target.closest("[data-events-tpl]");
           if (!btn || !form.contains(btn)) return;
@@ -811,23 +809,104 @@ def render_events_tab(
       if (notifyMsg) {{
         notifyMsg.addEventListener("input", scheduleImpact);
       }}
+      function isHttpUrl(value) {{
+        var s = (value || "").trim();
+        if (!s) return false;
+        try {{
+          var u = new URL(s);
+          return u.protocol === "http:" || u.protocol === "https:";
+        }} catch (e) {{
+          return /^https?:\\/\\/\\S+/i.test(s);
+        }}
+      }}
+      function rowCaption(tr, index) {{
+        var val = function (name) {{
+          var el = tr.querySelector('[name="' + name + '"]');
+          return el ? (el.value || "").trim() : "";
+        }};
+        var bits = [val("e_date"), val("e_time"), val("e_location")].filter(Boolean);
+        if (bits.length) return bits.join(" · ");
+        var id = val("e_id");
+        if (id) return "#" + id;
+        return "новая строка " + index;
+      }}
+      function validateEventsForm(form) {{
+        var paid = form.getAttribute("data-events-paid") === "1";
+        var errors = [];
+        var rows = form.querySelectorAll("tbody tr");
+        rows.forEach(function (tr, idx) {{
+          var val = function (name) {{
+            var el = tr.querySelector('[name="' + name + '"]');
+            return el ? (el.value || "").trim() : "";
+          }};
+          var del = tr.querySelector('input[name="e_delete"]');
+          var pur = tr.querySelector('input[name="e_purge"]');
+          if ((del && del.checked) || (pur && pur.checked)) return;
+          var id = val("e_id");
+          var date = val("e_date");
+          var time = val("e_time");
+          var loc = val("e_location");
+          var addr = val("e_address");
+          var desc = val("e_description");
+          var image = val("e_image");
+          var price = val("e_price");
+          var pay = val("e_payment");
+          var host = val("e_host");
+          var any = date || time || loc || addr || desc || image || pay || host || price;
+          if (!id && !any) return;
+          var label = rowCaption(tr, idx + 1);
+          var missing = [];
+          if (!date) missing.push("дата");
+          if (!time) missing.push("время");
+          if (!loc) missing.push("площадка");
+          if (!addr) missing.push("адрес");
+          if (paid) {{
+            if (!price) missing.push("цена");
+            if (!pay) missing.push("оплата");
+            if (!image) missing.push("картинка");
+          }}
+          if (missing.length) {{
+            errors.push(label + ": не заполнены поля — " + missing.join(", "));
+          }}
+          if (pay && !isHttpUrl(pay)) {{
+            errors.push(label + ": «Оплата» должна быть ссылкой вида https://…");
+          }}
+          if (image && !isHttpUrl(image)) {{
+            errors.push(label + ": «Картинка» должна быть ссылкой вида https://…");
+          }}
+        }});
+        return errors;
+      }}
       var saveForm = document.getElementById("events-save-form");
       if (saveForm) {{
         saveForm.addEventListener("submit", function (ev) {{
-          var ids = selectedHideIds(saveForm);
-          if (!ids.length) return;
-          var box = impactHost ? impactHost.innerText || "" : "";
-          var summary = "Скрыть/удалить отмеченные шоу?\\n\\n"
-            + "Будут отменены активные брони и билеты по этим шоу, напоминания прекратятся.";
-          if (selectedAudience(saveForm)) {{
-            summary += "\\nТакже уйдёт сообщение выбранной группе гостей.";
-          }}
-          if (box) {{
-            summary += "\\n\\nСводка:\\n" + box.replace(/\\s+/g, " ").trim().slice(0, 500);
-          }}
-          if (!window.confirm(summary)) {{
+          var problems = validateEventsForm(saveForm);
+          if (problems.length) {{
             ev.preventDefault();
+            window.alert(
+              "Проверьте афишу перед сохранением:\\n\\n"
+              + problems.slice(0, 12).join("\\n")
+              + (problems.length > 12 ? "\\n…и ещё " + (problems.length - 12) : "")
+            );
+            return;
           }}
+          var ids = selectedHideIds(saveForm);
+          if (ids.length) {{
+            var box = impactHost ? impactHost.innerText || "" : "";
+            var summary = "Скрыть/удалить отмеченные шоу?\\n\\n"
+              + "Будут отменены активные брони и билеты по этим шоу, напоминания прекратятся.";
+            if (selectedAudience(saveForm)) {{
+              summary += "\\nТакже уйдёт сообщение выбранной группе гостей.";
+            }}
+            if (box) {{
+              summary += "\\n\\nСводка:\\n" + box.replace(/\\s+/g, " ").trim().slice(0, 500);
+            }}
+            if (!window.confirm(summary)) {{
+              ev.preventDefault();
+              return;
+            }}
+          }}
+          clearDraft(saveForm);
         }});
       }}
       scheduleImpact();

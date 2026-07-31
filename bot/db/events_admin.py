@@ -140,6 +140,19 @@ def _serialize_event(row: dict) -> dict:
     }
 
 
+def _is_http_url(value: str) -> bool:
+    raw = (value or "").strip()
+    if not raw:
+        return False
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
 def _fmt_audit_date(event_date) -> str:
     return (
         event_date.strftime("%d.%m.%Y")
@@ -431,6 +444,33 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
         max_seats = max(0, int(raw.get("max_seats") or 0))
     except (TypeError, ValueError):
         max_seats = 60 if event_format == "proverka" else 0
+
+    row_ref = f"#{event_id}" if event_id else "новая строка"
+    if image_url and not _is_http_url(image_url):
+        result["errors"].append(
+            f"{row_ref}: «Картинка» должна быть ссылкой http(s)://…"
+        )
+        return
+    if event_format in {"best", "hitloto"}:
+        if not payment_url:
+            result["errors"].append(f"{row_ref}: нужна ссылка оплаты")
+            return
+        if not _is_http_url(payment_url):
+            result["errors"].append(
+                f"{row_ref}: «Оплата» должна быть ссылкой http(s)://…"
+            )
+            return
+        if not image_url:
+            result["errors"].append(f"{row_ref}: нужна ссылка на картинку")
+            return
+        if price <= 0:
+            result["errors"].append(f"{row_ref}: укажите цену больше 0")
+            return
+    elif payment_url and not _is_http_url(payment_url):
+        result["errors"].append(
+            f"{row_ref}: «Оплата» должна быть ссылкой http(s)://…"
+        )
+        return
 
     if event_format == "proverka":
         price = 0
