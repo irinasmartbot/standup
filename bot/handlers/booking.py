@@ -244,10 +244,23 @@ async def check_format(call: CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "check_dates")
 async def check_dates(call: CallbackQuery):
-    await _delete_previous_menu_message(call)
-    kb = await check_dates_kb()
-    await _answer_with_check_photo(call.message, "Выбирай дату 👇", reply_markup=kb, track_nav=True)
+    # Сразу гасим «часики» у кнопки — иначе при медленной загрузке фото кажется, что зависло.
     await call.answer()
+    kb = await check_dates_kb()
+    text = "Выбирай дату 👇"
+    # Быстрый путь: правим текущее сообщение (карточка «уже забронировали» — текст без фото).
+    try:
+        if call.message.photo:
+            await call.message.edit_caption(caption=text, reply_markup=kb)
+        else:
+            await call.message.edit_text(text, reply_markup=kb)
+        forget_booking_nav(call.message.chat.id, call.message.message_id)
+        remember_booking_nav(call.message.chat.id, call.message.message_id)
+        return
+    except Exception:
+        pass
+    await _delete_previous_menu_message(call)
+    await _answer_with_check_photo(call.message, text, reply_markup=kb, track_nav=True)
 
 
 @router.callback_query(lambda c: c.data == "by_venue")
