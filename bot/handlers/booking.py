@@ -510,16 +510,23 @@ def _guests_pick_kb(*, prefix: str) -> object:
 
 async def _clear_reply_keyboard(message: Message) -> None:
     """Telegram не даёт совместить ReplyKeyboardRemove и inline в одном сообщении."""
-    clear = await message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
+    # Текст обязан быть непустым (ZWSP Telegram отклоняет).
+    clear = await message.answer("⌨️", reply_markup=ReplyKeyboardRemove())
     try:
         await clear.delete()
     except Exception:
         pass
 
 
-async def _ask_guests_after_phone(message: Message, state: FSMContext):
+async def _ask_guests_after_phone(
+    message: Message,
+    state: FSMContext,
+    *,
+    clear_reply: bool = False,
+):
     data = await state.get_data()
-    await _clear_reply_keyboard(message)
+    if clear_reply:
+        await _clear_reply_keyboard(message)
     ask = await message.answer(
         f"{data.get('name', '')}, напишите цифрой или выберите кнопкой, "
         f"на какое количество человек бронируете?\n\n"
@@ -535,7 +542,7 @@ async def _ask_guests_after_phone(message: Message, state: FSMContext):
 async def process_phone_contact(message: Message, state: FSMContext):
     phone = normalize_phone(message.contact.phone_number) or (message.contact.phone_number or "").strip()
     await state.update_data(phone=phone)
-    await _ask_guests_after_phone(message, state)
+    await _ask_guests_after_phone(message, state, clear_reply=True)
 
 
 @router.message(BookingState.waiting_phone)
@@ -545,7 +552,7 @@ async def process_phone_text(message: Message, state: FSMContext):
         await message.answer(PHONE_INVALID_TEXT, reply_markup=_phone_kb(), parse_mode="HTML")
         return
     await state.update_data(phone=phone)
-    await _ask_guests_after_phone(message, state)
+    await _ask_guests_after_phone(message, state, clear_reply=True)
 
 
 @router.callback_query(lambda c: c.data == "phone_use_saved")
@@ -562,7 +569,8 @@ async def phone_use_saved(call: CallbackQuery, state: FSMContext):
         await call.answer()
         return
     await state.update_data(phone=phone)
-    await _ask_guests_after_phone(call.message, state)
+    # Номер из inline-кнопки — reply-клавиатуры нет, чистить не нужно.
+    await _ask_guests_after_phone(call.message, state, clear_reply=False)
     await call.answer()
 
 
