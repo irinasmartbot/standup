@@ -184,6 +184,14 @@ def _audit_event_item(
     return item
 
 
+def _norm_audit_text(value) -> str:
+    text = str(value or "").replace("\xa0", " ").strip()
+    text = " ".join(text.split())
+    for ch in ("–", "—", "−"):
+        text = text.replace(ch, "-")
+    return text
+
+
 def _event_snapshot_row(row) -> dict:
     """Normalize a DB events row (tuple or mapping) for audit compare."""
     if row is None:
@@ -213,38 +221,65 @@ def _event_snapshot_row(row) -> dict:
             max_seats,
             status,
         ) = row
+    try:
+        price_i = int(price or 0)
+    except (TypeError, ValueError):
+        price_i = 0
+    try:
+        seats_i = int(max_seats or 0)
+    except (TypeError, ValueError):
+        seats_i = 0
     return {
         "date": _fmt_audit_date(d),
         "time": _fmt_audit_time(t),
-        "location": (loc or "").strip(),
-        "address": (address or "").strip(),
-        "description": (description or "").strip(),
-        "image_url": (image_url or "").strip(),
-        "price": int(price or 0),
-        "payment_url": (payment_url or "").strip(),
-        "host": (host or "").strip(),
-        "max_seats": int(max_seats or 0),
-        "status": (status or "").strip(),
+        "location": _norm_audit_text(loc),
+        "address": _norm_audit_text(address),
+        "description": _norm_audit_text(description),
+        "image_url": _norm_audit_text(image_url),
+        "price": price_i,
+        "payment_url": _norm_audit_text(payment_url),
+        "host": _norm_audit_text(host),
+        "max_seats": seats_i,
+        "status": _norm_audit_text(status),
     }
 
 
-def _diff_event_fields(before: dict, after: dict) -> list[str]:
-    labels = {
-        "date": "дату",
-        "time": "время",
-        "location": "площадку",
-        "address": "адрес",
-        "description": "описание",
-        "image_url": "картинку",
-        "price": "цену",
-        "payment_url": "ссылку оплаты",
-        "host": "состав",
-        "max_seats": "места",
-        "status": "статус",
-    }
+# Полный diff — решать, нужно ли UPDATE в БД.
+_SAVE_COMPARE_KEYS = (
+    "date",
+    "time",
+    "location",
+    "address",
+    "description",
+    "image_url",
+    "price",
+    "payment_url",
+    "host",
+    "max_seats",
+)
+# В журнал — только то, что видно как «какое шоу / когда / где».
+# Состав/цена/описание при массовом «Обновить» часто дают шум без смены даты.
+_AUDIT_COMPARE_KEYS = ("date", "time", "location", "address")
+_FIELD_LABELS = {
+    "date": "дату",
+    "time": "время",
+    "location": "площадку",
+    "address": "адрес",
+    "description": "описание",
+    "image_url": "картинку",
+    "price": "цену",
+    "payment_url": "ссылку оплаты",
+    "host": "состав",
+    "max_seats": "места",
+}
+
+
+def _diff_event_fields(before: dict, after: dict, keys: tuple[str, ...] | None = None) -> list[str]:
+    keys = keys or _SAVE_COMPARE_KEYS
     changed = []
-    for key, label in labels.items():
+    for key in keys:
         if before.get(key) != after.get(key):
+            label = _FIELD_LABELS.get(key, key)
             changed.append(label)
     return changed
 
@@ -415,16 +450,45 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
     after = {
         "date": _fmt_audit_date(event_date),
         "time": _fmt_audit_time(event_time),
-        "location": location,
-        "address": address,
-        "description": (description or "").strip(),
-        "image_url": (image_url or "").strip(),
+        "location": _norm_audit_text(location),
+        "address": _norm_audit_text(address),
+        "description": _norm_audit_text(description),
+        "image_url": _norm_audit_text(image_url),
         "price": int(price or 0),
-        "payment_url": (payment_url or "").strip(),
-        "host": (host or "").strip(),
+        "payment_url": _norm_audit_text(payment_url),
+        "host": _norm_audit_text(host),
         "max_seats": int(max_seats or 0),
         "status": status,
     }
+
+    def _record_change(eid, before: dict) -> None:
+        result["saved"] += 1
+        audit_changes = _diff_event_fields(before, after, _AUDIT_COMPARE_KEYS)
+        if not audit_changes:
+            # Состав/цена/описание обновили в БД, но в журнал не шумим.
+            return
+        result["changed"] += 1
+        before_identity = {
+            "date": before.get("date") or "",
+            "time": before.get("time") or "",
+            "location": before.get("location") or "",
+        }
+        after_identity = {
+            "date": after.get("date") or "",
+            "time": after.get("time") or "",
+            "location": after.get("location") or "",
+        }
+        item = _audit_event_item(
+            eid,
+            event_date,
+            event_time,
+            location,
+            change="changed",
+            changes=audit_changes,
+            before=before_identity if before_identity != after_identity else None,
+        )
+        result.setdefault("saved_items", []).append(item)
+        result.setdefault("actions", []).append(item)
 
     if event_id:
         cur.execute(
@@ -481,23 +545,7 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
             ),
         )
         if cur.rowcount:
-            result["saved"] += 1
-            result["changed"] += 1
-            item = _audit_event_item(
-                event_id,
-                event_date,
-                event_time,
-                location,
-                change="changed",
-                changes=field_changes,
-                before={
-                    "date": before.get("date") or "",
-                    "time": before.get("time") or "",
-                    "location": before.get("location") or "",
-                },
-            )
-            result.setdefault("saved_items", []).append(item)
-            result.setdefault("actions", []).append(item)
+            _record_change(event_id, before)
         return
 
     cur.execute(
@@ -547,23 +595,7 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
             ),
         )
         if cur.rowcount:
-            result["saved"] += 1
-            result["changed"] += 1
-            item = _audit_event_item(
-                existing_id,
-                event_date,
-                event_time,
-                location,
-                change="changed",
-                changes=field_changes,
-                before={
-                    "date": before.get("date") or "",
-                    "time": before.get("time") or "",
-                    "location": before.get("location") or "",
-                },
-            )
-            result.setdefault("saved_items", []).append(item)
-            result.setdefault("actions", []).append(item)
+            _record_change(existing_id, before)
         return
 
     cur.execute(
