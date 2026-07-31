@@ -7,7 +7,7 @@ from bot.config import MODERATION_CHAT_ID, bot, dp
 from bot.db.models import init_db
 from bot.db.analytics import ensure_analytics_tables
 from bot.db.crud import ensure_help_tables, ensure_offline_gift_tables, ensure_raffle_tables
-from bot.handlers import start, formats, booking, rozygrysh, offline_gift
+from bot.handlers import start, formats, booking, rozygrysh, offline_gift, manager_stata
 from bot.handlers.reminders import reminder_loop
 from bot.handlers.rozygrysh_reminders import raffle_reminder_loop
 from bot.middlewares import ModerationChatSilenceMiddleware
@@ -37,6 +37,7 @@ async def main():
     dp.message.middleware(silence)
     dp.callback_query.middleware(silence)
     dp.include_router(start.router)
+    dp.include_router(manager_stata.router)
     dp.include_router(offline_gift.router)
     dp.include_router(rozygrysh.router)
     dp.include_router(formats.router)

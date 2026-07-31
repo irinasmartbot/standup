@@ -2105,3 +2105,75 @@ def get_confirmed_raffle_past_for_cleanup():
                 """
             )
             return [row[0] for row in cur.fetchall()]
+
+
+def get_manager_stata_dates(limit: int = 16) -> list[str]:
+    """Ближайшие даты с активными шоу «Проверка» (для кнопок менеджера)."""
+    if not _use_postgres():
+        return []
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT to_char(e.event_date, 'DD.MM.YYYY') AS event_date
+                FROM events e
+                WHERE e.status = 'active'
+                  AND e.format = 'proverka'
+                  AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
+                GROUP BY e.event_date
+                ORDER BY e.event_date
+                LIMIT %s
+                """,
+                (int(limit),),
+            )
+            return [row[0] for row in cur.fetchall() if row and row[0]]
+
+
+def get_manager_stata_bookings_for_date(event_date: str) -> list[dict]:
+    """Активные брони проверки материала на дату, по шоу (время → площадка)."""
+    if not _use_postgres():
+        return []
+    try:
+        parsed = _parse_event_date(event_date)
+    except (TypeError, ValueError):
+        return []
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    e.id AS event_id,
+                    to_char(e.event_time, 'HH24:MI') AS event_time,
+                    COALESCE(e.location, '') AS location,
+                    COALESCE(e.address, '') AS address,
+                    COALESCE(u.name, '') AS name,
+                    COALESCE(u.phone, '') AS phone,
+                    b.guests,
+                    b.status,
+                    b.id AS booking_id
+                FROM bookings b
+                JOIN users u ON u.id = b.user_id
+                JOIN events e ON e.id = b.event_id
+                WHERE e.event_date = %s
+                  AND e.format = 'proverka'
+                  AND b.format = 'proverka'
+                  AND b.status IN ('booked', 'confirmed')
+                ORDER BY e.event_time, e.location, b.id
+                """,
+                (parsed,),
+            )
+            rows = cur.fetchall()
+    return [
+        {
+            "event_id": int(row[0]),
+            "event_time": row[1] or "",
+            "location": row[2] or "",
+            "address": row[3] or "",
+            "name": row[4] or "",
+            "phone": row[5] or "",
+            "guests": int(row[6] or 0),
+            "status": row[7] or "",
+            "booking_id": int(row[8]),
+        }
+        for row in rows
+    ]
