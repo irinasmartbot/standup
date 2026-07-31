@@ -129,6 +129,7 @@ def after_booking_keyboard(
         kb.button("💬 Задать вопрос менеджеру", link=manager_link.strip())
     if (community_link or "").strip():
         kb.button("📢 Заглянуть в наше сообщество", link=community_link.strip())
+    kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
 
@@ -154,6 +155,7 @@ def after_raffle_booking_keyboard(
         kb.button("Задать вопрос менеджеру", link=manager_link.strip())
     if (community_link or "").strip():
         kb.button("Заглянуть в наше сообщество", link=community_link.strip())
+    kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
 
@@ -217,6 +219,7 @@ def raffle_ticket_manage_keyboard(
     kb.button("Что, если я хочу прийти не один?", _payload("rz_not_alone"))
     if (manager_link or "").strip():
         kb.button("Задать вопрос менеджеру", link=manager_link.strip())
+    kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
 
