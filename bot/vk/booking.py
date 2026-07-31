@@ -224,12 +224,11 @@ def manage_ticket_keyboard(booking_id: int, settings_manager_link: str) -> str:
 
 
 def already_booked_keyboard(booking_id: int) -> str:
-    """Уже есть бронь на этот слот: отмена / смена даты / сразу список дат Проверки."""
+    """Уже есть бронь на этот слот: отмена / сразу список дат Проверки."""
     kb = VKKeyboardBuilder(inline=True)
     kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
-    kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
     # Как в TG: сразу даты, без шага «по дате / по площадке».
-    kb.button("Выбрать другую", _payload("check_date_page"), color="primary")
+    kb.button("Выбрать другую дату", _payload("check_date_page"), color="positive")
     kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
