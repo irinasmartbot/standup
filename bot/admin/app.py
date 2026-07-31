@@ -3302,6 +3302,10 @@ def render_admin_html(
       display:inline-block; margin-left:6px; padding:2px 7px; border-radius:999px;
       background:#fef3c7; color:#92400e; font-size:11px; font-weight:600;
     }}
+    .events-afisha-help {{ margin:0 0 12px; }}
+    .events-afisha-help > summary {{ display:none; }}
+    .events-afisha-help .events-afisha-help-body p {{ margin:0 0 8px; }}
+    .events-scroll-fab {{ display:none; }}
     @media (max-width: 820px) {{
       body.tab-events main {{ padding-bottom:88px; }}
       body.tab-events .analytics-section > .muted {{ font-size:13px; }}
@@ -3372,16 +3376,16 @@ def render_admin_html(
       .events-afisha-help[open] > summary::after {{ content:" ▴"; }}
       .events-afisha-help .events-afisha-help-body {{ padding:0 12px 12px; }}
       .events-afisha-help .events-afisha-help-body p {{ margin:0; font-size:12px; line-height:1.4; }}
-      .events-scroll-fab {{
-        position:fixed; right:12px; bottom:72px; z-index:45;
-        display:flex; flex-direction:column; gap:8px;
+      body.tab-events .events-scroll-fab {{
+        position:fixed; right:12px; bottom:calc(72px + env(safe-area-inset-bottom, 0px));
+        z-index:60; display:flex; flex-direction:column; gap:8px;
       }}
-      .events-scroll-fab button {{
+      body.tab-events .events-scroll-fab button {{
         width:44px; height:44px; border-radius:999px; border:1px solid var(--line);
         background:#111827; color:#fff; font-size:18px; line-height:1; padding:0;
         box-shadow:0 6px 16px rgba(15,23,42,.18); cursor:pointer;
       }}
-      .events-scroll-fab button.events-scroll-up {{ background:#fff; color:#111827; }}
+      body.tab-events .events-scroll-fab button.events-scroll-up {{ background:#fff; color:#111827; }}
       table.events-edit td.events-time-cell,
       table.events-edit td.events-loc-cell {{
         grid-template-columns:72px minmax(0,1fr);
@@ -3479,10 +3483,6 @@ def render_admin_html(
       .bar-funnel-track, .bar-funnel-pct {{ grid-column: 1 / -1; }}
       .bar-funnel-pct {{ text-align:left; }}
     }}
-    .events-afisha-help {{ margin:0 0 12px; }}
-    .events-afisha-help > summary {{ display:none; }}
-    .events-afisha-help .events-afisha-help-body p {{ margin:0 0 8px; }}
-    .events-scroll-fab {{ display:none; }}
     .events-weekday {{ font-size:11px; margin-top:4px; }}
     .events-del {{
       white-space:nowrap; font-size:12px;

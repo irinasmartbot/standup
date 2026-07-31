@@ -454,10 +454,6 @@ def render_events_tab(
         <b>Вы начали редактирование.</b> Чтобы изменения появились в боте, нажмите синюю кнопку «Обновить».
       </p>
       {toolbar}
-      <div class="events-scroll-fab" aria-label="Быстрая прокрутка">
-        <button type="button" class="events-scroll-up" title="Наверх" data-events-scroll="top">↑</button>
-        <button type="button" class="events-scroll-down" title="Вниз" data-events-scroll="bottom">↓</button>
-      </div>
       <form method="post" action="/admin/events/save" class="events-form" id="events-save-form" data-events-draft-key="events-draft:{_h(fmt)}">
         <input type="hidden" name="ef" value="{_h(fmt)}">
         {_table(bundle.get("active") or [], paid=paid, blank_rows=5, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)}
@@ -487,6 +483,10 @@ def render_events_tab(
     </section>
     {hidden_block}
     {past_block}
+    <div class="events-scroll-fab" aria-label="Быстрая прокрутка">
+      <button type="button" class="events-scroll-up" title="Наверх" data-events-scroll="top">↑</button>
+      <button type="button" class="events-scroll-down" title="Вниз" data-events-scroll="bottom">↓</button>
+    </div>
     <script>
     (function () {{
       var COMPACT = {{
