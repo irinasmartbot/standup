@@ -5,6 +5,7 @@ from datetime import datetime
 from html import escape
 
 from aiogram import Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, InputMediaPhoto, InputRichMessage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK, TICKET_TEMPLATE
@@ -700,10 +701,11 @@ async def send_buy_ticket_formats(message):
 
 
 @router.callback_query(lambda c: c.data == "book")
-async def book(call: CallbackQuery):
+async def book(call: CallbackQuery, state: FSMContext):
     """Бесплатная бронь: сразу экран Проверки материала."""
     from bot.handlers.booking import check_format_entry
 
+    await state.clear()
     await delete_booking_nav(call.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     await check_format_entry(call.message)
@@ -711,8 +713,12 @@ async def book(call: CallbackQuery):
 
 
 @router.callback_query(lambda c: c.data == "buy_ticket")
-async def buy_ticket(call: CallbackQuery):
+async def buy_ticket(call: CallbackQuery, state: FSMContext):
+    from bot.utils.reply_keyboard import clear_reply_keyboard
+
     track_event(EVENT_CMD_BUY_TICKET, telegram_id=call.from_user.id, props={"via": "callback"})
+    await state.clear()
+    await clear_reply_keyboard(call.message)
     await delete_booking_nav(call.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     await send_buy_ticket_formats(call.message)

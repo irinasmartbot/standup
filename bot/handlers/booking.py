@@ -5,7 +5,8 @@ from html import escape
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, FSInputFile, BufferedInputFile
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from bot.utils.reply_keyboard import clear_reply_keyboard
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -220,6 +221,8 @@ async def send_event_card(message, event, back_callback="check_dates", *, telegr
 async def check_format_entry(message):
     """Экран бесплатной брони: Проверка материала (дата / площадка)."""
     track_event(EVENT_BRANCH_PROVERKA, telegram_id=message.from_user.id)
+    # Если клиент прервал ввод телефона и вернулся к формату — убрать reply-клавиатуру.
+    await clear_reply_keyboard(message)
     kb = InlineKeyboardBuilder()
     kb.button(text="📅 Выбрать по дате", callback_data="check_dates")
     kb.button(text="📍 Выбор по площадке", callback_data="by_venue")
@@ -521,16 +524,6 @@ def _guests_pick_kb(*, prefix: str) -> object:
     return kb.as_markup()
 
 
-async def _clear_reply_keyboard(message: Message) -> None:
-    """Telegram не даёт совместить ReplyKeyboardRemove и inline в одном сообщении."""
-    # Текст обязан быть непустым (ZWSP Telegram отклоняет).
-    clear = await message.answer("⌨️", reply_markup=ReplyKeyboardRemove())
-    try:
-        await clear.delete()
-    except Exception:
-        pass
-
-
 async def _ask_guests_after_phone(
     message: Message,
     state: FSMContext,
@@ -539,7 +532,7 @@ async def _ask_guests_after_phone(
 ):
     data = await state.get_data()
     if clear_reply:
-        await _clear_reply_keyboard(message)
+        await clear_reply_keyboard(message)
     ask = await message.answer(
         f"{data.get('name', '')}, напишите цифрой или выберите кнопкой, "
         f"на какое количество человек бронируете?\n\n"

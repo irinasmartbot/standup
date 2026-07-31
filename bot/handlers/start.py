@@ -67,7 +67,10 @@ WELCOME_RICH_HTML = """
 
 async def _send_welcome(message: Message):
     from bot.handlers.formats import _send_rich_or_html
+    from bot.utils.reply_keyboard import clear_reply_keyboard
 
+    # Убираем «Поделиться номером», если клиент ушёл из незаконченной брони.
+    await clear_reply_keyboard(message)
     await _send_rich_or_html(
         message,
         rich_html=WELCOME_RICH_HTML,
@@ -450,7 +453,10 @@ async def main_menu_command(message: Message, state: FSMContext):
 
 @router.message(Command("buy_ticket"), F.chat.type == "private")
 async def buy_ticket_command(message: Message, state: FSMContext):
+    from bot.utils.reply_keyboard import clear_reply_keyboard
+
     await state.clear()
+    await clear_reply_keyboard(message)
     track_event(EVENT_CMD_BUY_TICKET, telegram_id=message.from_user.id)
     from bot.handlers.formats import send_buy_ticket_formats
     await send_buy_ticket_formats(message)
@@ -494,7 +500,10 @@ async def channel_command(message: Message):
 
 @router.message(Command("my_bookings"), F.chat.type == "private")
 async def my_bookings_command(message: Message, state: FSMContext):
+    from bot.utils.reply_keyboard import clear_reply_keyboard
+
     await state.clear()
+    await clear_reply_keyboard(message)
     track_event(EVENT_CMD_MY_BOOKINGS, telegram_id=message.from_user.id)
     await _send_command_bookings(message)
 
