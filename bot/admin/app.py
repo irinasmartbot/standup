@@ -1055,11 +1055,20 @@ def _booking_table(
 
 
 def _event_format_badge(event: dict) -> str:
-    """Show only known admin labels; hide raw codes like best/hitloto."""
-    label = FORMAT_LABELS.get(event.get("format") or "")
+    """Show проверка/розыгрыш; for BEST-events with raffle bookings prefer розыгрыш."""
+    fmt = event.get("format") or ""
+    label = FORMAT_LABELS.get(fmt)
+    if not label:
+        for booking in event.get("bookings") or []:
+            bfmt = booking.get("format") or ""
+            label = FORMAT_LABELS.get(bfmt)
+            if label:
+                fmt = bfmt
+                break
     if not label:
         return ""
-    return f'<span class="format">{_h(label)}</span>'
+    tone = f" format--{fmt}" if fmt in FORMAT_LABELS else ""
+    return f'<span class="format{tone}">{_h(label)}</span>'
 
 
 def _event_card(event: dict) -> str:
@@ -3329,16 +3338,50 @@ def render_admin_html(
       table.events-edit input[type="date"],
       table.events-edit input[type="time"],
       table.events-edit input[name="e_location"],
-      table.events-edit input[name="e_price"],
-      table.events-edit input[name="e_seats"],
-      table.events-edit input.events-grow,
+      table.events-edit input[name="e_seats"] {{
+        width:100% !important; max-width:none !important;
+        min-height:40px; font-size:16px; padding:8px 10px;
+        position:static; box-shadow:none;
+      }}
+      table.events-edit input.events-grow {{
+        width:100% !important; max-width:none !important;
+        min-height:36px; height:36px; font-size:16px; padding:6px 10px;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+        position:static; box-shadow:none; resize:none;
+      }}
       table.events-edit input.events-grow:focus,
       table.events-edit input.events-grow.events-grow-open {{
         width:100% !important; max-width:none !important;
-        min-height:44px; font-size:16px; padding:10px 12px;
-        white-space:normal; overflow:visible; text-overflow:clip;
-        position:static; box-shadow:none;
+        height:auto; min-height:88px; white-space:pre-wrap; overflow:auto;
+        text-overflow:clip; word-break:break-word; overflow-wrap:anywhere;
+        box-shadow:0 0 0 2px rgba(37,99,235,.25); z-index:2;
       }}
+      table.events-edit input.events-grow[name="e_price"]:focus,
+      table.events-edit input.events-grow[name="e_price"].events-grow-open {{
+        min-height:40px; height:40px; white-space:nowrap;
+      }}
+      .events-afisha-help {{
+        margin:0 0 12px; border:1px solid var(--line); border-radius:12px;
+        background:#f8fafc; padding:0;
+      }}
+      .events-afisha-help > summary {{
+        list-style:none; cursor:pointer; padding:10px 12px; font-size:13px; font-weight:700;
+      }}
+      .events-afisha-help > summary::-webkit-details-marker {{ display:none; }}
+      .events-afisha-help > summary::after {{ content:" ▾"; color:var(--muted); font-weight:600; }}
+      .events-afisha-help[open] > summary::after {{ content:" ▴"; }}
+      .events-afisha-help .events-afisha-help-body {{ padding:0 12px 12px; }}
+      .events-afisha-help .events-afisha-help-body p {{ margin:0; font-size:12px; line-height:1.4; }}
+      .events-scroll-fab {{
+        position:fixed; right:12px; bottom:72px; z-index:45;
+        display:flex; flex-direction:column; gap:8px;
+      }}
+      .events-scroll-fab button {{
+        width:44px; height:44px; border-radius:999px; border:1px solid var(--line);
+        background:#111827; color:#fff; font-size:18px; line-height:1; padding:0;
+        box-shadow:0 6px 16px rgba(15,23,42,.18); cursor:pointer;
+      }}
+      .events-scroll-fab button.events-scroll-up {{ background:#fff; color:#111827; }}
       table.events-edit td.events-time-cell,
       table.events-edit td.events-loc-cell {{
         grid-template-columns:72px minmax(0,1fr);
@@ -3436,6 +3479,10 @@ def render_admin_html(
       .bar-funnel-track, .bar-funnel-pct {{ grid-column: 1 / -1; }}
       .bar-funnel-pct {{ text-align:left; }}
     }}
+    .events-afisha-help {{ margin:0 0 12px; }}
+    .events-afisha-help > summary {{ display:none; }}
+    .events-afisha-help .events-afisha-help-body p {{ margin:0 0 8px; }}
+    .events-scroll-fab {{ display:none; }}
     .events-weekday {{ font-size:11px; margin-top:4px; }}
     .events-del {{
       white-space:nowrap; font-size:12px;
@@ -3628,6 +3675,8 @@ def render_admin_html(
     h2 {{ margin:0 0 10px; font-size:18px; font-weight:700; }}
     .event-head p {{ margin:0; color:var(--muted); }}
     .format {{ background:#eef2ff; color:#3730a3; padding:7px 10px; border-radius:999px; font-weight:700; }}
+    .format--proverka {{ background:#f0fdf4; color:#15803d; }}
+    .format--rozygrysh {{ background:#fff7ed; color:#c2410c; }}
     .capacity-line {{ display:flex; justify-content:space-between; margin-top:16px; font-weight:700; }}
     .capacity-bar, .status-bar {{ overflow:hidden; height:14px; background:#e5e7eb; border-radius:999px; margin-top:8px; display:flex; }}
     .capacity-bar span {{ display:block; background:#22c55e; }}

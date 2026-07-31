@@ -147,7 +147,7 @@ def _row_html(
     if paid:
         paid_cells = (
             f'<td class="events-col-price events-col-more" data-label="Цена">'
-            f'<input name="e_price" type="number" min="0" step="1" value="{_h(price)}" placeholder="0" inputmode="numeric"></td>'
+            f'<input class="events-grow" name="e_price" type="number" min="0" step="1" value="{_h(price)}" placeholder="0" inputmode="numeric" title="{_h(price)}"></td>'
             f'<td class="events-col-url events-col-more" data-label="Оплата">'
             f'<input class="events-grow" name="e_payment" value="{_h(pay)}" placeholder="https://…" title="{_h(pay)}"></td>'
             f'<td class="events-col-host events-col-more" data-label="Состав">'
@@ -275,28 +275,32 @@ def render_events_tab(
         "<b>Важно:</b> всегда нажимайте «Обновить», чтобы отправить применённые изменения в бот."
         "</p>"
     )
+    hide_delete_note = (
+        "«Скрыть» и «удалить» убирают из бота и <b>отменяют активные брони/билеты</b> по этому шоу "
+        "(напоминания тоже прекращаются); «удалить» ещё и стирает дату насовсем. "
+        "Вернуть скрытые — в блоке «Скрытые»."
+    )
     if fmt == "best":
-        note = (
+        help_body = (
             "<p class=\"muted\">BEST — платные шоу; даты отсюда же использует розыгрыш. "
             "Пустые <b>верхние</b> строки — для быстрого добавления (после «Обновить» дата встанет в общий список).<br>"
             "<b>Смена времени или площадки:</b> правьте нужную строку и нажмите «Обновить» — "
-            "изменения появятся в боте.<br>"
-            "«Скрыть» убирает из бота и <b>отменяет активные брони/билеты</b> по этому шоу "
-            "(напоминания тоже прекращаются); «удалить» — насовсем. "
-            "Вернуть скрытые — в блоке «Скрытые».</p>"
-            f"{always_update}"
+            f"изменения появятся в боте.<br>{hide_delete_note}</p>"
         )
     else:
-        note = (
+        help_body = (
             "<p class=\"muted\">Пустые <b>верхние</b> строки — быстро добавить шоу "
             "(после «Обновить» попадёт в общий список).<br>"
             "<b>Смена времени или площадки:</b> правьте нужную строку и нажмите «Обновить» — "
-            "изменения появятся в боте.<br>"
-            "«Скрыть» убирает из бота и <b>отменяет активные брони/билеты</b> по этому шоу "
-            "(напоминания тоже прекращаются); «удалить» — насовсем. "
-            "Вернуть скрытые — в блоке «Скрытые».</p>"
-            f"{always_update}"
+            f"изменения появятся в боте.<br>{hide_delete_note}</p>"
         )
+    note = (
+        '<details class="events-afisha-help" open>'
+        "<summary>Подсказка по афише</summary>"
+        f'<div class="events-afisha-help-body">{help_body}</div>'
+        "</details>"
+        f"{always_update}"
+    )
 
     holders = ticket_holders or []
     tickets_panel = ""
@@ -450,6 +454,10 @@ def render_events_tab(
         <b>Вы начали редактирование.</b> Чтобы изменения появились в боте, нажмите синюю кнопку «Обновить».
       </p>
       {toolbar}
+      <div class="events-scroll-fab" aria-label="Быстрая прокрутка">
+        <button type="button" class="events-scroll-up" title="Наверх" data-events-scroll="top">↑</button>
+        <button type="button" class="events-scroll-down" title="Вниз" data-events-scroll="bottom">↓</button>
+      </div>
       <form method="post" action="/admin/events/save" class="events-form" id="events-save-form" data-events-draft-key="events-draft:{_h(fmt)}">
         <input type="hidden" name="ef" value="{_h(fmt)}">
         {_table(bundle.get("active") or [], paid=paid, blank_rows=5, fmt=fmt, show_tickets=show_tickets, show_seats=show_seats)}
@@ -486,10 +494,25 @@ def render_events_tab(
         e_payment: 180,
         e_host: 160,
         e_description: 150,
-        e_image: 150
+        e_image: 150,
+        e_price: 72
       }};
       var EXPAND_MAX = 720;
       var editHint = document.getElementById("events-edit-hint");
+      var helpBox = document.querySelector(".events-afisha-help");
+      function isMobileEvents() {{
+        return window.matchMedia && window.matchMedia("(max-width: 820px)").matches;
+      }}
+      if (helpBox && isMobileEvents()) {{
+        helpBox.open = false;
+      }}
+      document.querySelectorAll("[data-events-scroll]").forEach(function (btn) {{
+        btn.addEventListener("click", function () {{
+          var to = btn.getAttribute("data-events-scroll");
+          var y = to === "top" ? 0 : document.documentElement.scrollHeight;
+          window.scrollTo({{ top: y, behavior: "smooth" }});
+        }});
+      }});
       function showEditHint() {{
         if (editHint) editHint.hidden = false;
       }}
@@ -507,6 +530,13 @@ def render_events_tab(
       }}
       function fitGrow(el, expanded) {{
         if (!el || !el.classList.contains("events-grow")) return;
+        if (isMobileEvents()) {{
+          el.style.width = "";
+          el.style.maxWidth = "";
+          if (expanded) el.classList.add("events-grow-open");
+          else el.classList.remove("events-grow-open");
+          return;
+        }}
         var compact = COMPACT[el.name] || 140;
         if (!expanded) {{
           el.style.maxWidth = "100%";
