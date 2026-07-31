@@ -18,9 +18,6 @@ router = Router()
 
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
 TG_TEXT_LIMIT = 3500
-NAME_COL_MIN = 12
-NAME_COL_MAX = 22
-
 CHOOSE_DATE_TEXT = (
     "Выбери дату, на которую нужно получить список гостей "
     "с билетом на проверку материала.\n\n"
@@ -62,42 +59,25 @@ def _phone_digits(phone: str) -> str:
     return re.sub(r"\D+", "", phone or "")
 
 
-def _tel_href(digits: str) -> str | None:
-    if not digits:
-        return None
-    d = digits
-    if len(d) == 11 and d.startswith("8"):
-        d = "7" + d[1:]
-    if not d.startswith("+"):
-        d = "+" + d
-    return f"tel:{d}"
-
-
-def _phone_html(phone: str) -> str:
+def _phone_plus(phone: str) -> str:
+    """Формат +7926… — Telegram сам делает номер кликабельным."""
     digits = _phone_digits(phone)
     if not digits:
         return "—"
-    href = _tel_href(digits)
-    label = escape(digits)
-    if not href:
-        return label
-    return f'<a href="{escape(href, quote=True)}">{label}</a>'
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    if digits.startswith("7") and not digits.startswith("+"):
+        return f"+{digits}"
+    if digits.startswith("+"):
+        return digits
+    return f"+{digits}"
 
 
-def _name_width(rows: list[dict]) -> int:
-    lengths = [len((r.get("name") or "").strip() or "—") for r in rows]
-    if not lengths:
-        return NAME_COL_MIN
-    return max(NAME_COL_MIN, min(NAME_COL_MAX, max(lengths)))
-
-
-def _guest_line(row: dict, name_w: int) -> str:
+def _guest_line(row: dict) -> str:
     name = (row.get("name") or "").strip() or "—"
-    if len(name) > name_w:
-        name = name[: name_w - 1] + "…"
-    pad = " " * max(0, name_w - len(name))
     guests = int(row.get("guests") or 0)
-    return f"<code>{escape(name)}{pad}</code> {_phone_html(row.get('phone') or '')}  <code>{guests}</code>"
+    phone = _phone_plus(row.get("phone") or "")
+    return f"{escape(name)} · {escape(phone)} · {guests}"
 
 
 def _show_header(row: dict) -> str:
@@ -142,11 +122,10 @@ def build_stata_report(rows: list[dict]) -> str:
     blocks: list[str] = []
     day_guests = 0
     for header_row, group_rows in groups:
-        name_w = _name_width(group_rows)
         guests_sum = sum(int(r.get("guests") or 0) for r in group_rows)
         day_guests += guests_sum
         lines = [_show_header(header_row), ""]
-        lines.extend(_guest_line(r, name_w) for r in group_rows)
+        lines.extend(_guest_line(r) for r in group_rows)
         lines.append(f"<b>Итого:</b> {guests_sum}")
         blocks.append("\n".join(lines))
 
