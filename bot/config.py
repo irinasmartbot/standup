@@ -82,15 +82,6 @@ TEST_ADMIN_IDS = {
     if part.strip().isdigit()
 }
 
-# Telegram id менеджеров для ?start=new_stata (списки броней на проверку).
-# Если пусто — используется TEST_ADMIN_IDS; если и он пуст — доступ открыт.
-_STATS_MANAGER_RAW = os.getenv("STATS_MANAGER_IDS", "")
-STATS_MANAGER_IDS = {
-    int(part.strip())
-    for part in _STATS_MANAGER_RAW.split(",")
-    if part.strip().isdigit()
-}
-
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set. Create .env from .env.example and fill in the token.")
 

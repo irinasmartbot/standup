@@ -11,7 +11,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.config import STATS_MANAGER_IDS, TEST_ADMIN_IDS
 from bot.db.crud import get_manager_stata_bookings_for_date, get_manager_stata_dates
 
 router = Router()
@@ -24,20 +23,10 @@ CHOOSE_DATE_TEXT = (
     "Если нужной даты нет — напиши в формате DD.MM.YYYY"
 )
 EMPTY_TEXT = "Нет подтверждённых броней на указанную дату"
-ACCESS_DENIED = "Нет доступа к этой команде."
 
 
 class ManagerStata(StatesGroup):
     choosing_date = State()
-
-
-def can_use_manager_stata(user_id: int | None) -> bool:
-    if not user_id:
-        return False
-    allowed = STATS_MANAGER_IDS or TEST_ADMIN_IDS
-    if not allowed:
-        return True
-    return int(user_id) in allowed
 
 
 def _back_keyboard():
@@ -170,9 +159,6 @@ async def _edit_html(message: Message, text: str, reply_markup=None):
 
 
 async def send_manager_stata_start(message: Message, state: FSMContext):
-    if not can_use_manager_stata(message.from_user.id if message.from_user else None):
-        await message.answer(ACCESS_DENIED)
-        return
     await state.set_state(ManagerStata.choosing_date)
     dates = get_manager_stata_dates()
     if not dates:
@@ -231,18 +217,12 @@ async def _send_report(message: Message, state: FSMContext, event_date: str, *, 
 
 @router.callback_query(F.data == "nst:back")
 async def nst_back(call: CallbackQuery, state: FSMContext):
-    if not can_use_manager_stata(call.from_user.id if call.from_user else None):
-        await call.answer(ACCESS_DENIED, show_alert=True)
-        return
     await _show_dates(call.message, state, edit=True)
     await call.answer()
 
 
 @router.callback_query(F.data.startswith("nst:d:"))
 async def nst_date(call: CallbackQuery, state: FSMContext):
-    if not can_use_manager_stata(call.from_user.id if call.from_user else None):
-        await call.answer(ACCESS_DENIED, show_alert=True)
-        return
     event_date = call.data.split(":", 2)[2]
     if not DATE_RE.match(event_date or ""):
         await call.answer("Некорректная дата", show_alert=True)
@@ -253,9 +233,6 @@ async def nst_date(call: CallbackQuery, state: FSMContext):
 
 @router.message(ManagerStata.choosing_date, F.chat.type == "private", F.text)
 async def nst_typed_date(message: Message, state: FSMContext):
-    if not can_use_manager_stata(message.from_user.id if message.from_user else None):
-        await message.answer(ACCESS_DENIED)
-        return
     raw = (message.text or "").strip()
     if not DATE_RE.match(raw):
         await message.answer("Нужна дата в формате DD.MM.YYYY, например 31.07.2026")
