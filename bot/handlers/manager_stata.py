@@ -73,11 +73,19 @@ def _phone_plus(phone: str) -> str:
     return f"+{digits}"
 
 
-def _guest_line(row: dict) -> str:
-    name = (row.get("name") or "").strip() or "—"
-    guests = int(row.get("guests") or 0)
-    phone = _phone_plus(row.get("phone") or "")
-    return f"{escape(name)} · {escape(phone)} · {guests}"
+def _guest_table(rows: list[dict]) -> str:
+    """Ровные колонки: один <pre>-блок (не отдельные «копируемые» куски)."""
+    names = [(r.get("name") or "").strip() or "—" for r in rows]
+    name_w = min(22, max((len(n) for n in names), default=10))
+    lines: list[str] = []
+    for row, name in zip(rows, names):
+        if len(name) > name_w:
+            name = name[: name_w - 1] + "…"
+        phone = _phone_plus(row.get("phone") or "")
+        guests = str(int(row.get("guests") or 0))
+        lines.append(f"{name:<{name_w}}  {phone:<12}  {guests}")
+    # Телефоны с + обычно кликабельны и внутри pre на телефоне.
+    return "<pre>" + escape("\n".join(lines)) + "</pre>"
 
 
 def _show_header(row: dict) -> str:
@@ -124,9 +132,12 @@ def build_stata_report(rows: list[dict]) -> str:
     for header_row, group_rows in groups:
         guests_sum = sum(int(r.get("guests") or 0) for r in group_rows)
         day_guests += guests_sum
-        lines = [_show_header(header_row), ""]
-        lines.extend(_guest_line(r) for r in group_rows)
-        lines.append(f"<b>Итого:</b> {guests_sum}")
+        lines = [
+            _show_header(header_row),
+            "",
+            _guest_table(group_rows),
+            f"<b>Итого:</b> {guests_sum}",
+        ]
         blocks.append("\n".join(lines))
 
     if len(blocks) > 1:
