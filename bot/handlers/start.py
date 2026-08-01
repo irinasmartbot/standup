@@ -199,12 +199,13 @@ def _booking_command_text(row, page: int = 0, total: int = 1) -> str:
 
 
 def _ticket_command_caption(row) -> str:
-    _, format_name, _, event_date, event_time, _, location, *_ = row
+    _, format_name, _, event_date, event_time, address, location, *_ = row
     return (
         f"<b>Билет по брони</b>\n\n"
         f"{escape(_format_label(format_name))}\n"
         f"📅 {escape(event_date)} в {escape(event_time)}\n"
-        f"📍 {escape(location or '')}"
+        f"📍 {escape(location or '')}\n"
+        f"Адрес: {escape(address or '')}"
     )
 
 

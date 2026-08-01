@@ -70,12 +70,13 @@ def empty_bookings_text() -> str:
 
 
 def ticket_caption(row) -> str:
-    _, format_name, _, event_date, event_time, _, location, *_ = row
+    _, format_name, _, event_date, event_time, address, location, *_ = row
     return (
         "<b>Билет по брони</b>\n\n"
         f"{_format_label(format_name)}\n"
         f"📅 {event_date} в {event_time}\n"
-        f"📍 {location or ''}"
+        f"📍 {location or ''}\n"
+        f"Адрес: {address or ''}"
     )
 
 

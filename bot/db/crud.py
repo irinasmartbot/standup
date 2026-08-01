@@ -1643,6 +1643,7 @@ def get_offline_gift_event(event_id: int) -> dict | None:
 
 
 def record_offline_gift_entry(*, event_id: int, vk_id: int, full_name: str = "") -> dict | None:
+    """Добавить в список выбранного шоу; из остальных списков участника убрать."""
     if not _use_postgres():
         return None
     ensure_offline_gift_tables()
@@ -1659,6 +1660,14 @@ def record_offline_gift_entry(*, event_id: int, vk_id: int, full_name: str = "")
                 None,
                 vk_id=int(vk_id),
                 source="vkontakte",
+            )
+            # Один человек — только в последнем выбранном шоу
+            cur.execute(
+                """
+                DELETE FROM vk_offline_gift_entries
+                WHERE vk_id = %s AND event_id <> %s
+                """,
+                (int(vk_id), int(event_id)),
             )
             cur.execute(
                 """
