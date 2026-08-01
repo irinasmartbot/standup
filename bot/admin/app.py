@@ -1529,22 +1529,84 @@ def _audit_friendly_details(action: str, details: dict) -> str:
     return lines[0] if lines else ""
 
 
+def _audit_afisha_change_counts(details: dict) -> dict[str, int]:
+    actions = _audit_collect_actions(details)
+    return {
+        "added": sum(1 for a in actions if a.get("change") == "added"),
+        "changed": sum(1 for a in actions if a.get("change") == "changed"),
+        "hidden": sum(1 for a in actions if a.get("change") == "hidden")
+        or int(_audit_num(details, "hidden") or 0),
+        "deleted": sum(1 for a in actions if a.get("change") == "deleted")
+        or int(_audit_num(details, "deleted") or 0),
+        "restored": sum(1 for a in actions if a.get("change") == "restored")
+        or int(_audit_num(details, "restored") or 0),
+    }
+
+
+def _audit_afisha_cut_summary(action: str, details: dict, lines: list[str]) -> str:
+    """Short summary line for the collapsible «Подробнее» cut."""
+    counts = _audit_afisha_change_counts(details)
+    bits = []
+    if action == "events_restore" or counts["restored"]:
+        n = counts["restored"] or len(lines)
+        if n:
+            bits.append(f"вернул {n}")
+    if counts["added"]:
+        bits.append(f"добавил {counts['added']}")
+    if counts["changed"]:
+        bits.append(f"изменил {counts['changed']}")
+    if counts["hidden"]:
+        bits.append(f"скрыл {counts['hidden']}")
+    if counts["deleted"]:
+        bits.append(f"удалил {counts['deleted']}")
+    head = "Подробнее"
+    if bits:
+        head += ": " + ", ".join(bits)
+    # Если правка одна — сразу показать дату/площадку в summary.
+    actions = [a for a in _audit_collect_actions(details) if a.get("change")]
+    if len(actions) == 1:
+        where = _audit_event_line(actions[0])
+        if where:
+            return f"{head} — {where}"
+    if len(lines) == 1 and not bits:
+        short = lines[0]
+        if len(short) > 90:
+            short = short[:87] + "…"
+        return f"{head} — {short}"
+    return head
+
+
 def _audit_friendly_details_html(action: str, details: dict) -> str:
     lines = _audit_friendly_detail_lines(action, details)
     if not lines:
         return ""
+    items = []
+    for line in lines:
+        if line.endswith(":") and not line.startswith("…"):
+            items.append(f'<li class="audit-item-group">{_h(line)}</li>')
+        else:
+            items.append(f"<li>{_h(line)}</li>")
+    body = f'<ul class="audit-item-list">{"".join(items)}</ul>'
+    # Афиша: подробный список дат под катом, чтобы лента не раздувалась.
+    if action in {"events_save", "events_restore"}:
+        summary = _audit_afisha_cut_summary(action, details, lines)
+        return (
+            f'<details class="audit-cut">'
+            f"<summary>{_h(summary)}</summary>"
+            f"{body}"
+            f"</details>"
+        )
     summary = lines[0]
-    rest = lines[1:]
-    html = f'<p class="audit-item-details">{_h(summary)}</p>'
-    if rest:
-        items = []
-        for line in rest:
+    rest_html = ""
+    if len(lines) > 1:
+        rest_items = []
+        for line in lines[1:]:
             if line.endswith(":") and not line.startswith("…"):
-                items.append(f'<li class="audit-item-group">{_h(line)}</li>')
+                rest_items.append(f'<li class="audit-item-group">{_h(line)}</li>')
             else:
-                items.append(f"<li>{_h(line)}</li>")
-        html += f'<ul class="audit-item-list">{"".join(items)}</ul>'
-    return html
+                rest_items.append(f"<li>{_h(line)}</li>")
+        rest_html = f'<ul class="audit-item-list">{"".join(rest_items)}</ul>'
+    return f'<p class="audit-item-details">{_h(summary)}</p>{rest_html}'
 
 
 def _audit_friendly_title(
@@ -1562,26 +1624,18 @@ def _audit_friendly_title(
             str(details.get("format") or entity_id or ""),
             entity_id or "афиша",
         )
-        actions = _audit_collect_actions(details)
-        added = sum(1 for a in actions if a.get("change") == "added")
-        changed = sum(1 for a in actions if a.get("change") == "changed")
-        hidden = sum(1 for a in actions if a.get("change") == "hidden") or int(
-            _audit_num(details, "hidden") or 0
-        )
-        deleted = sum(1 for a in actions if a.get("change") == "deleted") or int(
-            _audit_num(details, "deleted") or 0
-        )
-        bits = []
-        if added:
-            bits.append(f"добавил {added}")
-        if changed:
-            bits.append(f"изменил {changed}")
-        if hidden:
-            bits.append(f"скрыл {hidden}")
-        if deleted:
-            bits.append(f"удалил {deleted}")
-        if bits:
-            return f"Правки в афише «{afisha}»: " + ", ".join(bits)
+        counts = _audit_afisha_change_counts(details)
+        kinds = []
+        if counts["added"]:
+            kinds.append("добавление")
+        if counts["changed"]:
+            kinds.append("изменение")
+        if counts["hidden"]:
+            kinds.append("скрытие")
+        if counts["deleted"]:
+            kinds.append("удаление")
+        if kinds:
+            return f"Правки в афише «{afisha}»: " + ", ".join(kinds)
         return f"Сохранение афиши «{afisha}»"
 
     if action == "events_restore":
@@ -3740,6 +3794,15 @@ def render_admin_html(
     .audit-item-list {{ margin:6px 0 0; padding:0 0 0 1.1em; font-size:13px; color:var(--muted); line-height:1.45; }}
     .audit-item-list li {{ margin:2px 0; }}
     .audit-item-list .audit-item-group {{ margin-top:6px; list-style:none; margin-left:-1.1em; font-weight:600; color:var(--text); }}
+    .audit-cut {{ margin:8px 0 0; }}
+    .audit-cut > summary {{
+      cursor:pointer; font-size:13px; color:#1d4ed8; list-style:none;
+      user-select:none; line-height:1.4;
+    }}
+    .audit-cut > summary::-webkit-details-marker {{ display:none; }}
+    .audit-cut > summary::before {{ content:"▸ "; color:#64748b; }}
+    .audit-cut[open] > summary::before {{ content:"▾ "; }}
+    .audit-cut .audit-item-list {{ margin-top:8px; }}
     .audit-empty {{ margin:8px 0 0; }}
     .ticket-card .ticket-loc {{ white-space:normal; word-break:break-word; }}
     .ticket-card-note {{
