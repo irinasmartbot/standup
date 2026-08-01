@@ -1340,6 +1340,66 @@ _AUDIT_CHANGE_VERBS = {
     "deleted": "удалил",
     "restored": "вернул",
 }
+_AUDIT_FIELD_LINE_LABELS = {
+    "price": "Цена",
+    "payment_url": "Оплата",
+    "image_url": "Фото",
+    "address": "Адрес",
+    "description": "Описание",
+    "host": "Состав / ведущий",
+    "max_seats": "Мест",
+    "status": "Статус",
+}
+
+
+def _audit_short_value(value, *, limit: int = 120) -> str:
+    text = str(value if value is not None else "").strip()
+    text = " ".join(text.split())
+    if len(text) > limit:
+        return text[: limit - 1] + "…"
+    return text
+
+
+def _audit_event_field_lines(item: dict) -> list[str]:
+    """Extra journal lines: price, photo, payment link, etc. (mainly for added shows)."""
+    if not isinstance(item, dict):
+        return []
+    change = str(item.get("change") or "").strip()
+    # Полный снимок полей — при добавлении; при правке хватает списка изменённых ключей.
+    if change not in {"added", ""}:
+        return []
+    fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+    if not fields:
+        if item.get("address"):
+            fields = {"address": item.get("address")}
+        else:
+            return []
+    lines = []
+    for key, label in _AUDIT_FIELD_LINE_LABELS.items():
+        if key not in fields:
+            continue
+        raw = fields.get(key)
+        if key == "price":
+            try:
+                price_i = int(raw or 0)
+            except (TypeError, ValueError):
+                price_i = 0
+            lines.append(f"{label}: {'бесплатно' if price_i <= 0 else f'{price_i} ₽'}")
+            continue
+        if key == "max_seats":
+            try:
+                seats_i = int(raw or 0)
+            except (TypeError, ValueError):
+                seats_i = 0
+            if seats_i > 0:
+                lines.append(f"{label}: {seats_i}")
+            continue
+        if key == "status":
+            continue  # active/past — служебное, в кат не тащим
+        text = _audit_short_value(raw, limit=160 if key in {"payment_url", "image_url"} else 140)
+        if text:
+            lines.append(f"{label}: {text}")
+    return lines
 
 
 def _audit_action_sentence(item: dict, *, afisha: str = "") -> str:
@@ -1422,6 +1482,8 @@ def _audit_friendly_detail_lines(action: str, details: dict) -> list[str]:
             sentence = _audit_action_sentence(item, afisha=afisha)
             if sentence:
                 lines.append(sentence)
+            for field_line in _audit_event_field_lines(item):
+                lines.append(field_line)
         if details.get("notify"):
             aud = _AUDIT_AUDIENCE_LABELS.get(
                 str(details.get("notify_audience") or ""),

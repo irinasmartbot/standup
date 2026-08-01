@@ -179,6 +179,7 @@ def _audit_event_item(
     changes: list[str] | None = None,
     before: dict | None = None,
     address: str = "",
+    fields: dict | None = None,
 ) -> dict:
     try:
         eid = int(event_id) if event_id is not None else None
@@ -198,6 +199,31 @@ def _audit_event_item(
         item["changes"] = list(changes)
     if before:
         item["before"] = before
+    if fields:
+        # Снимок заполненных полей (цена, фото, оплата…) для журнала.
+        clean = {}
+        for key in (
+            "address",
+            "description",
+            "image_url",
+            "price",
+            "payment_url",
+            "host",
+            "max_seats",
+            "status",
+        ):
+            if key not in fields:
+                continue
+            val = fields.get(key)
+            if val is None:
+                continue
+            if isinstance(val, str):
+                val = val.strip()
+                if not val:
+                    continue
+            clean[key] = val
+        if clean:
+            item["fields"] = clean
     return item
 
 
@@ -530,6 +556,8 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
             change="changed",
             changes=audit_changes,
             before=before_identity if before_identity != after_identity else None,
+            address=address,
+            fields=after,
         )
         result.setdefault("saved_items", []).append(item)
         result.setdefault("actions", []).append(item)
@@ -679,6 +707,7 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
         location,
         change="added",
         address=address,
+        fields=after,
     )
     result.setdefault("saved_items", []).append(item)
     result.setdefault("actions", []).append(item)
