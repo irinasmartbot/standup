@@ -2186,3 +2186,206 @@ def get_manager_stata_bookings_for_date(event_date: str) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def anonymize_user(user_id: int) -> dict:
+    """Обезличить гостя по запросу: стереть ПДн, брони оставить без контактов.
+
+    Hard-delete users запрещён (bookings ON DELETE RESTRICT). Возвращает сводку
+    для аудита; в details не кладём исходные имя/телефон.
+    """
+    result = {
+        "ok": False,
+        "already": False,
+        "user_id": int(user_id) if user_id else 0,
+        "had_telegram": False,
+        "had_vk": False,
+        "had_phone": False,
+        "bookings_cancelled": 0,
+        "raffle_scrubbed": 0,
+        "help_scrubbed": 0,
+        "gift_scrubbed": 0,
+        "analytics_scrubbed": 0,
+        "error": "",
+    }
+    if not _use_postgres():
+        result["error"] = "postgres_only"
+        return result
+    if not user_id:
+        result["error"] = "user_id_required"
+        return result
+
+    uid = int(user_id)
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, telegram_id, vk_id, username, name, phone
+                FROM users
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (uid,),
+            )
+            row = cur.fetchone()
+            if not row:
+                result["error"] = "not_found"
+                return result
+
+            _id, telegram_id, vk_id, _username, name, phone = row
+            phone_s = (phone or "").strip()
+            already = (
+                telegram_id is None
+                and vk_id is None
+                and phone_s.startswith("deleted-")
+                and (name or "").strip() == "Удалён"
+            )
+            if already:
+                result["ok"] = True
+                result["already"] = True
+                return result
+
+            result["had_telegram"] = telegram_id is not None
+            result["had_vk"] = vk_id is not None
+            result["had_phone"] = bool(phone_s)
+            # Сентинел для CHECK (нужен хотя бы один из telegram_id / vk_id / phone)
+            # и для CHECK в raffle_submissions / help_requests.
+            sentinel_id = -uid
+
+            cur.execute(
+                """
+                UPDATE bookings
+                SET status = 'cancelled',
+                    cancelled_at = COALESCE(cancelled_at, now()),
+                    updated_at = now()
+                WHERE user_id = %s
+                  AND status IN ('booked', 'confirmed')
+                """,
+                (uid,),
+            )
+            result["bookings_cancelled"] = cur.rowcount or 0
+
+            if telegram_id is not None:
+                cur.execute("DELETE FROM raffle_nav WHERE telegram_id = %s", (telegram_id,))
+            if vk_id is not None:
+                cur.execute("DELETE FROM raffle_vk_awaiting WHERE vk_id = %s", (vk_id,))
+                cur.execute(
+                    "DELETE FROM vk_offline_gift_pending WHERE vk_id = %s",
+                    (vk_id,),
+                )
+
+            cur.execute(
+                """
+                UPDATE raffle_submissions
+                SET user_id = NULL,
+                    telegram_id = CASE
+                        WHEN telegram_id IS NOT NULL THEN %s
+                        WHEN vk_id IS NOT NULL THEN NULL
+                        ELSE %s
+                    END,
+                    vk_id = CASE
+                        WHEN vk_id IS NOT NULL AND telegram_id IS NULL THEN %s
+                        ELSE NULL
+                    END,
+                    username = NULL,
+                    full_name = 'Удалён',
+                    photo_file_id = 'deleted'
+                WHERE user_id = %s
+                   OR (%s::bigint IS NOT NULL AND telegram_id = %s)
+                   OR (%s::bigint IS NOT NULL AND vk_id = %s)
+                """,
+                (
+                    sentinel_id,
+                    sentinel_id,
+                    sentinel_id,
+                    uid,
+                    telegram_id,
+                    telegram_id,
+                    vk_id,
+                    vk_id,
+                ),
+            )
+            result["raffle_scrubbed"] = cur.rowcount or 0
+
+            cur.execute(
+                """
+                UPDATE help_requests
+                SET telegram_id = CASE
+                        WHEN telegram_id IS NOT NULL THEN %s
+                        WHEN vk_id IS NOT NULL THEN NULL
+                        ELSE %s
+                    END,
+                    vk_id = CASE
+                        WHEN vk_id IS NOT NULL AND telegram_id IS NULL THEN %s
+                        ELSE NULL
+                    END,
+                    username = NULL,
+                    full_name = 'Удалён',
+                    question_text = '[удалено]'
+                WHERE (%s::bigint IS NOT NULL AND telegram_id = %s)
+                   OR (%s::bigint IS NOT NULL AND vk_id = %s)
+                """,
+                (
+                    sentinel_id,
+                    sentinel_id,
+                    sentinel_id,
+                    telegram_id,
+                    telegram_id,
+                    vk_id,
+                    vk_id,
+                ),
+            )
+            result["help_scrubbed"] = cur.rowcount or 0
+
+            cur.execute(
+                """
+                UPDATE vk_offline_gift_entries
+                SET user_id = NULL,
+                    vk_id = %s,
+                    full_name = 'Удалён'
+                WHERE user_id = %s
+                   OR (%s::bigint IS NOT NULL AND vk_id = %s)
+                """,
+                (sentinel_id, uid, vk_id, vk_id),
+            )
+            result["gift_scrubbed"] = cur.rowcount or 0
+
+            cur.execute(
+                """
+                UPDATE analytics_events
+                SET user_id = NULL,
+                    telegram_id = NULL,
+                    vk_id = NULL,
+                    props = '{}'::jsonb
+                WHERE user_id = %s
+                   OR (%s::bigint IS NOT NULL AND telegram_id = %s)
+                   OR (%s::bigint IS NOT NULL AND vk_id = %s)
+                """,
+                (uid, telegram_id, telegram_id, vk_id, vk_id),
+            )
+            result["analytics_scrubbed"] = cur.rowcount or 0
+
+            cur.execute(
+                """
+                UPDATE users
+                SET telegram_id = NULL,
+                    vk_id = NULL,
+                    username = NULL,
+                    name = 'Удалён',
+                    phone = %s,
+                    rozygrysh_used = false,
+                    is_blocked = true,
+                    blocked_at = COALESCE(blocked_at, now()),
+                    last_active_at = now()
+                WHERE id = %s
+                """,
+                (f"deleted-{uid}", uid),
+            )
+            if cur.rowcount <= 0:
+                result["error"] = "update_failed"
+                conn.rollback()
+                return result
+
+        conn.commit()
+    result["ok"] = True
+    return result

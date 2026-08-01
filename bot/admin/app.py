@@ -1208,6 +1208,7 @@ _AUDIT_ACTION_META = {
     "events_cancel_bookings": ("Отменил брони по скрытым датам", "cancel"),
     "resend_ticket": ("Переотправил билет", "ticket"),
     "resend_tickets_event": ("Массово переотправил билеты", "ticket"),
+    "user_anonymize": ("Обезличил данные гостя", "user"),
 }
 _AUDIT_AFISHA_LABELS = {
     "best": "BEST",
@@ -1262,6 +1263,8 @@ def _audit_target_label(entity_type: str, entity_id: str) -> str:
         return f"мероприятие #{eid}"
     if et == "booking":
         return f"бронь #{eid}" if eid else "бронь"
+    if et == "user":
+        return f"гость #{eid}" if eid else "гость"
     if et == "admin":
         return ""
     if et or eid:
@@ -2266,6 +2269,7 @@ def _users_tab(
     flash: str = "",
     *,
     can_resend_tickets: bool = True,
+    can_anonymize_user: bool = False,
     stage_by_user: dict | None = None,
 ) -> str:
     status = filters.get("status") or ""
@@ -2369,6 +2373,31 @@ def _users_tab(
             )
         extras = user_extras or {}
         stage_text = _user_stage_line(user, extras.get("last_event"))
+        phone_s = (user.get("phone") or "").strip()
+        already_anon = (
+            (user.get("name") or "").strip() == "Удалён"
+            and phone_s.startswith("deleted-")
+            and not user.get("telegram_id")
+            and not user.get("vk_id")
+        )
+        anonymize_block = ""
+        if can_anonymize_user:
+            if already_anon:
+                anonymize_block = (
+                    '<p class="muted">Персональные данные уже обезличены.</p>'
+                )
+            else:
+                anonymize_block = (
+                    '<form method="post" action="/admin/users/anonymize" '
+                    'class="ticket-resend-form" style="margin-top:12px" '
+                    "onsubmit=\"return confirm("
+                    "'Обезличить этого гостя? Имя, телефон и ID будут стёрты. "
+                    "Активные брони отменятся. Это действие нельзя отменить.');\">"
+                    f'<input type="hidden" name="user_id" value="{_h(user.get("user_id") or "")}">'
+                    f'<input type="hidden" name="u" value="{_h(user["key"])}">'
+                    '<button type="submit">Удалить персональные данные</button>'
+                    "</form>"
+                )
         detail = (
             '<section class="card user-detail">'
             f'<h2>{_h(user["name"] or "Без имени")}</h2>'
@@ -2384,6 +2413,7 @@ def _users_tab(
             '</div>'
             f'<p class="user-stage"><b>Где сейчас:</b> {_h(stage_text)}</p>'
             f"{empty_note}"
+            f"{anonymize_block}"
             '<div class="user-extra-stack">'
             f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or [], extras.get("activity_recent") or []), tone="activity")}'
             f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]), tone="reminders")}'
@@ -3068,6 +3098,7 @@ def _content(
             user_extras=user_extras,
             flash=events_flash,
             can_resend_tickets=can_resend_tickets,
+            can_anonymize_user=can_resend_tickets,
             stage_by_user=user_stage_by_user,
         )
     if tab == "analytics":
@@ -4294,6 +4325,22 @@ async def admin_page(request: web.Request) -> web.Response:
                 if ok == "1" and fail == "0"
                 else f"Не удалось переотправить билет{': ' + err[:200] if err else '.'}"
             )
+        elif saved_flag == "anonymize":
+            ok = request.query.get("ok") or "0"
+            already = request.query.get("already") or "0"
+            err = (request.query.get("err") or "").strip()
+            if ok == "1" and already == "1":
+                events_flash = "Персональные данные этого гостя уже были обезличены."
+            elif ok == "1":
+                cancelled = request.query.get("cancelled") or "0"
+                events_flash = (
+                    "Персональные данные гостя удалены (обезличены). "
+                    f"Активных броней отменено: {cancelled}."
+                )
+            else:
+                events_flash = (
+                    f"Не удалось обезличить гостя{': ' + err[:200] if err else '.'}"
+                )
     else:
         # With a date selected, load all shows that day (even empty) so the show picker is complete.
         include_empty_events = bool(filters.get("date")) and filters.get("tab") in {"date", "bookings"}
@@ -4400,6 +4447,64 @@ async def admin_page(request: web.Request) -> web.Response:
         ),
         content_type="text/html",
     )
+
+
+async def users_anonymize_page(request: web.Request) -> web.Response:
+    """Owner-only: scrub PII for a guest (right to erasure)."""
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        return web.Response(text=render_login_html(), status=200, content_type="text/html")
+    if not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin?tab=users")
+
+    from urllib.parse import urlencode
+
+    from bot.db.admin_audit import log_admin_action
+    from bot.db.crud import anonymize_user
+
+    post = await request.post()
+    user_id_raw = (post.get("user_id") or "").strip()
+    user_key = (post.get("u") or user_id_raw).strip()
+    actor = _admin_role(request, config)
+
+    if not user_id_raw.isdigit():
+        q = urlencode({"tab": "users", "saved": "anonymize", "ok": "0", "err": "no_user_id"})
+        raise web.HTTPFound(f"/admin?{q}")
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, anonymize_user, int(user_id_raw))
+
+    log_admin_action(
+        actor_role=actor,
+        action="user_anonymize",
+        entity_type="user",
+        entity_id=user_id_raw,
+        details={
+            "ok": bool(result.get("ok")),
+            "already": bool(result.get("already")),
+            "had_telegram": bool(result.get("had_telegram")),
+            "had_vk": bool(result.get("had_vk")),
+            "had_phone": bool(result.get("had_phone")),
+            "bookings_cancelled": int(result.get("bookings_cancelled") or 0),
+            "raffle_scrubbed": int(result.get("raffle_scrubbed") or 0),
+            "help_scrubbed": int(result.get("help_scrubbed") or 0),
+            "gift_scrubbed": int(result.get("gift_scrubbed") or 0),
+            "analytics_scrubbed": int(result.get("analytics_scrubbed") or 0),
+            "error": (result.get("error") or "")[:80],
+        },
+    )
+
+    q = {
+        "tab": "users",
+        "u": user_key or user_id_raw,
+        "saved": "anonymize",
+        "ok": "1" if result.get("ok") else "0",
+        "already": "1" if result.get("already") else "0",
+        "cancelled": str(int(result.get("bookings_cancelled") or 0)),
+    }
+    if not result.get("ok"):
+        q["err"] = (result.get("error") or "failed")[:80]
+    raise web.HTTPFound(f"/admin?{urlencode(q)}")
 
 
 async def events_resend_ticket_page(request: web.Request) -> web.Response:
@@ -4864,6 +4969,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_post("/admin/events/save", events_save_page)
     app.router.add_post("/admin/events/restore", events_restore_page)
     app.router.add_post("/admin/events/resend-ticket", events_resend_ticket_page)
+    app.router.add_post("/admin/users/anonymize", users_anonymize_page)
     app.router.add_post("/admin/login", login_page)
     app.router.add_get("/admin/logout", logout_page)
     return app
