@@ -4037,27 +4037,55 @@ def _check_auth(request: web.Request, config: AdminConfig) -> bool:
     return _token_matches(_request_token(request), config)
 
 
+def _is_https_request(request: web.Request | None) -> bool:
+    if request is None:
+        return False
+    forwarded = (request.headers.get("X-Forwarded-Proto") or "").split(",", 1)[0].strip().lower()
+    if forwarded == "https" or request.scheme == "https":
+        return True
+    host = (request.headers.get("Host") or request.host or "").split(":", 1)[0].lower()
+    # Боевые домены всегда за TLS (nginx) — даже если upstream видит http://127.0.0.1.
+    return host.endswith("moscowstandupshow.ru") or host.endswith("duckdns.org")
+
+
 def _set_auth_cookie(
     response: web.Response,
     token: str,
     *,
     request: web.Request | None = None,
 ) -> None:
-    # За nginx HTTPS без Secure cookie иногда не цепляется; 401 на форме логина
-    # ещё и заставляет браузер повторно спросить basic auth.
-    forwarded = ""
-    if request is not None:
-        forwarded = (request.headers.get("X-Forwarded-Proto") or "").split(",", 1)[0].strip()
-    secure = forwarded == "https" or (request is not None and request.scheme == "https")
     response.set_cookie(
         ADMIN_COOKIE_NAME,
         token,
         max_age=ADMIN_COOKIE_MAX_AGE,
         httponly=True,
         samesite="Lax",
-        secure=secure,
+        secure=_is_https_request(request),
         path="/",
     )
+
+
+def _login_success_response(request: web.Request, token: str, dest: str) -> web.Response:
+    """После токена — 200 + cookie + redirect.
+
+    302/303 за nginx auth_basic у части браузеров снова поднимает окно логина/пароля.
+    """
+    safe = dest if dest.startswith("/admin") else "/admin"
+    href = _h(safe)
+    html = f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="0; url={href}">
+  <title>Вход…</title>
+</head>
+<body>
+  <p>Вход выполнен. Если страница не открылась — <a href="{href}">продолжить</a>.</p>
+</body>
+</html>"""
+    response = web.Response(text=html, status=200, content_type="text/html")
+    _set_auth_cookie(response, token, request=request)
+    return response
 
 
 def render_login_html(error: str = "") -> str:
@@ -4104,9 +4132,7 @@ async def admin_page(request: web.Request) -> web.Response:
         return web.Response(text=render_login_html(), status=200, content_type="text/html")
     query_token = (request.query.get("token") or "").strip()
     if query_token and _token_matches(query_token, config):
-        response = web.HTTPFound(_redirect_without_token(request))
-        _set_auth_cookie(response, query_token, request=request)
-        raise response
+        return _login_success_response(request, query_token, _redirect_without_token(request))
 
     can_view_db = _can_view_db(request, config)
     can_view_ops = _can_view_ops(request, config)
@@ -4787,14 +4813,12 @@ async def login_page(request: web.Request) -> web.Response:
     from bot.db.admin_audit import log_admin_action
 
     log_admin_action(actor_role=role, action="login", entity_type="admin", entity_id="")
-    response = web.HTTPFound(dest)
-    _set_auth_cookie(response, token, request=request)
-    raise response
+    return _login_success_response(request, token, dest)
 
 
 async def logout_page(request: web.Request) -> web.Response:
     response = web.HTTPFound("/admin")
-    response.del_cookie(ADMIN_COOKIE_NAME)
+    response.del_cookie(ADMIN_COOKIE_NAME, path="/")
     raise response
 
 
@@ -4805,7 +4829,8 @@ async def index_page(request: web.Request) -> web.Response:
 async def events_hide_preview_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config):
-        return web.json_response({"error": "auth"}, status=401)
+        # 403, не 401: иначе браузер может снова спросить nginx basic auth.
+        return web.json_response({"error": "auth"}, status=403)
     raw_ids = (request.query.get("ids") or "").strip()
     audience = (request.query.get("audience") or "").strip()
     if not _can_resend_tickets(request, config):
