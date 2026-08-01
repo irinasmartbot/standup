@@ -4037,13 +4037,26 @@ def _check_auth(request: web.Request, config: AdminConfig) -> bool:
     return _token_matches(_request_token(request), config)
 
 
-def _set_auth_cookie(response: web.Response, token: str) -> None:
+def _set_auth_cookie(
+    response: web.Response,
+    token: str,
+    *,
+    request: web.Request | None = None,
+) -> None:
+    # За nginx HTTPS без Secure cookie иногда не цепляется; 401 на форме логина
+    # ещё и заставляет браузер повторно спросить basic auth.
+    forwarded = ""
+    if request is not None:
+        forwarded = (request.headers.get("X-Forwarded-Proto") or "").split(",", 1)[0].strip()
+    secure = forwarded == "https" or (request is not None and request.scheme == "https")
     response.set_cookie(
         ADMIN_COOKIE_NAME,
         token,
         max_age=ADMIN_COOKIE_MAX_AGE,
         httponly=True,
         samesite="Lax",
+        secure=secure,
+        path="/",
     )
 
 
@@ -4087,11 +4100,12 @@ def _redirect_without_token(request: web.Request) -> str:
 async def admin_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config):
-        return web.Response(text=render_login_html(), status=401, content_type="text/html")
+        # 200, не 401: иначе за nginx auth_basic браузер снова просит логин/пароль.
+        return web.Response(text=render_login_html(), status=200, content_type="text/html")
     query_token = (request.query.get("token") or "").strip()
     if query_token and _token_matches(query_token, config):
         response = web.HTTPFound(_redirect_without_token(request))
-        _set_auth_cookie(response, query_token)
+        _set_auth_cookie(response, query_token, request=request)
         raise response
 
     can_view_db = _can_view_db(request, config)
@@ -4365,7 +4379,7 @@ async def admin_page(request: web.Request) -> web.Response:
 async def events_resend_ticket_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config):
-        return web.Response(text=render_login_html(), status=401, content_type="text/html")
+        return web.Response(text=render_login_html(), status=200, content_type="text/html")
     if not _can_resend_tickets(request, config):
         raise web.HTTPFound("/admin?tab=events")
     from bot.admin.ticket_resend import resend_ticket_async, resend_tickets_for_event_async
@@ -4470,7 +4484,7 @@ async def events_resend_ticket_page(request: web.Request) -> web.Response:
 async def events_save_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config):
-        return web.Response(text=render_login_html(), status=401, content_type="text/html")
+        return web.Response(text=render_login_html(), status=200, content_type="text/html")
     from bot.admin.events_tab import parse_events_form
     from bot.db.events_admin import list_events_for_admin, save_events_batch
     from urllib.parse import quote
@@ -4649,7 +4663,7 @@ async def events_save_page(request: web.Request) -> web.Response:
 async def events_restore_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config):
-        return web.Response(text=render_login_html(), status=401, content_type="text/html")
+        return web.Response(text=render_login_html(), status=200, content_type="text/html")
     from bot.db.events_admin import restore_events
     from bot.db.admin_audit import log_admin_action
     from urllib.parse import quote
@@ -4752,7 +4766,11 @@ async def login_page(request: web.Request) -> web.Response:
     data = await request.post()
     token = (data.get("token") or "").strip()
     if not _token_matches(token, config):
-        return web.Response(text=render_login_html("Неверный токен"), status=401, content_type="text/html")
+        return web.Response(
+            text=render_login_html("Неверный токен"),
+            status=200,
+            content_type="text/html",
+        )
     # Manager → only events; client/owner → main admin
     if _is_manager_token(token, config) and not _is_owner_token(token, config) and not _is_client_token(token, config):
         dest = "/admin?tab=events"
@@ -4770,7 +4788,7 @@ async def login_page(request: web.Request) -> web.Response:
 
     log_admin_action(actor_role=role, action="login", entity_type="admin", entity_id="")
     response = web.HTTPFound(dest)
-    _set_auth_cookie(response, token)
+    _set_auth_cookie(response, token, request=request)
     raise response
 
 
