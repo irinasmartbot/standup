@@ -2384,19 +2384,27 @@ def _users_tab(
         if can_anonymize_user:
             if already_anon:
                 anonymize_block = (
-                    '<p class="muted">Персональные данные уже обезличены.</p>'
+                    '<div class="user-anonymize-box">'
+                    "<b>ПДн:</b> персональные данные уже обезличены."
+                    "</div>"
                 )
             else:
                 anonymize_block = (
-                    '<form method="post" action="/admin/users/anonymize" '
-                    'class="ticket-resend-form" style="margin-top:12px" '
-                    "onsubmit=\"return confirm("
-                    "'Обезличить этого гостя? Имя, телефон и ID будут стёрты. "
-                    "Активные брони отменятся. Это действие нельзя отменить.');\">"
+                    '<div class="user-anonymize-box">'
+                    "<b>Запрос на удаление данных</b>"
+                    '<p class="muted" style="margin:6px 0 10px">'
+                    "Стереть имя, телефон и Telegram/VK ID. Активные брони отменятся. "
+                    "История броней без контактов останется."
+                    "</p>"
+                    '<form method="post" action="/admin/users/anonymize" class="ticket-resend-form">'
                     f'<input type="hidden" name="user_id" value="{_h(user.get("user_id") or "")}">'
                     f'<input type="hidden" name="u" value="{_h(user["key"])}">'
-                    '<button type="submit">Удалить персональные данные</button>'
+                    '<button type="submit" onclick="return confirm('
+                    "'Обезличить этого гостя? Действие нельзя отменить.');\">"
+                    "Удалить персональные данные"
+                    "</button>"
                     "</form>"
+                    "</div>"
                 )
         detail = (
             '<section class="card user-detail">'
@@ -3086,6 +3094,7 @@ def _content(
     ticket_holders: list[dict] | None = None,
     *,
     can_resend_tickets: bool = True,
+    can_anonymize_user: bool = False,
     user_stage_by_user: dict | None = None,
 ) -> str:
     tab = filters.get("tab") or "date"
@@ -3098,7 +3107,7 @@ def _content(
             user_extras=user_extras,
             flash=events_flash,
             can_resend_tickets=can_resend_tickets,
-            can_anonymize_user=can_resend_tickets,
+            can_anonymize_user=can_anonymize_user,
             stage_by_user=user_stage_by_user,
         )
     if tab == "analytics":
@@ -3144,8 +3153,11 @@ def render_admin_html(
     *,
     can_view_ops: bool = True,
     can_resend_tickets: bool = True,
+    can_anonymize_user: bool | None = None,
     user_stage_by_user: dict | None = None,
 ) -> str:
+    if can_anonymize_user is None:
+        can_anonymize_user = bool(can_view_db)
     totals = dashboard["totals"]
     tab = filters.get("tab") or "date"
     is_db = tab == "db"
@@ -3601,6 +3613,15 @@ def render_admin_html(
     .inline-form {{ display:inline; }}
     .ticket-resend-form {{ margin-top:10px; }}
     .ticket-resend-form button {{ font-size:12px; padding:8px 10px; }}
+    .user-anonymize-box {{
+      margin:14px 0; padding:12px 14px; border-radius:12px;
+      border:1px solid #fecaca; background:#fef2f2;
+    }}
+    .user-anonymize-box button {{
+      background:#b91c1c; color:#fff; border:0; border-radius:10px;
+      padding:10px 14px; font:inherit; cursor:pointer;
+    }}
+    .user-anonymize-box button:hover {{ background:#991b1b; }}
     .show-format-stats b {{ display:block; margin-top:2px; font-size:18px; line-height:1.2; }}
     .show-format-stats small {{ display:block; margin-top:2px; font-size:11px; }}
     .show-format-block h3, .branch-card h3 {{ margin:0 0 10px; font-size:16px; }}
@@ -3888,7 +3909,7 @@ def render_admin_html(
   <main>
     <nav class="tabs">{_tabs(filters, can_view_ops=can_view_ops, can_view_db=can_view_db)}</nav>
     {summary_html}
-    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors, ticket_holders, can_resend_tickets=can_resend_tickets, user_stage_by_user=user_stage_by_user)}
+    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors, ticket_holders, can_resend_tickets=can_resend_tickets, can_anonymize_user=can_anonymize_user, user_stage_by_user=user_stage_by_user)}
   </main>
   <script>
     (function () {{
@@ -4443,6 +4464,7 @@ async def admin_page(request: web.Request) -> web.Response:
             ticket_holders,
             can_view_ops=can_view_ops,
             can_resend_tickets=can_resend,
+            can_anonymize_user=can_view_db,
             user_stage_by_user=user_stage_by_user,
         ),
         content_type="text/html",
