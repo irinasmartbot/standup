@@ -71,6 +71,7 @@ def _event_keyboard(
     kb.button(text="🎁 Выбрать победителя", callback_data=f"og_draw:{event_id}")
     if has_winner:
         kb.button(text="🔁 Перевыбрать", callback_data=f"og_redraw:{event_id}")
+    kb.button(text="🔄 Обновить информацию", callback_data=f"og_refresh:{event_id}")
     if show_back_to_shows:
         kb.button(text="⬅️ К шоу", callback_data=f"og_back_event:{event_id}")
     kb.button(text="⬅️ К датам", callback_data="og_dates")
@@ -198,6 +199,13 @@ async def og_back_event(call: CallbackQuery):
 async def og_event(call: CallbackQuery):
     await _send_event_entries(call, int(call.data.split(":", 1)[1]))
     await call.answer()
+
+
+@router.callback_query(F.data.startswith("og_refresh:"))
+async def og_refresh(call: CallbackQuery):
+    event_id = int(call.data.split(":", 1)[1])
+    await _send_event_entries(call, event_id)
+    await call.answer("Список обновлён")
 
 
 @router.callback_query(F.data.startswith("og_draw:") & ~F.data.startswith("og_redraw:"))
