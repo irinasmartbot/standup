@@ -1503,21 +1503,38 @@ def _audit_friendly_detail_lines(action: str, details: dict) -> list[str]:
         return lines
     if action == "user_anonymize":
         # Заголовок журнала уже содержит гостя; сырые флаги ok/had_* не показываем.
-        if details.get("ok") is False:
+        ok_val = details.get("ok")
+        failed = ok_val in (False, "false", "0", 0)
+        if failed:
             err = str(details.get("error") or "").strip()
             return [f"Не удалось обезличить{': ' + err if err else '.'}"]
-        if details.get("already"):
+        if details.get("already") in (True, "true", "1", 1):
             return ["Данные уже были обезличены ранее."]
         cancelled = int(_audit_num(details, "bookings_cancelled") or 0)
         if cancelled:
             return [f"Активных броней отменено: {cancelled}."]
         return []
-    # Fallback: short readable key=value list, not raw JSON dump
+    # Fallback: short readable key=value list, not raw JSON dump / bool flags
     if not details:
         return []
+    skip_keys = {
+        "ok",
+        "already",
+        "had_telegram",
+        "had_vk",
+        "had_phone",
+        "error",
+        "raffle_scrubbed",
+        "help_scrubbed",
+        "gift_scrubbed",
+        "analytics_scrubbed",
+        "bookings_cancelled",
+    }
     bits = []
-    for key, value in list(details.items())[:6]:
-        if value in ("", None, [], {}) or isinstance(value, (list, dict)):
+    for key, value in list(details.items())[:8]:
+        if key in skip_keys or str(key).startswith("had_"):
+            continue
+        if value in ("", None, [], {}, True, False) or isinstance(value, (list, dict, bool)):
             continue
         bits.append(f"{key}: {value}")
     return [" · ".join(bits)] if bits else []
@@ -4570,24 +4587,19 @@ async def users_anonymize_page(request: web.Request) -> web.Response:
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, anonymize_user, int(user_id_raw))
 
+    log_details = {
+        "ok": bool(result.get("ok")),
+        "already": bool(result.get("already")),
+        "bookings_cancelled": int(result.get("bookings_cancelled") or 0),
+    }
+    if result.get("error"):
+        log_details["error"] = (result.get("error") or "")[:80]
     log_admin_action(
         actor_role=actor,
         action="user_anonymize",
         entity_type="user",
         entity_id=user_id_raw,
-        details={
-            "ok": bool(result.get("ok")),
-            "already": bool(result.get("already")),
-            "had_telegram": bool(result.get("had_telegram")),
-            "had_vk": bool(result.get("had_vk")),
-            "had_phone": bool(result.get("had_phone")),
-            "bookings_cancelled": int(result.get("bookings_cancelled") or 0),
-            "raffle_scrubbed": int(result.get("raffle_scrubbed") or 0),
-            "help_scrubbed": int(result.get("help_scrubbed") or 0),
-            "gift_scrubbed": int(result.get("gift_scrubbed") or 0),
-            "analytics_scrubbed": int(result.get("analytics_scrubbed") or 0),
-            "error": (result.get("error") or "")[:80],
-        },
+        details=log_details,
     )
 
     q = {
