@@ -320,7 +320,13 @@ Backup-скрипт хранится в `scripts/backup_postgres.sh`. На VPS �
 15 3 * * * /home/standup/app/scripts/backup_postgres.sh >> /home/standup/backups/postgres/backup.log 2>&1
 ```
 
-Файлы backup'ов создаются в `/home/standup/backups/postgres` в формате custom dump (`pg_dump -F c`). Скрипт автоматически удаляет backup'ы старше 14 дней.
+Скрипт:
+
+1. Делает `pg_dump` в `/home/standup/backups/postgres` (формат custom, `-F c`).
+2. Удаляет локальные dump'ы старше 14 дней.
+3. Если в `.env` заданы `S3_BACKUP_*`, заливает свежий файл в Beget Object Storage и чистит в бакете dump'ы старше 14 дней.
+
+Переменные на VPS (см. `.env.example`): `S3_BACKUP_ENDPOINT`, `S3_BACKUP_BUCKET`, `S3_BACKUP_ACCESS_KEY`, `S3_BACKUP_SECRET_KEY`, `S3_BACKUP_REGION`. На сервере нужен AWS CLI (`aws`).
 
 Ручной запуск:
 
@@ -328,11 +334,13 @@ Backup-скрипт хранится в `scripts/backup_postgres.sh`. На VPS �
 /home/standup/app/scripts/backup_postgres.sh
 ```
 
-После запуска нужно проверить, что появился `.dump`-файл не нулевого размера:
+После запуска проверить локальный файл и объект в бакете Beget:
 
 ```bash
 ls -lh /home/standup/backups/postgres
 ```
+
+Вне Beget (личный диск и т.п.) пока можно раз в неделю скачивать свежий `.dump` вручную.
 
 ### Проверка восстановления backup
 
