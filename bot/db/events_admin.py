@@ -178,6 +178,7 @@ def _audit_event_item(
     change: str = "changed",
     changes: list[str] | None = None,
     before: dict | None = None,
+    address: str = "",
 ) -> dict:
     try:
         eid = int(event_id) if event_id is not None else None
@@ -190,6 +191,9 @@ def _audit_event_item(
         "location": (location or "").strip(),
         "change": (change or "changed").strip() or "changed",
     }
+    addr = (address or "").strip()
+    if addr:
+        item["address"] = addr
     if changes:
         item["changes"] = list(changes)
     if before:
@@ -669,7 +673,12 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
     result["saved"] += 1
     result["added"] += 1
     item = _audit_event_item(
-        new_id, event_date, event_time, location, change="added"
+        new_id,
+        event_date,
+        event_time,
+        location,
+        change="added",
+        address=address,
     )
     result.setdefault("saved_items", []).append(item)
     result.setdefault("actions", []).append(item)

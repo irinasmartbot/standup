@@ -1287,6 +1287,10 @@ def _audit_event_line(item: dict) -> str:
         str(item.get("time") or "").strip(),
         str(item.get("location") or "").strip(),
     ]
+    address = str(item.get("address") or "").strip()
+    # Адрес в строку только если площадка пустая — иначе дублирует.
+    if address and not parts[-1]:
+        parts.append(address)
     label = " · ".join(p for p in parts if p)
     eid = item.get("id") if item.get("id") is not None else item.get("event_id")
     if eid is not None and str(eid).strip():
@@ -1329,11 +1333,23 @@ def _audit_item_lines(items, *, kind: str = "event", limit: int = 12) -> list[st
     return lines
 
 
+_AUDIT_CHANGE_VERBS = {
+    "added": "добавил",
+    "changed": "изменил",
+    "hidden": "скрыл",
+    "deleted": "удалил",
+    "restored": "вернул",
+}
+
+
 def _audit_action_sentence(item: dict, *, afisha: str = "") -> str:
     """Human sentence for one afisha change (for disputes / journal)."""
     if not isinstance(item, dict):
         return ""
     where = _audit_event_line(item)
+    if not where:
+        eid = item.get("id") if item.get("id") is not None else item.get("event_id")
+        where = f"#{eid}" if eid is not None and str(eid).strip() else ""
     if not where:
         return ""
     afisha_s = f" афиши «{afisha}»" if afisha else " афиши"
@@ -1416,6 +1432,20 @@ def _audit_friendly_detail_lines(action: str, details: dict) -> list[str]:
         if errors:
             lines.append(f"При сохранении были ошибки: {errors}.")
         if not lines:
+            # Fallback, если в details только счётчики без actions.
+            counts = _audit_afisha_change_counts(details)
+            bits = []
+            for key, label in (
+                ("added", "добавлено"),
+                ("changed", "изменено"),
+                ("hidden", "скрыто"),
+                ("deleted", "удалено"),
+            ):
+                n = int(counts.get(key) or _audit_num(details, key) or 0)
+                if n:
+                    bits.append(f"{label}: {n}")
+            if bits:
+                return [f"Изменения в афише «{afisha or 'BEST'}»: " + ", ".join(bits) + "."]
             return ["Нажал «Обновить», но изменений в афише не было."]
         return lines
     if action == "events_restore":
@@ -1641,16 +1671,28 @@ def _audit_friendly_title(
             str(details.get("format") or entity_id or ""),
             entity_id or "афиша",
         )
+        actions = [a for a in _audit_collect_actions(details) if isinstance(a, dict)]
+        # Одна правка — сразу дата/площадка в заголовке.
+        if len(actions) == 1:
+            item = actions[0]
+            where = _audit_event_line(item)
+            verb = _AUDIT_CHANGE_VERBS.get(str(item.get("change") or "").strip(), "обновил")
+            if where:
+                return f"Правки в афише «{afisha}»: {verb} {where}"
         counts = _audit_afisha_change_counts(details)
+        # Подстраховка счётчиками из корня details (старые/урезанные записи).
+        for key in ("added", "changed", "hidden", "deleted"):
+            if not counts.get(key):
+                counts[key] = int(_audit_num(details, key) or 0)
         kinds = []
         if counts["added"]:
-            kinds.append("добавление")
+            kinds.append(f"добавил {counts['added']}")
         if counts["changed"]:
-            kinds.append("изменение")
+            kinds.append(f"изменил {counts['changed']}")
         if counts["hidden"]:
-            kinds.append("скрытие")
+            kinds.append(f"скрыл {counts['hidden']}")
         if counts["deleted"]:
-            kinds.append("удаление")
+            kinds.append(f"удалил {counts['deleted']}")
         if kinds:
             return f"Правки в афише «{afisha}»: " + ", ".join(kinds)
         return f"Сохранение афиши «{afisha}»"
