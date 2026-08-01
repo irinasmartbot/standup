@@ -1501,6 +1501,17 @@ def _audit_friendly_detail_lines(action: str, details: dict) -> list[str]:
             if gl:
                 lines.append(gl)
         return lines
+    if action == "user_anonymize":
+        # Заголовок журнала уже содержит гостя; сырые флаги ok/had_* не показываем.
+        if details.get("ok") is False:
+            err = str(details.get("error") or "").strip()
+            return [f"Не удалось обезличить{': ' + err if err else '.'}"]
+        if details.get("already"):
+            return ["Данные уже были обезличены ранее."]
+        cancelled = int(_audit_num(details, "bookings_cancelled") or 0)
+        if cancelled:
+            return [f"Активных броней отменено: {cancelled}."]
+        return []
     # Fallback: short readable key=value list, not raw JSON dump
     if not details:
         return []
