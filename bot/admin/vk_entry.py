@@ -28,11 +28,8 @@ FLOWS: dict[str, dict[str, Any]] = {
     "booking": {
         "title": "Бронирование",
         "headline": "Забронировать места",
-        "lead": (
-            "Разрешите сообщения от сообщества — и мы сразу отправим "
-            "в личку VK кнопку бронирования."
-        ),
-        "cta": "Отправить кнопку ещё раз",
+        "lead": "Нажмите кнопку VK ниже — и мы сразу пришлём в личку кнопку бронирования.",
+        "cta": "Получить кнопку в VK",
         "cmd": "book",
         "button": "Забронировать места",
         "message": (
@@ -43,11 +40,8 @@ FLOWS: dict[str, dict[str, Any]] = {
     "raffle": {
         "title": "Розыгрыш",
         "headline": "Участвовать в розыгрыше",
-        "lead": (
-            "Разрешите сообщения от сообщества — пришлём в личку "
-            "инструкцию и кнопки розыгрыша."
-        ),
-        "cta": "Отправить инструкцию ещё раз",
+        "lead": "Нажмите кнопку VK ниже — пришлём в личку инструкцию и кнопки розыгрыша.",
+        "cta": "Получить инструкцию в VK",
         "cmd": "raffle",
         "button": "Участвовать в розыгрыше",
         "message": "Нажмите кнопку ниже, чтобы начать участие в розыгрыше 👇",
@@ -55,11 +49,8 @@ FLOWS: dict[str, dict[str, Any]] = {
     "offline_gift": {
         "title": "Подарок",
         "headline": "Офлайн-розыгрыш подарка",
-        "lead": (
-            "Разрешите сообщения — добавим вас в список участников "
-            "(нужна подписка на сообщество)."
-        ),
-        "cta": "Отправить кнопку ещё раз",
+        "lead": "Нажмите кнопку VK ниже — добавим вас в список (нужна подписка на сообщество).",
+        "cta": "Получить кнопку в VK",
         "cmd": "offline_gift",
         "button": "Участвовать в розыгрыше подарка",
         "message": (
@@ -98,9 +89,13 @@ def _landing_html(flow_key: str) -> str:
     else:
         body = f"""
         <p class="lead">{escape(flow["lead"])}</p>
+        <div class="steps">
+          <p><span>1</span> Разрешите сообщения сообществу</p>
+          <p><span>2</span> Откройте личку VK — там будет кнопка</p>
+        </div>
         <div id="vk_allow_messages_from_community" class="widget"></div>
         <p id="status" class="status" hidden></p>
-        <button type="button" id="cta" class="cta" disabled>{escape(flow["cta"])}</button>
+        <button type="button" id="cta" class="cta">{escape(flow["cta"])}</button>
         """
         widget_js = f"""
 <script src="https://vk.com/js/api/openapi.js?169"></script>
@@ -118,40 +113,45 @@ def _landing_html(flow_key: str) -> str:
     statusEl.className = "status " + (ok ? "ok" : "err");
   }}
 
+  function normalizeId(userId) {{
+    if (userId == null) return null;
+    if (typeof userId === "object" && userId.id != null) return String(userId.id);
+    return String(userId);
+  }}
+
   function sendEntry() {{
     if (!vkId || sending) return;
     sending = true;
     cta.disabled = true;
-    setStatus("Отправляем сообщение…", true);
+    setStatus("Отправляем в VK…", true);
     fetch("/vk/entry", {{
       method: "POST",
       headers: {{ "Content-Type": "application/json" }},
-      body: JSON.stringify({{ vk_id: vkId, flow: flow }})
+      body: JSON.stringify({{ vk_id: Number(vkId), flow: flow }})
     }})
       .then(function (r) {{ return r.json().then(function (j) {{ return {{ ok: r.ok, j: j }}; }}); }})
       .then(function (res) {{
         sending = false;
+        cta.disabled = false;
         if (res.ok && res.j && res.j.ok) {{
-          setStatus("Готово! Откройте личные сообщения с сообществом в VK.", true);
-          cta.disabled = false;
+          setStatus("Готово! Откройте личные сообщения с сообществом во ВКонтакте.", true);
         }} else {{
-          var msg = (res.j && res.j.error) ? res.j.error : "Не удалось отправить. Попробуйте ещё раз.";
+          var msg = (res.j && res.j.error) ? res.j.error : "Не удалось отправить. Нажмите кнопку ещё раз.";
           setStatus(msg, false);
-          cta.disabled = false;
         }}
       }})
       .catch(function () {{
         sending = false;
-        setStatus("Сеть недоступна. Попробуйте ещё раз.", false);
         cta.disabled = false;
+        setStatus("Сеть недоступна. Нажмите кнопку ещё раз.", false);
       }});
   }}
 
   function onAllowed(userId) {{
-    if (!userId) return;
-    vkId = userId;
-    cta.disabled = false;
-    setStatus("Сообщения разрешены — отправляем кнопку в VK…", true);
+    var id = normalizeId(userId);
+    if (!id || id === "0") return;
+    vkId = id;
+    setStatus("Отправляем в VK…", true);
     sendEntry();
   }}
 
@@ -164,12 +164,9 @@ def _landing_html(flow_key: str) -> str:
   VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onAllowed);
   VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", function () {{
     vkId = null;
-    cta.disabled = false;
-    setStatus("Снова нажмите виджет и разрешите сообщения — тогда отправим кнопку в VK.", false);
+    setStatus("Нажмите кнопку VK выше и выберите «Разрешить».", false);
   }});
 
-  // Если сообщения уже были разрешены раньше, событие allowed при загрузке
-  // не приходит — пробуем сессию OpenAPI и подсказываем перещёлкнуть виджет.
   try {{
     VK.Auth.getLoginStatus(function (resp) {{
       if (resp && resp.session && resp.session.mid) {{
@@ -178,22 +175,9 @@ def _landing_html(flow_key: str) -> str:
     }});
   }} catch (e) {{}}
 
-  setTimeout(function () {{
-    if (!vkId) {{
-      cta.disabled = false;
-      setStatus(
-        "Если сверху уже «Запретить уведомления» — нажмите это, затем снова разрешите. После разрешения сообщение уйдёт само.",
-        true
-      );
-    }}
-  }}, 700);
-
   cta.addEventListener("click", function () {{
     if (!vkId) {{
-      setStatus(
-        "Сначала разрешите сообщения виджетом. Если уже разрешено — нажмите «Запретить», потом снова разрешите.",
-        false
-      );
+      setStatus("Сначала нажмите кнопку VK выше и разрешите сообщения.", false);
       return;
     }}
     sendEntry();
@@ -208,44 +192,71 @@ def _landing_html(flow_key: str) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{escape(flow["title"])} · Moscow StandUp Show</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700&family=Pacifico&display=swap" rel="stylesheet">
   <style>
-    :root {{ color-scheme: light; }}
+    :root {{
+      --bg0: #070708;
+      --bg1: #2a060c;
+      --gold: #e8c56a;
+      --gold-deep: #c9a227;
+      --text: #f7f3ea;
+      --muted: #d2c4b0;
+    }}
     * {{ box-sizing: border-box; }}
     body {{
-      margin: 0; min-height: 100vh; font-family: Georgia, "Times New Roman", serif;
-      background: linear-gradient(165deg, #1a1f2e 0%, #2c1810 45%, #1a1f2e 100%);
-      color: #f5f0e8;
+      margin: 0; min-height: 100vh; color: var(--text);
+      font-family: Manrope, sans-serif;
+      background:
+        radial-gradient(ellipse 90% 55% at 50% 100%, rgba(180, 30, 45, .45) 0%, transparent 55%),
+        radial-gradient(ellipse 70% 40% at 50% 0%, rgba(80, 10, 20, .55) 0%, transparent 50%),
+        linear-gradient(180deg, #12080c 0%, var(--bg0) 45%, #14060a 100%);
     }}
     main {{
-      width: min(440px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 64px;
+      width: min(440px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 72px;
     }}
     .brand {{
-      font-family: system-ui, sans-serif; font-size: 13px; letter-spacing: .08em;
-      text-transform: uppercase; color: #c4b5a0; margin: 0 0 20px;
+      margin: 0 0 18px; font-family: Pacifico, cursive; font-size: 22px;
+      color: var(--gold); line-height: 1.2; text-shadow: 0 0 24px rgba(232, 197, 106, .25);
     }}
     h1 {{
-      margin: 0 0 12px; font-size: clamp(28px, 6vw, 36px); font-weight: 700;
-      line-height: 1.15; color: #fffaf3;
+      margin: 0 0 14px; font-size: clamp(28px, 7vw, 38px); font-weight: 700;
+      line-height: 1.15; letter-spacing: -0.02em;
     }}
-    .lead {{ margin: 0 0 28px; font-family: system-ui, sans-serif; font-size: 16px;
-      line-height: 1.45; color: #e8dfd2; }}
-    .widget {{ margin: 0 0 16px; min-height: 36px; }}
+    .lead {{
+      margin: 0 0 22px; font-size: 16px; line-height: 1.45; color: var(--muted);
+    }}
+    .steps {{
+      margin: 0 0 22px; display: grid; gap: 8px;
+    }}
+    .steps p {{
+      margin: 0; display: flex; gap: 10px; align-items: center;
+      font-size: 14px; color: var(--muted);
+    }}
+    .steps span {{
+      flex: 0 0 22px; height: 22px; border-radius: 999px;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: rgba(232, 197, 106, .15); color: var(--gold); font-size: 12px; font-weight: 700;
+    }}
+    .widget {{ margin: 0 0 14px; min-height: 36px; }}
     .cta {{
-      display: block; width: 100%; height: 52px; border: 0; border-radius: 10px;
-      background: #e8a87c; color: #1a120c; font: 600 16px system-ui, sans-serif;
-      cursor: pointer;
+      display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
+      padding: 14px 16px; cursor: pointer;
+      background: linear-gradient(180deg, #f0d48a 0%, var(--gold-deep) 100%);
+      color: #1a1208; font: 700 16px Manrope, sans-serif;
+      box-shadow: 0 8px 28px rgba(201, 162, 39, .28);
     }}
     .cta:disabled {{ opacity: .45; cursor: not-allowed; }}
     .status {{
-      font-family: system-ui, sans-serif; font-size: 14px; margin: 0 0 14px;
-      padding: 10px 12px; border-radius: 8px; background: rgba(255,255,255,.08);
+      font-size: 14px; margin: 0 0 14px; padding: 12px 14px; border-radius: 12px;
+      background: rgba(255,255,255,.06); border: 1px solid rgba(232, 197, 106, .18);
     }}
-    .status.ok {{ color: #c8f0c8; }}
-    .status.err {{ color: #ffc9c9; }}
+    .status.ok {{ color: #d8f5d0; }}
+    .status.err {{ color: #ffd0d0; }}
     .warn {{
-      font-family: system-ui, sans-serif; background: rgba(255,200,120,.12);
-      border: 1px solid rgba(255,200,120,.35); padding: 14px 16px; border-radius: 10px;
-      color: #ffe6c0;
+      background: rgba(232, 197, 106, .1); border: 1px solid rgba(232, 197, 106, .35);
+      padding: 14px 16px; border-radius: 12px; color: #ffe6b0;
     }}
   </style>
 </head>
