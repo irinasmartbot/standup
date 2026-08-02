@@ -1492,6 +1492,29 @@ class VKBotApp:
         self._peer_cmd_cooldown[key] = now
         return prev is not None and (now - prev) < 1.5
 
+    async def _enrich_message_ref(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Long Poll часто без ref — подтянуть через messages.getById."""
+        mid = message.get("id")
+        if mid is None:
+            return message
+        full = await self.client.get_message_by_id(int(mid))
+        if not full:
+            return message
+        ref = full.get("ref")
+        if not ref:
+            logger.info(
+                "VK getById id=%s has no ref (keys=%s)",
+                mid,
+                sorted(str(k) for k in full.keys()),
+            )
+            return message
+        enriched = dict(message)
+        enriched["ref"] = ref
+        if full.get("ref_source") is not None:
+            enriched["ref_source"] = full.get("ref_source")
+        logger.info("VK getById enriched id=%s ref=%r", mid, ref)
+        return enriched
+
     async def handle_update(self, update: dict[str, Any]) -> None:
         utype = update.get("type")
         if utype == "message_event":
@@ -1708,22 +1731,25 @@ class VKBotApp:
         #   синей «Начать» часто нет — человек пишет слово).
         # Нельзя брать голый message.ref на любой текст: VK «липко» таскает ref
         # дальше (фото/кнопки). Кнопки с cmd (бронь и т.п.) сюда не попадают.
-        ref = str(message.get("ref") or payload.get("ref") or "").strip().casefold()
         payload_command = str(payload.get("command") or "").strip().casefold()
         is_start_entry = payload_command == "start" or text_key in {
             "/start",
             "start",
             "начать",
         }
-        if ref:
+        # Long Poll часто не кладёт ref в event — добираем через messages.getById.
+        if is_start_entry and not cmd and not (message.get("ref") or payload.get("ref")):
+            message = await self._enrich_message_ref(message)
+        ref = str(message.get("ref") or payload.get("ref") or "").strip().casefold()
+        if is_start_entry:
             logger.info(
-                "VK ref peer_id=%s vk_id=%s ref=%r payload_command=%r start_entry=%s cmd=%s",
+                "VK start_entry peer_id=%s vk_id=%s ref=%r payload_command=%r cmd=%s msg_id=%s",
                 peer_id,
                 vk_id,
                 ref,
                 payload_command,
-                is_start_entry,
                 cmd,
+                message.get("id"),
             )
         is_gift_deeplink = _is_offline_gift_ref(ref) and is_start_entry and not cmd
         if cmd == "offline_gift" or is_gift_deeplink:

@@ -73,6 +73,25 @@ class VKClient:
             raise VKAPIError(f"{method}: {error.get('error_msg') or error}")
         return data.get("response", {})
 
+    async def get_message_by_id(self, message_id: int) -> dict[str, Any] | None:
+        """Полный объект сообщения (в Long Poll часто нет поля ref)."""
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return None
+        if mid <= 0:
+            return None
+        try:
+            resp = await self.api("messages.getById", message_ids=str(mid))
+        except VKAPIError:
+            logger.exception("messages.getById failed id=%s", mid)
+            return None
+        items = resp.get("items") if isinstance(resp, dict) else None
+        if not items:
+            return None
+        item = items[0]
+        return item if isinstance(item, dict) else None
+
     async def send_message(
         self,
         peer_id: int,
