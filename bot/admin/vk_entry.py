@@ -37,21 +37,21 @@ FLOWS: dict[str, dict[str, Any]] = {
         "title": "Бронирование",
         "headline": "Забронировать места",
         "button": "Забронировать места",
-        "lead": "Разрешите сообщения сообществу — сразу пришлём в VK выбор формата шоу.",
+        "lead": "Разрешите сообщения — пришлём выбор формата в личку VK.",
         "ref": "standup_book",
     },
     "raffle": {
         "title": "Розыгрыш",
         "headline": "Участвовать в розыгрыше",
         "button": "Участвовать в розыгрыше",
-        "lead": "Разрешите сообщения сообществу — сразу пришлём в VK старт розыгрыша.",
+        "lead": "Разрешите сообщения — пришлём старт розыгрыша в личку VK.",
         "ref": "standup_rozygr",
     },
     "offline_gift": {
         "title": "Подарок",
         "headline": "Участвовать в розыгрыше на шоу",
         "button": "Подарок на шоу",
-        "lead": "Разрешите сообщения сообществу — сразу пришлём в VK список на подарок.",
+        "lead": "Разрешите сообщения — пришлём список на подарок в личку VK.",
         "ref": "offline_gift",
     },
 }
@@ -240,7 +240,6 @@ def _landing_html(flow_key: str) -> str:
         <div id="vk_allow_messages_from_community" class="widget"></div>
         <p id="status" class="status" hidden></p>
         <button type="button" id="openApp" class="cta" hidden>Открыть приложение VK</button>
-        <p class="hint">Если сверху уже «Запретить уведомления» — нажмите это, затем снова разрешите. Так VK отдаёт ваш id без входа в браузере.</p>
         """
         ref_value = str(flow["ref"])
         widget_js = f"""
@@ -404,9 +403,6 @@ def _landing_html(flow_key: str) -> str:
       margin: 0 0 22px; font-size: 16px; line-height: 1.45; color: var(--muted);
     }}
     .widget {{ margin: 0 0 14px; min-height: 36px; }}
-    .hint {{
-      margin: 16px 0 0; font-size: 13px; line-height: 1.4; color: #a89884;
-    }}
     .cta {{
       display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
       margin: 0 0 12px; padding: 14px 16px; cursor: pointer;
@@ -476,7 +472,6 @@ def _mini_app_html(default_flow: str = "") -> str:
           <button type="button" class="cta" data-flow="offline_gift">Подарок на шоу</button>
         </div>
         <p id="status" class="status" hidden></p>
-        <p class="hint">VK попросит разрешить сообщения от сообщества. После этого бот пришлёт продолжение в личку.</p>
         """
         app_js = f"""
 <script>
@@ -891,9 +886,6 @@ def _mini_app_html(default_flow: str = "") -> str:
       background: linear-gradient(180deg, #f0d48a 0%, var(--gold-deep) 100%);
       color: #1a1208; font: 700 16px Manrope, sans-serif;
       box-shadow: 0 8px 28px rgba(201, 162, 39, .28);
-    }}
-    .hint {{
-      margin: 16px 0 0; font-size: 13px; line-height: 1.4; color: #a89884;
     }}
     .status {{
       font-size: 14px; margin: 0 0 14px; padding: 12px 14px; border-radius: 12px;
