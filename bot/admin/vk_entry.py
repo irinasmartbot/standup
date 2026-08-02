@@ -636,11 +636,10 @@ def _mini_app_html(default_flow: str = "") -> str:
     if (/mobile_android|mobile_iphone|mobile_ipad|android|iphone|ipad/i.test(platform)) {{
       window.location.href = appUrl;
     }} else {{
-      try {{
-        window.top.location.href = webUrl;
-      }} catch (_) {{
-        window.location.href = webUrl;
-      }}
+      withTimeout(bridge.send("VKWebAppOpenURL", {{ url: webUrl }}), 1200)
+        .catch(function () {{
+          window.open(webUrl, "_blank");
+        }});
     }}
     setTimeout(function () {{
       bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
