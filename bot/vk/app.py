@@ -74,6 +74,7 @@ _EXCLUDED_RANDOM_COVER_KEYS = frozenset({"temple_bar", "escobar", "nebar", "hitl
 # Deep link: vk.com/write-{group_id}?ref=standup_rozygr или vk.me/{screen_name}?ref=...
 # (ссылка вида vk.com/club...?ref= НЕ передаёт ref в message_new).
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
+_BOOKING_REF_VALUES = frozenset({"standup_book", "booking", "book", "бронь", "proverka"})
 _OFFLINE_GIFT_REF_VALUES = frozenset({"offline_gift", "gift", "chek_list", "check_list"})
 
 
@@ -88,6 +89,18 @@ def raffle_entry_link(settings: VKSettings) -> str:
         if name and not name.startswith("club") and name not in {"vk.com", "vk.ru"}:
             return f"https://vk.me/{name}?ref=standup_rozygr"
     return "напиши «розыгрыш»"
+
+
+def booking_entry_link(settings: VKSettings) -> str:
+    """Вход в бесплатную бронь с лендинга go…/vk/booking."""
+    if settings.group_id:
+        return f"https://vk.com/write-{int(settings.group_id)}?ref=standup_book"
+    link = (settings.community_link or "").strip().rstrip("/")
+    if link:
+        name = link.rsplit("/", 1)[-1]
+        if name and not name.startswith("club") and name not in {"vk.com", "vk.ru"}:
+            return f"https://vk.me/{name}?ref=standup_book"
+    return "напиши «забронировать места»"
 
 
 def _offline_gift_event_id_from_ref(ref: str) -> int | None:
@@ -1711,6 +1724,27 @@ class VKBotApp:
             await self._send_raffle_start(peer_id, vk_id)
             return
 
+        is_booking_deeplink = (
+            ref in _BOOKING_REF_VALUES and payload_command == "start" and not cmd
+        )
+        if cmd == "book" or is_booking_deeplink:
+            # Как в TG: бесплатная бронь сразу открывает Проверку материала
+            # (deep link с лендинга /vk/booking — до общего Start-меню)
+            self.peer_context[peer_id] = "check"
+            self._track(vk_id, EVENT_BRANCH_PROVERKA)
+            await self._send_text(
+                peer_id,
+                CHECK_ENTRY_TEXT,
+                keyboard=event_search_keyboard(
+                    "check_date_page",
+                    "check_venues",
+                    dates_label="📅 Выбрать по дате",
+                    venues_label="📍 Выбор по площадке",
+                ),
+                attachment=self._random_cover_attachment(),
+            )
+            return
+
         if text.lower() in {"/start", "start", "начать"} or cmd == "main_menu" or payload_command == "start":
             await self.send_menu(
                 peer_id,
@@ -1725,22 +1759,6 @@ class VKBotApp:
         if cmd == "buy_ticket":
             self._track(vk_id, EVENT_CMD_BUY_TICKET, props={"via": "menu"})
             await self._send_text(peer_id, BUY_TICKET_TEXT, keyboard=paid_formats_keyboard())
-            return
-        if cmd == "book":
-            # Как в TG: бесплатная бронь сразу открывает Проверку материала
-            self.peer_context[peer_id] = "check"
-            self._track(vk_id, EVENT_BRANCH_PROVERKA)
-            await self._send_text(
-                peer_id,
-                CHECK_ENTRY_TEXT,
-                keyboard=event_search_keyboard(
-                    "check_date_page",
-                    "check_venues",
-                    dates_label="📅 Выбрать по дате",
-                    venues_label="📍 Выбор по площадке",
-                ),
-                attachment=self._random_cover_attachment(),
-            )
             return
         if cmd == "rules":
             await self._send_text(
