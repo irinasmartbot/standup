@@ -411,10 +411,85 @@ def _mini_app_html() -> str:
         <p class="hint">VK попросит разрешить сообщения от сообщества. После этого бот пришлёт продолжение в личку.</p>
         """
         app_js = f"""
-<script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
 <script>
 (function () {{
-  var bridge = window.vkBridge;
+  function createFallbackBridge() {{
+    var webFrameId = null;
+    var seq = 0;
+    var pending = {{}};
+
+    function handleEvent(event) {{
+      var raw = event && (event.data || (event.detail && event.detail));
+      if (!raw) return;
+      if (typeof raw === "string") {{
+        try {{ raw = JSON.parse(raw); }} catch (_) {{ return; }}
+      }}
+      var type = raw.type || (raw.detail && raw.detail.type);
+      var data = raw.data || (raw.detail && raw.detail.data) || {{}};
+      if (type === "VKWebAppSettings") {{
+        webFrameId = raw.frameId || data.frameId || webFrameId;
+        return;
+      }}
+      var requestId = data && data.request_id;
+      if (!requestId || !pending[requestId]) return;
+      var callbacks = pending[requestId];
+      delete pending[requestId];
+      if (data.error_type || data.error_data || data.error_reason) {{
+        callbacks.reject(data);
+      }} else {{
+        callbacks.resolve(data);
+      }}
+    }}
+
+    window.addEventListener("message", handleEvent);
+    document.addEventListener("VKWebAppEvent", handleEvent);
+
+    return {{
+      send: function (method, params) {{
+        return new Promise(function (resolve, reject) {{
+          var requestId = String(++seq) + "_" + Math.random().toString(36).slice(2);
+          var payload = Object.assign({{}}, params || {{}}, {{ request_id: requestId }});
+          pending[requestId] = {{ resolve: resolve, reject: reject }};
+          try {{
+            if (window.AndroidBridge && typeof window.AndroidBridge[method] === "function") {{
+              window.AndroidBridge[method](JSON.stringify(payload));
+              return;
+            }}
+            if (
+              window.webkit &&
+              window.webkit.messageHandlers &&
+              window.webkit.messageHandlers[method] &&
+              typeof window.webkit.messageHandlers[method].postMessage === "function"
+            ) {{
+              window.webkit.messageHandlers[method].postMessage(payload);
+              return;
+            }}
+            if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === "function") {{
+              window.ReactNativeWebView.postMessage(JSON.stringify({{ handler: method, params: payload }}));
+              return;
+            }}
+            if (window.parent && window.parent !== window && typeof window.parent.postMessage === "function") {{
+              window.parent.postMessage({{
+                handler: method,
+                params: payload,
+                type: "vk-connect",
+                webFrameId: webFrameId,
+                connectVersion: "3.0.2"
+              }}, "*");
+              return;
+            }}
+            delete pending[requestId];
+            reject({{ error_description: "Откройте приложение внутри VK." }});
+          }} catch (error) {{
+            delete pending[requestId];
+            reject(error);
+          }}
+        }});
+      }}
+    }};
+  }}
+
+  var bridge = window.vkBridge || createFallbackBridge();
   var groupId = {group_id};
   var flowLabels = {json.dumps(flow_labels, ensure_ascii=False)};
   var currentFlow = null;
@@ -428,11 +503,6 @@ def _mini_app_html() -> str:
     statusEl.hidden = !text;
     statusEl.textContent = text || "";
     statusEl.className = "status " + (ok ? "ok" : "err");
-  }}
-
-  if (!bridge) {{
-    setStatus("Не загрузился VK Bridge. Закройте приложение и откройте снова.", false);
-    return;
   }}
 
   function setFlow(flow) {{
