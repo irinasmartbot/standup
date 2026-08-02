@@ -964,6 +964,10 @@ def _cooldown_hit(vk_id: int, flow: str) -> bool:
     return False
 
 
+def _clear_cooldown(vk_id: int, flow: str) -> None:
+    _last_entry.pop((int(vk_id), flow), None)
+
+
 async def entry_post(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -1000,6 +1004,7 @@ async def entry_post(request: web.Request) -> web.Response:
     try:
         await _send_flow_chain(client, settings, flow_key, vk_id)
     except VKAPIError as exc:
+        _clear_cooldown(vk_id, flow_key)
         err = str(exc).lower()
         logger.warning("VK entry send failed vk_id=%s flow=%s: %s", vk_id, flow_key, exc)
         if "permission" in err or "901" in err or "deny" in err or "can't send" in err:
@@ -1019,6 +1024,7 @@ async def entry_post(request: web.Request) -> web.Response:
             status=502,
         )
     except Exception:
+        _clear_cooldown(vk_id, flow_key)
         logger.exception("VK entry unexpected vk_id=%s flow=%s", vk_id, flow_key)
         return web.json_response(
             {"ok": False, "error": "Не удалось отправить сообщение. Попробуйте позже."},
@@ -1069,6 +1075,7 @@ async def mini_entry_post(request: web.Request) -> web.Response:
     try:
         await _send_flow_chain(client, settings, flow_key, vk_id)
     except VKAPIError as exc:
+        _clear_cooldown(vk_id, flow_key)
         err = str(exc).lower()
         logger.warning("VK mini entry send failed vk_id=%s flow=%s: %s", vk_id, flow_key, exc)
         if "permission" in err or "901" in err or "deny" in err or "can't send" in err:
@@ -1084,6 +1091,7 @@ async def mini_entry_post(request: web.Request) -> web.Response:
             status=502,
         )
     except Exception:
+        _clear_cooldown(vk_id, flow_key)
         logger.exception("VK mini entry unexpected vk_id=%s flow=%s", vk_id, flow_key)
         return web.json_response(
             {"ok": False, "error": "Не удалось отправить сообщение. Попробуйте позже."},
