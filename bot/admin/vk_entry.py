@@ -28,8 +28,8 @@ FLOWS: dict[str, dict[str, Any]] = {
     "booking": {
         "title": "Бронирование",
         "headline": "Забронировать места",
-        "lead": "Нажмите кнопку VK ниже — и мы сразу пришлём в личку кнопку бронирования.",
-        "cta": "Получить кнопку в VK",
+        "lead": "Разрешите сообщения — откроем диалог в VK и сразу пришлём кнопку бронирования.",
+        "cta": "Открыть диалог в VK",
         "cmd": "book",
         "button": "Забронировать места",
         "message": (
@@ -40,8 +40,8 @@ FLOWS: dict[str, dict[str, Any]] = {
     "raffle": {
         "title": "Розыгрыш",
         "headline": "Участвовать в розыгрыше",
-        "lead": "Нажмите кнопку VK ниже — пришлём в личку инструкцию и кнопки розыгрыша.",
-        "cta": "Получить инструкцию в VK",
+        "lead": "Разрешите сообщения — откроем диалог в VK и сразу пришлём инструкцию розыгрыша.",
+        "cta": "Открыть диалог в VK",
         "cmd": "raffle",
         "button": "Участвовать в розыгрыше",
         "message": "Нажмите кнопку ниже, чтобы начать участие в розыгрыше 👇",
@@ -49,8 +49,8 @@ FLOWS: dict[str, dict[str, Any]] = {
     "offline_gift": {
         "title": "Подарок",
         "headline": "Офлайн-розыгрыш подарка",
-        "lead": "Нажмите кнопку VK ниже — добавим вас в список (нужна подписка на сообщество).",
-        "cta": "Получить кнопку в VK",
+        "lead": "Разрешите сообщения — откроем диалог в VK и добавим вас в список (нужна подписка).",
+        "cta": "Открыть диалог в VK",
         "cmd": "offline_gift",
         "button": "Участвовать в розыгрыше подарка",
         "message": (
@@ -91,17 +91,20 @@ def _landing_html(flow_key: str) -> str:
         <p class="lead">{escape(flow["lead"])}</p>
         <div class="steps">
           <p><span>1</span> Разрешите сообщения сообществу</p>
-          <p><span>2</span> Откройте личку VK — там будет кнопка</p>
+          <p><span>2</span> Мы сразу откроем диалог в VK с кнопкой</p>
         </div>
         <div id="vk_allow_messages_from_community" class="widget"></div>
         <p id="status" class="status" hidden></p>
         <button type="button" id="cta" class="cta">{escape(flow["cta"])}</button>
         """
+        # После успешной отправки — редирект в диалог (как у Salebot).
+        dialog_url = f"https://vk.com/write-{int(group_id)}"
         widget_js = f"""
 <script src="https://vk.com/js/api/openapi.js?169"></script>
 <script>
 (function () {{
   var flow = {json.dumps(flow_key)};
+  var dialogUrl = {json.dumps(dialog_url)};
   var vkId = null;
   var statusEl = document.getElementById("status");
   var cta = document.getElementById("cta");
@@ -119,11 +122,16 @@ def _landing_html(flow_key: str) -> str:
     return String(userId);
   }}
 
+  function goToDialog() {{
+    setStatus("Готово! Открываем диалог в VK…", true);
+    window.location.href = dialogUrl;
+  }}
+
   function sendEntry() {{
     if (!vkId || sending) return;
     sending = true;
     cta.disabled = true;
-    setStatus("Отправляем в VK…", true);
+    setStatus("Отправляем сообщение в VK…", true);
     fetch("/vk/entry", {{
       method: "POST",
       headers: {{ "Content-Type": "application/json" }},
@@ -132,13 +140,13 @@ def _landing_html(flow_key: str) -> str:
       .then(function (r) {{ return r.json().then(function (j) {{ return {{ ok: r.ok, j: j }}; }}); }})
       .then(function (res) {{
         sending = false;
-        cta.disabled = false;
         if (res.ok && res.j && res.j.ok) {{
-          setStatus("Готово! Откройте личные сообщения с сообществом во ВКонтакте.", true);
-        }} else {{
-          var msg = (res.j && res.j.error) ? res.j.error : "Не удалось отправить. Нажмите кнопку ещё раз.";
-          setStatus(msg, false);
+          goToDialog();
+          return;
         }}
+        cta.disabled = false;
+        var msg = (res.j && res.j.error) ? res.j.error : "Не удалось отправить. Нажмите кнопку ещё раз.";
+        setStatus(msg, false);
       }})
       .catch(function () {{
         sending = false;
@@ -151,7 +159,7 @@ def _landing_html(flow_key: str) -> str:
     var id = normalizeId(userId);
     if (!id || id === "0") return;
     vkId = id;
-    setStatus("Отправляем в VK…", true);
+    setStatus("Отправляем сообщение в VK…", true);
     sendEntry();
   }}
 
