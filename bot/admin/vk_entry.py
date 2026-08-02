@@ -147,27 +147,53 @@ def _landing_html(flow_key: str) -> str:
       }});
   }}
 
+  function onAllowed(userId) {{
+    if (!userId) return;
+    vkId = userId;
+    cta.disabled = false;
+    setStatus("Сообщения разрешены — отправляем кнопку в VK…", true);
+    sendEntry();
+  }}
+
   VK.init({{ apiId: {int(app_id)} }});
   VK.Widgets.AllowMessagesFromCommunity(
     "vk_allow_messages_from_community",
     {{ height: 30 }},
     {int(group_id)}
   );
-  VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", function (userId) {{
-    vkId = userId;
-    cta.disabled = false;
-    setStatus("Сообщения разрешены — отправляем кнопку в VK…", true);
-    sendEntry();
-  }});
+  VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onAllowed);
   VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", function () {{
     vkId = null;
-    cta.disabled = true;
-    setStatus("Нужно разрешить сообщения от сообщества.", false);
+    cta.disabled = false;
+    setStatus("Снова нажмите виджет и разрешите сообщения — тогда отправим кнопку в VK.", false);
   }});
+
+  // Если сообщения уже были разрешены раньше, событие allowed при загрузке
+  // не приходит — пробуем сессию OpenAPI и подсказываем перещёлкнуть виджет.
+  try {{
+    VK.Auth.getLoginStatus(function (resp) {{
+      if (resp && resp.session && resp.session.mid) {{
+        onAllowed(resp.session.mid);
+      }}
+    }});
+  }} catch (e) {{}}
+
+  setTimeout(function () {{
+    if (!vkId) {{
+      cta.disabled = false;
+      setStatus(
+        "Если сверху уже «Запретить уведомления» — нажмите это, затем снова разрешите. После разрешения сообщение уйдёт само.",
+        true
+      );
+    }}
+  }}, 700);
 
   cta.addEventListener("click", function () {{
     if (!vkId) {{
-      setStatus("Сначала разрешите сообщения виджетом выше.", false);
+      setStatus(
+        "Сначала разрешите сообщения виджетом. Если уже разрешено — нажмите «Запретить», потом снова разрешите.",
+        false
+      );
       return;
     }}
     sendEntry();
