@@ -650,15 +650,15 @@ def _mini_app_html(default_flow: str = "") -> str:
     var appUrl = "vk://vk.com/write-" + groupId;
     if (isMobilePlatform()) {{
       window.location.href = appUrl;
+      setTimeout(function () {{
+        bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
+      }}, 1200);
     }} else {{
       var opened = window.open(webUrl, "_blank");
       if (!opened) {{
         withTimeout(bridge.send("VKWebAppOpenURL", {{ url: webUrl }}), 1200).catch(function () {{}});
       }}
     }}
-    setTimeout(function () {{
-      bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-    }}, 1200);
   }}
 
   function requestPermissionAndSend(flow) {{
@@ -714,7 +714,7 @@ def _mini_app_html(default_flow: str = "") -> str:
             setTimeout(openDialog, 150);
           }} else {{
             dialogReady = true;
-            setStatus("Готово! Сообщение отправлено. Нажмите кнопку ниже, чтобы открыть диалог VK.", true);
+            setStatus("Готово! Сообщение отправлено. Нажмите кнопку выше, чтобы открыть диалог VK.", true);
             setVisibleButtonText("Открыть диалог VK");
           }}
           return;
