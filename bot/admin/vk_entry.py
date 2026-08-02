@@ -367,6 +367,8 @@ def _landing_html(flow_key: str) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
   <title>{escape(flow["title"])} · Moscow StandUp Show</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -433,16 +435,28 @@ def _landing_html(flow_key: str) -> str:
 </html>"""
 
 
+def _html_response(text: str) -> web.Response:
+    """Лендинги/миниапп не должны залипать в кеше VK WebView."""
+    return web.Response(
+        text=text,
+        content_type="text/html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
 async def landing_booking(_: web.Request) -> web.Response:
-    return web.Response(text=_landing_html("booking"), content_type="text/html")
+    return _html_response(_landing_html("booking"))
 
 
 async def landing_raffle(_: web.Request) -> web.Response:
-    return web.Response(text=_landing_html("raffle"), content_type="text/html")
+    return _html_response(_landing_html("raffle"))
 
 
 async def landing_offline_gift(_: web.Request) -> web.Response:
-    return web.Response(text=_landing_html("offline_gift"), content_type="text/html")
+    return _html_response(_landing_html("offline_gift"))
 
 
 def _mini_app_html(default_flow: str = "") -> str:
@@ -682,9 +696,9 @@ def _mini_app_html(default_flow: str = "") -> str:
     if (permissionRequested) return;
     permissionRequested = true;
     sending = false;
-    setStatus("VK попросит разрешить сообщения. После разрешения сразу отправим продолжение…", true);
+    setStatus("Открываем запрос VK…", true);
     var slowTimer = setTimeout(function () {{
-      setStatus("Ждём разрешение VK. Обычно это занимает несколько секунд.", true);
+      setStatus("Ждём ответ VK…", true);
     }}, 2200);
     withTimeout(bridge.send("VKWebAppAllowMessagesFromGroup", {{
       group_id: groupId,
@@ -843,6 +857,8 @@ def _mini_app_html(default_flow: str = "") -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
   <title>VK · Moscow StandUp Show</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -913,7 +929,7 @@ def _mini_app_html(default_flow: str = "") -> str:
 async def mini_app_page(request: web.Request) -> web.Response:
     query_flow = str(request.query.get("flow") or "").strip()
     default_flow = query_flow if query_flow in FLOWS else _mini_flow_from_handoff(request)
-    return web.Response(text=_mini_app_html(default_flow), content_type="text/html")
+    return _html_response(_mini_app_html(default_flow))
 
 
 async def mini_app_start(request: web.Request) -> web.Response:
