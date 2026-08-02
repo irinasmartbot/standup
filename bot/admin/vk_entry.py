@@ -1,7 +1,7 @@
 """Public VK entry landings on go.moscowstandupshow.ru (no admin auth).
 
 Виджет OpenAPI «Разрешить сообщения» → POST /vk/entry → бот сам пишет
-в личку кнопку нужной ветки (без «начать»).
+в личку кнопку нужной ветки, затем редирект в диалог.
 
 GET  /vk/booking | /vk/raffle | /vk/offline-gift
 POST /vk/entry   JSON { "vk_id": int, "flow": "booking"|"raffle"|"offline_gift" }
@@ -15,6 +15,7 @@ import os
 import time
 from html import escape
 from typing import Any
+from urllib.parse import quote
 
 from aiohttp import web
 
@@ -28,9 +29,10 @@ FLOWS: dict[str, dict[str, Any]] = {
     "booking": {
         "title": "Бронирование",
         "headline": "Забронировать места",
-        "lead": "Разрешите сообщения — откроем диалог в VK и сразу пришлём кнопку бронирования.",
+        "lead": "Разрешите сообщения кнопкой VK — откроем диалог и пришлём кнопку бронирования.",
         "cta": "Открыть диалог в VK",
         "cmd": "book",
+        "ref": "standup_book",
         "button": "Забронировать места",
         "message": (
             "Отлично! Нажмите кнопку ниже, чтобы забронировать места "
@@ -40,18 +42,20 @@ FLOWS: dict[str, dict[str, Any]] = {
     "raffle": {
         "title": "Розыгрыш",
         "headline": "Участвовать в розыгрыше",
-        "lead": "Разрешите сообщения — откроем диалог в VK и сразу пришлём инструкцию розыгрыша.",
+        "lead": "Разрешите сообщения кнопкой VK — откроем диалог и пришлём инструкцию розыгрыша.",
         "cta": "Открыть диалог в VK",
         "cmd": "raffle",
+        "ref": "standup_rozygr",
         "button": "Участвовать в розыгрыше",
         "message": "Нажмите кнопку ниже, чтобы начать участие в розыгрыше 👇",
     },
     "offline_gift": {
         "title": "Подарок",
         "headline": "Офлайн-розыгрыш подарка",
-        "lead": "Разрешите сообщения — откроем диалог в VK и добавим вас в список (нужна подписка).",
+        "lead": "Разрешите сообщения кнопкой VK — откроем диалог и добавим в список.",
         "cta": "Открыть диалог в VK",
         "cmd": "offline_gift",
+        "ref": "offline_gift",
         "button": "Участвовать в розыгрыше подарка",
         "message": (
             "Нажмите кнопку ниже, чтобы выбрать шоу и попасть в список на подарок 👇"
@@ -90,15 +94,16 @@ def _landing_html(flow_key: str) -> str:
         body = f"""
         <p class="lead">{escape(flow["lead"])}</p>
         <div class="steps">
-          <p><span>1</span> Разрешите сообщения сообществу</p>
-          <p><span>2</span> Мы сразу откроем диалог в VK с кнопкой</p>
+          <p><span>1</span> Нажмите кнопку VK и разрешите сообщения</p>
+          <p><span>2</span> Откроется диалог — там будет нужная кнопка</p>
         </div>
         <div id="vk_allow_messages_from_community" class="widget"></div>
         <p id="status" class="status" hidden></p>
         <button type="button" id="cta" class="cta">{escape(flow["cta"])}</button>
         """
-        # После успешной отправки — редирект в диалог (как у Salebot).
-        dialog_url = f"https://vk.com/write-{int(group_id)}"
+        dialog_url = (
+            f"https://vk.com/write-{int(group_id)}?ref={quote(str(flow['ref']), safe='')}"
+        )
         widget_js = f"""
 <script src="https://vk.com/js/api/openapi.js?169"></script>
 <script>
@@ -118,77 +123,116 @@ def _landing_html(flow_key: str) -> str:
 
   function normalizeId(userId) {{
     if (userId == null) return null;
-    if (typeof userId === "object" && userId.id != null) return String(userId.id);
-    return String(userId);
+    if (typeof userId === "object") {{
+      if (userId.id != null) return String(userId.id);
+      if (userId.mid != null) return String(userId.mid);
+      if (userId.user_id != null) return String(userId.user_id);
+      return null;
+    }}
+    var s = String(userId).trim();
+    return s && s !== "0" && s !== "undefined" && s !== "null" ? s : null;
   }}
 
   function goToDialog() {{
-    setStatus("Готово! Открываем диалог в VK…", true);
+    setStatus("Открываем диалог в VK…", true);
     window.location.href = dialogUrl;
   }}
 
-  function sendEntry() {{
-    if (!vkId || sending) return;
+  function sendEntryThenDialog() {{
+    if (!vkId) {{
+      goToDialog();
+      return;
+    }}
+    if (sending) return;
     sending = true;
     cta.disabled = true;
-    setStatus("Отправляем сообщение в VK…", true);
+    setStatus("Отправляем сообщение и открываем диалог…", true);
     fetch("/vk/entry", {{
       method: "POST",
       headers: {{ "Content-Type": "application/json" }},
       body: JSON.stringify({{ vk_id: Number(vkId), flow: flow }})
     }})
-      .then(function (r) {{ return r.json().then(function (j) {{ return {{ ok: r.ok, j: j }}; }}); }})
+      .then(function (r) {{
+        return r.text().then(function (t) {{
+          var j = null;
+          try {{ j = JSON.parse(t); }} catch (e) {{}}
+          return {{ ok: r.ok, status: r.status, j: j, raw: t }};
+        }});
+      }})
       .then(function (res) {{
         sending = false;
+        cta.disabled = false;
         if (res.ok && res.j && res.j.ok) {{
           goToDialog();
           return;
         }}
-        cta.disabled = false;
-        var msg = (res.j && res.j.error) ? res.j.error : "Не удалось отправить. Нажмите кнопку ещё раз.";
+        var msg = (res.j && res.j.error)
+          ? res.j.error
+          : ("Не удалось отправить (HTTP " + res.status + "). Открываем диалог…");
         setStatus(msg, false);
+        setTimeout(goToDialog, 900);
       }})
       .catch(function () {{
         sending = false;
         cta.disabled = false;
-        setStatus("Сеть недоступна. Нажмите кнопку ещё раз.", false);
+        setStatus("Сеть недоступна. Открываем диалог…", false);
+        setTimeout(goToDialog, 900);
       }});
   }}
 
   function onAllowed(userId) {{
     var id = normalizeId(userId);
-    if (!id || id === "0") return;
+    console.log("VK allow-messages allowed raw=", userId, "id=", id);
+    if (!id) {{
+      setStatus("VK не передал id. Открываем диалог — напишите «розыгрыш» или нажмите Начать.", false);
+      setTimeout(goToDialog, 700);
+      return;
+    }}
     vkId = id;
-    setStatus("Отправляем сообщение в VK…", true);
-    sendEntry();
+    setStatus("Сообщения разрешены. Отправляем…", true);
+    sendEntryThenDialog();
   }}
 
-  VK.init({{ apiId: {int(app_id)} }});
+  function onDenied() {{
+    vkId = null;
+    setStatus("Нужно нажать «Разрешить» в окне VK.", false);
+  }}
+
+  function bindAllowEvents() {{
+    if (window.VK && VK.Observer && VK.Observer.subscribe) {{
+      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onAllowed);
+      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.denied", onDenied);
+      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", onDenied);
+    }}
+    if (window.VK && typeof VK.addCallback === "function") {{
+      VK.addCallback("widgets.allowMessagesFromCommunity.allowed", onAllowed);
+      VK.addCallback("widgets.allowMessagesFromCommunity.denied", onDenied);
+      VK.addCallback("widgets.allowMessagesFromCommunity.declined", onDenied);
+    }}
+  }}
+
+  VK.init({{ apiId: {int(app_id)}, onlyWidgets: true }});
+  bindAllowEvents();
   VK.Widgets.AllowMessagesFromCommunity(
     "vk_allow_messages_from_community",
     {{ height: 30 }},
     {int(group_id)}
   );
-  VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onAllowed);
-  VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", function () {{
-    vkId = null;
-    setStatus("Нажмите кнопку VK выше и выберите «Разрешить».", false);
-  }});
 
   try {{
-    VK.Auth.getLoginStatus(function (resp) {{
-      if (resp && resp.session && resp.session.mid) {{
-        onAllowed(resp.session.mid);
-      }}
-    }});
+    if (VK.Auth && VK.Auth.getLoginStatus) {{
+      VK.Auth.getLoginStatus(function (resp) {{
+        if (resp && resp.session && resp.session.mid) {{
+          vkId = String(resp.session.mid);
+        }}
+      }});
+    }}
   }} catch (e) {{}}
 
   cta.addEventListener("click", function () {{
-    if (!vkId) {{
-      setStatus("Сначала нажмите кнопку VK выше и разрешите сообщения.", false);
-      return;
-    }}
-    sendEntry();
+    // Уже разрешено: не требуем «запретить/разрешить» — открываем диалог
+    // (и шлём сообщение, если уже знаем vk_id).
+    sendEntryThenDialog();
   }});
 }})();
 </script>
@@ -206,7 +250,6 @@ def _landing_html(flow_key: str) -> str:
   <style>
     :root {{
       --bg0: #070708;
-      --bg1: #2a060c;
       --gold: #e8c56a;
       --gold-deep: #c9a227;
       --text: #f7f3ea;
@@ -321,6 +364,7 @@ async def entry_post(request: web.Request) -> web.Response:
         vk_id = int((data or {}).get("vk_id") or 0)
     except (TypeError, ValueError):
         vk_id = 0
+    logger.info("VK entry request vk_id=%s flow=%s", vk_id, flow_key)
     if vk_id <= 0:
         return web.json_response({"ok": False, "error": "Не удалось определить VK id."}, status=400)
 
@@ -353,7 +397,7 @@ async def entry_post(request: web.Request) -> web.Response:
                 status=403,
             )
         return web.json_response(
-            {"ok": False, "error": "Не удалось отправить сообщение. Попробуйте позже."},
+            {"ok": False, "error": "Не удалось отправить сообщение. Попробуйте позже.", "detail": str(exc)[:180]},
             status=502,
         )
     except Exception:
