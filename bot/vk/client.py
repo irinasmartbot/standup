@@ -220,6 +220,29 @@ class VKClient:
         except VKAPIError:
             logger.exception("Failed to set VK long poll event types")
 
+    async def delete_by_cmids(
+        self,
+        peer_id: int,
+        cmids: list[int],
+        *,
+        delete_for_all: bool = True,
+    ) -> None:
+        """Delete messages by conversation_message_id (reliable after button click)."""
+        ids = [int(cid) for cid in cmids if cid]
+        if not ids:
+            return
+        params: dict[str, Any] = {
+            "peer_id": int(peer_id),
+            "cmids": ",".join(str(cid) for cid in ids),
+            "delete_for_all": 1 if delete_for_all else 0,
+        }
+        if self.settings.group_id:
+            params["group_id"] = self.settings.group_id
+        try:
+            await self.api("messages.delete", **params)
+        except VKAPIError:
+            logger.exception("Failed to delete VK cmids %s for peer_id=%s", ids, peer_id)
+
     async def delete_messages(self, peer_id: int, message_ids: list[int], *, delete_for_all: bool = True) -> None:
         ids = [int(mid) for mid in message_ids if mid]
         if not ids:
@@ -255,17 +278,7 @@ class VKClient:
                     cmids.append(int(cmid))
         if not cmids:
             return
-        cmid_params: dict[str, Any] = {
-            "peer_id": peer_id,
-            "cmids": ",".join(str(cid) for cid in cmids),
-            "delete_for_all": 1 if delete_for_all else 0,
-        }
-        if self.settings.group_id:
-            cmid_params["group_id"] = self.settings.group_id
-        try:
-            await self.api("messages.delete", **cmid_params)
-        except VKAPIError:
-            logger.exception("Failed to delete VK cmids %s for peer_id=%s", cmids, peer_id)
+        await self.delete_by_cmids(peer_id, cmids, delete_for_all=delete_for_all)
 
     async def collect_recent_nav_message_ids(
         self,

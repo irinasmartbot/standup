@@ -460,12 +460,22 @@ class VKBotApp:
 
     def _random_cover_attachment(self) -> str | None:
         """Случайная обложка шоу (как в TG). Не трогает площадки / хитлото / билет."""
+        # Блокируем и по ключу/имени, и по самому attachment id —
+        # на случай если тот же файл попал в кэш под другим ключом.
+        banned_attachments = {
+            (self.images.get(key) or "").strip()
+            for key in ("hitloto_start", "temple_bar", "escobar", "nebar", "rozygrysh_otzyv_1", "rozygrysh_otzyv_2")
+        }
+        banned_attachments.discard("")
         pool: list[str] = []
         for img in self.images.all():
             key = (img.key or "").strip().lower()
             path = (img.path or "").replace("\\", "/").lower()
             name = path.rsplit("/", 1)[-1] if path else key
-            if not key or not img.attachment:
+            attachment = (img.attachment or "").strip()
+            if not key or not attachment:
+                continue
+            if attachment in banned_attachments:
                 continue
             if key in _EXCLUDED_RANDOM_COVER_KEYS:
                 continue
@@ -474,6 +484,8 @@ class VKBotApp:
                 or name.startswith("hitloto")
                 or "hitloto" in key
                 or "hitloto" in name
+                or "хитлото" in key
+                or "хитлото" in name
                 or key.startswith("rozygrysh_otzyv")
                 or name.startswith("rozygrysh_otzyv")
             ):
@@ -486,7 +498,7 @@ class VKBotApp:
                 "nebar.jpg",
             }:
                 continue
-            pool.append(img.attachment)
+            pool.append(attachment)
         if pool:
             return random.choice(pool)
         return self._cover_attachment("show_cover")
@@ -650,9 +662,8 @@ class VKBotApp:
     ) -> int | None:
         cmid = self._callback_cmid(peer_id) if replace_nav else None
         # Callback-кнопка: правим то же сообщение, без delete+send (иначе мигает «два экрана»).
-        # С новым attachment in-place edit во VK часто оставляет СТАРОЕ фото
-        # (hitloto на экране BEST) — и fallback edit без attachment ещё хуже.
-        # Поэтому при смене картинки всегда шлём новое сообщение.
+        # Важно: edit БЕЗ attachment во VK снимает фото — годится только для текстовых экранов.
+        # С новым attachment in-place edit часто оставляет СТАРОЕ фото (hitloto на BEST).
         if replace_nav and cmid and self._keyboard_is_inline(keyboard) and not attachment:
             ok = await self.client.edit_message(
                 peer_id,
@@ -671,6 +682,11 @@ class VKBotApp:
 
         if replace_nav:
             await self._delete_nav(peer_id)
+            # Сообщение с кнопкой часто не в peer_nav_message_ids (dates-card / после рестарта).
+            # Без удаления по cmid старый постер хитлото остаётся в чате над новым экраном.
+            if cmid:
+                await self.client.delete_by_cmids(peer_id, [int(cmid)])
+                self._clear_dates_card(peer_id)
         clear_id: int | None = None
         # Сброс reply-клавиатуры только вне callback: иначе лишний flash-сообщение.
         if self._keyboard_is_inline(keyboard) and not cmid:
