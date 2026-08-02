@@ -1,9 +1,11 @@
 """Public VK entry landings on go.moscowstandupshow.ru (no admin auth).
 
-Короткий путь:
-1) виджет «Разрешить сообщения» → если VK отдал vk_id, сразу шлём ветку бота
-2) иначе один клик VK ID (без «войти в другой аккаунт»)
-3) открываем приложение VK
+Без VK ID One Tap (браузерный логин режет конверсию).
+
+Путь:
+1) виджет «Разрешить сообщения» → получаем vk_id
+2) сразу шлём нужную ветку бота в личку
+3) пробуем открыть приложение VK (не сайт vk.com)
 
 GET  /vk/booking | /vk/raffle | /vk/offline-gift
 POST /vk/entry
@@ -17,6 +19,7 @@ import os
 import time
 from html import escape
 from typing import Any
+
 from aiohttp import web
 
 from bot.vk.client import VKAPIError, VKClient
@@ -29,23 +32,20 @@ FLOWS: dict[str, dict[str, Any]] = {
     "booking": {
         "title": "Бронирование",
         "headline": "Забронировать места",
-        "lead": "Разрешите сообщения — сразу откроем VK с выбором формата шоу.",
+        "lead": "Разрешите сообщения сообществу — сразу пришлём в VK выбор формата шоу.",
         "ref": "standup_book",
-        "onetap": "GET",
     },
     "raffle": {
         "title": "Розыгрыш",
         "headline": "Участвовать в розыгрыше",
-        "lead": "Разрешите сообщения — сразу откроем VK со стартом розыгрыша.",
+        "lead": "Разрешите сообщения сообществу — сразу пришлём в VK старт розыгрыша.",
         "ref": "standup_rozygr",
-        "onetap": "PARTICIPATE",
     },
     "offline_gift": {
         "title": "Подарок",
         "headline": "Офлайн-розыгрыш подарка",
-        "lead": "Разрешите сообщения — сразу откроем VK со списком на подарок.",
+        "lead": "Разрешите сообщения сообществу — сразу пришлём в VK список на подарок.",
         "ref": "offline_gift",
-        "onetap": "PARTICIPATE",
     },
 }
 
@@ -68,7 +68,7 @@ def _formats_keyboard() -> str:
 
 
 async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int) -> None:
-    """Сразу старт ветки бота — без промежуточной кнопки на лендинге."""
+    """Сразу ветка бота — без сообщения «нажмите кнопку ниже»."""
     from bot.handlers.formats import FORMATS_TEXT
     from bot.vk import raffle as vk_raffle
 
@@ -89,15 +89,9 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
         return
 
     if flow_key == "booking":
-        # Как «Наши форматы шоу» в меню бота
-        await client.send_message(
-            vk_id,
-            FORMATS_TEXT,
-            keyboard=_formats_keyboard(),
-        )
+        await client.send_message(vk_id, FORMATS_TEXT, keyboard=_formats_keyboard())
         return
 
-    # offline_gift — сразу список шоу / одно шоу с кнопкой участия в чате
     from bot.db.crud import get_offline_gift_today_events
 
     events = get_offline_gift_today_events()
@@ -156,12 +150,6 @@ def _landing_html(flow_key: str) -> str:
     app_id = _env_app_id()
     group_id = settings.group_id or 0
     ready = bool(app_id and group_id and settings.group_token)
-    path_by_flow = {
-        "booking": "/vk/booking",
-        "raffle": "/vk/raffle",
-        "offline_gift": "/vk/offline-gift",
-    }
-    redirect_url = "https://go.moscowstandupshow.ru" + path_by_flow[flow_key]
 
     if not ready:
         body = """
@@ -172,30 +160,23 @@ def _landing_html(flow_key: str) -> str:
         body = f"""
         <p class="lead">{escape(flow["lead"])}</p>
         <div id="vk_allow_messages_from_community" class="widget"></div>
-        <button type="button" id="alreadyAllowed" class="linkish">Уже разрешали сообщения? Продолжить</button>
-        <div id="VkIdSdkOneTap" class="onetap" hidden></div>
         <p id="status" class="status" hidden></p>
         <button type="button" id="openApp" class="cta" hidden>Открыть приложение VK</button>
+        <p class="hint">Если сверху уже «Запретить уведомления» — нажмите это, затем снова разрешите. Так VK отдаёт ваш id без входа в браузере.</p>
         """
         ref_value = str(flow["ref"])
-        onetap_content = flow.get("onetap") or "SIGN_IN"
         widget_js = f"""
 <script src="https://vk.com/js/api/openapi.js?169"></script>
-<script src="https://unpkg.com/@vkid/sdk@2.5.1/dist-sdk/umd/index.js"></script>
 <script>
 (function () {{
   var flow = {json.dumps(flow_key)};
-  var redirectUrl = {json.dumps(redirect_url)};
   var appId = {int(app_id)};
   var groupId = {int(group_id)};
   var ref = {json.dumps(ref_value)};
   var vkId = null;
   var sending = false;
-  var oneTapReady = false;
   var statusEl = document.getElementById("status");
   var openAppBtn = document.getElementById("openApp");
-  var oneTapBox = document.getElementById("VkIdSdkOneTap");
-  var alreadyBtn = document.getElementById("alreadyAllowed");
 
   function setStatus(text, ok) {{
     statusEl.hidden = !text;
@@ -227,28 +208,26 @@ def _landing_html(flow_key: str) -> str:
       window.location.href = "vk://vk.com/write-" + groupId;
       return;
     }}
+    // Только десктоп — сайт VK.
     window.location.href = "https://vk.com/write-" + groupId + "?ref=" + encodeURIComponent(ref);
   }}
 
   function afterSendOk() {{
-    setStatus("Готово! Откройте приложение VK — сценарий уже в сообщениях.", true);
+    setStatus("Готово! Сообщение уже в приложении VK. Нажмите кнопку, если чат не открылся сам.", true);
     openAppBtn.hidden = false;
-    setTimeout(openVkAppOnly, 350);
+    setTimeout(openVkAppOnly, 400);
   }}
 
   openAppBtn.addEventListener("click", openVkAppOnly);
-  alreadyBtn.addEventListener("click", function () {{
-    showOneTapFallback();
-  }});
 
-  function sendEntryThenDialog() {{
+  function sendEntry() {{
     if (!vkId) {{
-      showOneTapFallback();
+      setStatus("Не получили id от VK. Нажмите «Запретить уведомления», затем снова разрешите.", false);
       return;
     }}
     if (sending) return;
     sending = true;
-    setStatus("Запускаем сценарий в VK…", true);
+    setStatus("Отправляем сценарий в VK…", true);
     fetch("/vk/entry", {{
       method: "POST",
       headers: {{ "Content-Type": "application/json" }},
@@ -264,10 +243,6 @@ def _landing_html(flow_key: str) -> str:
           return;
         }}
         var err = (res.j && res.j.error) ? res.j.error : "";
-        if (res.status === 403 || /разреш/i.test(err)) {{
-          setStatus("Разрешите сообщения кнопкой VK выше — и всё продолжится само.", false);
-          return;
-        }}
         setStatus(err || "Не удалось отправить. Попробуйте ещё раз.", false);
       }})
       .catch(function () {{
@@ -276,97 +251,35 @@ def _landing_html(flow_key: str) -> str:
       }});
   }}
 
-  function showOneTapFallback() {{
-    alreadyBtn.hidden = true;
-    oneTapBox.hidden = false;
-    setStatus("Нажмите одну кнопку ниже — без выбора другого аккаунта.", true);
-    initOneTap();
-  }}
-
-  function onMessagesAllowed(userId) {{
+  function onAllowed(userId) {{
     var id = normalizeId(userId);
     console.log("allow-messages allowed", userId, id);
-    if (id) {{
-      vkId = id;
-      sendEntryThenDialog();
+    if (!id) {{
+      setStatus("VK не передал id. Нажмите «Запретить», затем снова «Разрешить».", false);
       return;
     }}
-    // Виджет разрешил, но id не отдал — один клик VK ID без выбора «другой аккаунт».
-    showOneTapFallback();
+    vkId = id;
+    sendEntry();
   }}
 
-  try {{
-    VK.init({{ apiId: appId, onlyWidgets: true }});
-    if (VK.Observer && VK.Observer.subscribe) {{
-      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onMessagesAllowed);
-      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.denied", function () {{
-        setStatus("Нужно разрешить сообщения сообществу.", false);
-      }});
-      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", function () {{
-        setStatus("Нужно разрешить сообщения сообществу.", false);
-      }});
-    }}
-    if (typeof VK.addCallback === "function") {{
-      VK.addCallback("widgets.allowMessagesFromCommunity.allowed", onMessagesAllowed);
-    }}
-    VK.Widgets.AllowMessagesFromCommunity(
-      "vk_allow_messages_from_community",
-      {{ height: 30 }},
-      groupId
-    );
-  }} catch (e) {{
-    console.log("OpenAPI widget init error", e);
-  }}
-
-  function initOneTap() {{
-    if (oneTapReady) return;
-    if (!("VKIDSDK" in window)) {{
-      setStatus("Не загрузился VK ID. Обновите страницу.", false);
-      return;
-    }}
-    oneTapReady = true;
-    var VKID = window.VKIDSDK;
-    VKID.Config.init({{
-      app: appId,
-      redirectUrl: redirectUrl,
-      responseMode: VKID.ConfigResponseMode.Callback,
-      source: VKID.ConfigSource.LOWCODE
+  VK.init({{ apiId: appId, onlyWidgets: true }});
+  if (VK.Observer && VK.Observer.subscribe) {{
+    VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onAllowed);
+    VK.Observer.subscribe("widgets.allowMessagesFromCommunity.denied", function () {{
+      setStatus("Снова нажмите виджет и разрешите сообщения.", false);
     }});
-
-    var contentId = VKID.OneTapContentId.{onetap_content};
-    var oneTap = new VKID.OneTap();
-    oneTap.render({{
-      container: oneTapBox,
-      scheme: VKID.Scheme.DARK,
-      lang: VKID.Languages.RUS,
-      showAlternativeLogin: false,
-      fastAuthEnabled: true,
-      contentId: contentId,
-      styles: {{ borderRadius: 14, height: 48 }}
-    }})
-      .on(VKID.WidgetEvents.ERROR, function (err) {{
-        console.log("VK ID OneTap error", err);
-        setStatus("Не удалось показать кнопку входа. Обновите страницу.", false);
-      }})
-      .on(VKID.OneTapInternalEvents.LOGIN_SUCCESS, function (payload) {{
-        setStatus("Запускаем сценарий…", true);
-        VKID.Auth.exchangeCode(payload.code, payload.device_id)
-          .then(function (data) {{
-            var id = normalizeId(data) || normalizeId(data && data.user_id);
-            if (!id) {{
-              setStatus("Не получили id пользователя VK. Попробуйте ещё раз.", false);
-              return;
-            }}
-            vkId = id;
-            sendEntryThenDialog();
-          }})
-          .catch(function (err) {{
-            console.log("VK ID exchange error", err);
-            setStatus("Не удалось войти через VK ID. Попробуйте ещё раз.", false);
-          }});
-      }});
+    VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", function () {{
+      setStatus("Снова нажмите виджет и разрешите сообщения.", false);
+    }});
   }}
-
+  if (typeof VK.addCallback === "function") {{
+    VK.addCallback("widgets.allowMessagesFromCommunity.allowed", onAllowed);
+  }}
+  VK.Widgets.AllowMessagesFromCommunity(
+    "vk_allow_messages_from_community",
+    {{ height: 30 }},
+    groupId
+  );
 }})();
 </script>
 """
@@ -411,24 +324,9 @@ def _landing_html(flow_key: str) -> str:
     .lead {{
       margin: 0 0 22px; font-size: 16px; line-height: 1.45; color: var(--muted);
     }}
-    .steps {{
-      margin: 0 0 22px; display: grid; gap: 8px;
-    }}
-    .steps p {{
-      margin: 0; display: flex; gap: 10px; align-items: center;
-      font-size: 14px; color: var(--muted);
-    }}
-    .steps span {{
-      flex: 0 0 22px; height: 22px; border-radius: 999px;
-      display: inline-flex; align-items: center; justify-content: center;
-      background: rgba(232, 197, 106, .15); color: var(--gold); font-size: 12px; font-weight: 700;
-    }}
-    .widget {{ margin: 0 0 12px; min-height: 36px; }}
-    .onetap {{ margin: 0 0 14px; min-height: 48px; }}
-    .linkish {{
-      display: block; width: 100%; margin: 0 0 14px; padding: 0; border: 0;
-      background: transparent; color: var(--gold); font: 600 14px Manrope, sans-serif;
-      text-align: left; text-decoration: underline; cursor: pointer;
+    .widget {{ margin: 0 0 14px; min-height: 36px; }}
+    .hint {{
+      margin: 16px 0 0; font-size: 13px; line-height: 1.4; color: #a89884;
     }}
     .cta {{
       display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
