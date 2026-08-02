@@ -1,90 +1,58 @@
-# VK entry landings (план, не реализовано)
+# VK entry landings
 
-Зафиксировано 2026-07-28. Реализацию отложили: сначала offline-gift + правки админки.
+Публичные ссылки запуска VK-бота на домене `go.moscowstandupshow.ru`  
+(без логина админки; `/admin` по-прежнему за basic auth).
 
-## Зачем
-
-У VK нет надёжного deep link как у Telegram (`?start=`).  
-`vk.com/write-...?ref=` хрупкий: нужен «Начать» / сообщение, `ref` может «липнуть».
-
-Нужны **3 публичные ссылки запуска** на одном домене (не внутри UI админки):
-
-1. Воронка бронирования  
-2. Розыгрыш со скринами  
-3. Офлайн-розыгрыш подарка (подписка → список участников)
-
-## Домен (тест)
-
-Админка уже на:
+## Ссылки
 
 ```text
-https://standupadmin.duckdns.org/admin
+https://go.moscowstandupshow.ru/vk/booking
+https://go.moscowstandupshow.ru/vk/raffle
+https://go.moscowstandupshow.ru/vk/offline-gift
 ```
 
-Публичные ленды на **том же домене**, отдельные пути, **без логина**:
-
-```text
-https://standupadmin.duckdns.org/vk/booking
-https://standupadmin.duckdns.org/vk/raffle
-https://standupadmin.duckdns.org/vk/offline-gift
-```
-
-Боевой красивый поддомен позже (например `go.moscowstandupshow.ru`) — не блокер.
-
-## Как работает (целевая схема)
+## Как работает
 
 1. QR / ссылка → публичная страница.
-2. На странице: виджет VK «Разрешить сообщения от сообщества» + кнопка «Продолжить» / «Участвовать».
-3. Страница получает `vk_id`.
-4. Backend `POST /vk/entry` шлёт человеку VK-сообщение с кнопкой payload:
+2. Виджет VK «Разрешить сообщения от сообщества» → страница получает `vk_id`.
+3. Кнопка на странице → `POST /vk/entry`.
+4. Backend шлёт человеку сообщение с inline-кнопкой:
    - booking → `{"cmd":"book"}`
    - raffle → `{"cmd":"raffle"}`
-   - offline_gift → `{"cmd":"offline_gift"}` (без event_id в URL)
-5. VK-бот уже умеет ветки по `cmd`.
+   - offline_gift → `{"cmd":"offline_gift"}`
+5. VK-бот обрабатывает `cmd` как обычно.
 
-## Offline-gift без привязки к шоу в QR
+## Код
 
-Одна универсальная ссылка:
+- `bot/admin/vk_entry.py` — страницы + API
+- Роуты регистрируются в `bot/admin/app.py` → `create_app()`
 
-```text
-https://standupadmin.duckdns.org/vk/offline-gift
-```
+Веб крутится процессом `standup-admin` (`/home/standup/app`, ветка **dev**).  
+VK-бот — отдельно (`/home/standup/vk-app`, ветка **vk-mvp**).
 
-Логика (уже частично в коде VK/TG, без лендинга):
-
-- сегодня **1** шоу → сразу участие / проверка подписки;
-- сегодня **несколько** шоу → человек выбирает шоу (независимо от совпадения времени).
-
-## Что нужно для лендингов
-
-- `VK_OPENAPI_APP_ID` — VK Developers → Мои приложения → тип **Сайт**, домен `standupadmin.duckdns.org`
-- В `.env` веб-сервиса (тот, что крутит админку):
+## Env (в `.env` админки на VPS)
 
 ```env
+VK_GROUP_ID=...
+VK_GROUP_TOKEN=...
 VK_OPENAPI_APP_ID=...
-VK_PUBLIC_ENTRY_BASE=https://standupadmin.duckdns.org
+VK_PUBLIC_ENTRY_BASE=https://go.moscowstandupshow.ru
 ```
 
-Плюс уже есть / нужны: `VK_GROUP_ID`, `VK_GROUP_TOKEN`, `VK_COMMUNITY_LINK`.
+`VK_GROUP_*` обычно уже есть (те же, что у VK-бота).
 
-## Где код
+## VK Developers (разово)
 
-Не «вкладки админки», а **тот же aiohttp** (`bot/admin/app.py`), публичные роуты рядом с `/admin`:
+1. [dev.vk.com](https://dev.vk.com) → Мои приложения → Создать → тип **Сайт** / веб.
+2. Базовый домен: `go.moscowstandupshow.ru` (без `https://`).
+3. Скопировать **ID приложения** → `VK_OPENAPI_APP_ID`.
+4. В настройках сообщества: сообщения сообщества включены; бот/приложение может писать пользователям, которые разрешили сообщения.
 
-- `GET /vk/booking`
-- `GET /vk/raffle`
-- `GET /vk/offline-gift`
-- `POST /vk/entry`
+## Деплой
 
-`/admin` остаётся закрытым.
+1. Код лендов должен оказаться в **dev** (автодеплой `standup-admin`).
+2. На сервере дописать `VK_OPENAPI_APP_ID` и `VK_PUBLIC_ENTRY_BASE` в `/home/standup/app/.env`.
+3. `sudo systemctl restart standup-admin`
+4. Проверить три URL выше.
 
-## Уже сделано отдельно (offline gift MVP)
-
-- Таблица `vk_offline_gift_entries`
-- VK: слово `подарок` / `чек-лист`, выбор шоу если несколько, подписка, запись
-- TG ведущий: `https://t.me/ira_test_stend_bot?start=chek_list`  
-  (бой: `https://telegram.me/StandUp_Show_bot?start=chek_list`)
-
-## Когда вернуться
-
-После правок админ-панели: OpenAPI app → публичные роуты → `POST /vk/entry` → деплой веб + VK-бот.
+Пока нет `VK_OPENAPI_APP_ID`, страницы показывают «ещё настраивается» — админка не ломается.
