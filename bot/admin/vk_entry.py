@@ -700,17 +700,30 @@ def _mini_app_html(default_flow: str = "") -> str:
     }});
   }}
 
+  function messagesAlreadyAllowed() {{
+    return new URLSearchParams(window.location.search || "").get("vk_are_notifications_enabled") === "1";
+  }}
+
   function start(flow) {{
     if (!setFlow(flow, true)) {{
       setStatus("Неизвестный сценарий.", false);
       return;
     }}
-    setStatus("Запрашиваем разрешение на сообщения…", true);
+    if (messagesAlreadyAllowed()) {{
+      setStatus("Отправляем сообщение в VK. Обычно оно приходит в течение пары секунд…", true);
+      sendEntry();
+      return;
+    }}
+    setStatus("Сейчас VK попросит разрешить сообщения. После разрешения сообщение придёт в течение нескольких секунд…", true);
+    var slowTimer = setTimeout(function () {{
+      setStatus("Ждём ответ VK. Если окно разрешения уже было — проверьте личку, сообщение может прийти в течение 5–10 секунд.", true);
+    }}, 2200);
     withTimeout(bridge.send("VKWebAppAllowMessagesFromGroup", {{
       group_id: groupId,
       key: flow + ":" + Date.now()
     }}), 8000)
       .then(function (data) {{
+        clearTimeout(slowTimer);
         if (data && data.result) {{
           sendEntry();
           return;
@@ -719,6 +732,7 @@ def _mini_app_html(default_flow: str = "") -> str:
         sendEntry();
       }})
       .catch(function (error) {{
+        clearTimeout(slowTimer);
         if (isUserDenied(error)) {{
           setStatus(normalizeError(error), false);
           return;
