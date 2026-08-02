@@ -447,8 +447,8 @@ def _mini_app_html(default_flow: str = "") -> str:
         app_js = ""
     else:
         body = """
-        <p id="lead" class="lead">Выберите действие — сразу отправим нужный сценарий в личные сообщения VK.</p>
-        <div class="actions" id="actions">
+        <p id="lead" class="lead">Откройте корректную ссылку нужного сценария.</p>
+        <div class="actions" id="actions" hidden>
           <button type="button" class="cta" data-flow="booking">Забронировать места</button>
           <button type="button" class="cta" data-flow="raffle">Участвовать в розыгрыше</button>
           <button type="button" class="cta" data-flow="offline_gift">Подарок на шоу</button>
@@ -613,6 +613,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     currentFlow = flow;
     titleEl.textContent = flowLabels[flow].headline;
     leadEl.textContent = flowLabels[flow].lead;
+    actionsEl.hidden = false;
     if (singleButton) showOnlyFlow(flow);
     return true;
   }}
