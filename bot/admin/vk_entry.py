@@ -1,10 +1,13 @@
 """Public VK entry landings on go.moscowstandupshow.ru (no admin auth).
 
-Виджет OpenAPI «Разрешить сообщения» → POST /vk/entry → бот сам пишет
-в личку кнопку нужной ветки, затем редирект в диалог.
+Надёжный путь без «Начать»:
+1) виджет «Разрешить сообщения»
+2) VK ID One Tap → получаем vk_id
+3) POST /vk/entry → сообщество само пишет в личку
+4) редирект в диалог
 
 GET  /vk/booking | /vk/raffle | /vk/offline-gift
-POST /vk/entry   JSON { "vk_id": int, "flow": "booking"|"raffle"|"offline_gift" }
+POST /vk/entry
 """
 
 from __future__ import annotations
@@ -29,10 +32,10 @@ FLOWS: dict[str, dict[str, Any]] = {
     "booking": {
         "title": "Бронирование",
         "headline": "Забронировать места",
-        "lead": "Разрешите сообщения кнопкой VK — откроем диалог и пришлём кнопку бронирования.",
-        "cta": "Открыть диалог в VK",
+        "lead": "Два шага: разрешите сообщения и нажмите «Продолжить» — откроем диалог с кнопкой брони.",
         "cmd": "book",
         "ref": "standup_book",
+        "onetap": "GET",
         "button": "Забронировать места",
         "message": (
             "Отлично! Нажмите кнопку ниже, чтобы забронировать места "
@@ -42,20 +45,20 @@ FLOWS: dict[str, dict[str, Any]] = {
     "raffle": {
         "title": "Розыгрыш",
         "headline": "Участвовать в розыгрыше",
-        "lead": "Разрешите сообщения кнопкой VK — откроем диалог и пришлём инструкцию розыгрыша.",
-        "cta": "Открыть диалог в VK",
+        "lead": "Два шага: разрешите сообщения и нажмите «Участвовать» — откроем диалог с инструкцией.",
         "cmd": "raffle",
         "ref": "standup_rozygr",
+        "onetap": "PARTICIPATE",
         "button": "Участвовать в розыгрыше",
         "message": "Нажмите кнопку ниже, чтобы начать участие в розыгрыше 👇",
     },
     "offline_gift": {
         "title": "Подарок",
         "headline": "Офлайн-розыгрыш подарка",
-        "lead": "Разрешите сообщения кнопкой VK — откроем диалог и добавим в список.",
-        "cta": "Открыть диалог в VK",
+        "lead": "Два шага: разрешите сообщения и нажмите «Участвовать» — откроем диалог со списком.",
         "cmd": "offline_gift",
         "ref": "offline_gift",
+        "onetap": "PARTICIPATE",
         "button": "Участвовать в розыгрыше подарка",
         "message": (
             "Нажмите кнопку ниже, чтобы выбрать шоу и попасть в список на подарок 👇"
@@ -84,6 +87,12 @@ def _landing_html(flow_key: str) -> str:
     app_id = _env_app_id()
     group_id = settings.group_id or 0
     ready = bool(app_id and group_id and settings.group_token)
+    path_by_flow = {
+        "booking": "/vk/booking",
+        "raffle": "/vk/raffle",
+        "offline_gift": "/vk/offline-gift",
+    }
+    redirect_url = "https://go.moscowstandupshow.ru" + path_by_flow[flow_key]
 
     if not ready:
         body = """
@@ -94,26 +103,31 @@ def _landing_html(flow_key: str) -> str:
         body = f"""
         <p class="lead">{escape(flow["lead"])}</p>
         <div class="steps">
-          <p><span>1</span> Нажмите кнопку VK и разрешите сообщения</p>
-          <p><span>2</span> Откроется диалог — там будет нужная кнопка</p>
+          <p><span>1</span> Разрешите сообщения сообществу</p>
+          <p><span>2</span> Нажмите «Продолжить / Участвовать» — сразу откроется диалог</p>
         </div>
         <div id="vk_allow_messages_from_community" class="widget"></div>
+        <div id="VkIdSdkOneTap" class="onetap"></div>
         <p id="status" class="status" hidden></p>
-        <button type="button" id="cta" class="cta">{escape(flow["cta"])}</button>
         """
         dialog_url = (
             f"https://vk.com/write-{int(group_id)}?ref={quote(str(flow['ref']), safe='')}"
         )
+        onetap_content = flow.get("onetap") or "SIGN_IN"
         widget_js = f"""
 <script src="https://vk.com/js/api/openapi.js?169"></script>
+<script src="https://unpkg.com/@vkid/sdk@2.5.1/dist-sdk/umd/index.js"></script>
 <script>
 (function () {{
   var flow = {json.dumps(flow_key)};
   var dialogUrl = {json.dumps(dialog_url)};
+  var redirectUrl = {json.dumps(redirect_url)};
+  var appId = {int(app_id)};
+  var groupId = {int(group_id)};
   var vkId = null;
-  var statusEl = document.getElementById("status");
-  var cta = document.getElementById("cta");
+  var messagesAllowed = false;
   var sending = false;
+  var statusEl = document.getElementById("status");
 
   function setStatus(text, ok) {{
     statusEl.hidden = !text;
@@ -124,9 +138,9 @@ def _landing_html(flow_key: str) -> str:
   function normalizeId(userId) {{
     if (userId == null) return null;
     if (typeof userId === "object") {{
+      if (userId.user_id != null) return String(userId.user_id);
       if (userId.id != null) return String(userId.id);
       if (userId.mid != null) return String(userId.mid);
-      if (userId.user_id != null) return String(userId.user_id);
       return null;
     }}
     var s = String(userId).trim();
@@ -134,106 +148,130 @@ def _landing_html(flow_key: str) -> str:
   }}
 
   function goToDialog() {{
-    setStatus("Открываем диалог в VK…", true);
+    setStatus("Открываем диалог…", true);
     window.location.href = dialogUrl;
   }}
 
   function sendEntryThenDialog() {{
     if (!vkId) {{
-      goToDialog();
+      setStatus("Нажмите кнопку VK ID ниже («Продолжить как…»).", false);
       return;
     }}
     if (sending) return;
     sending = true;
-    cta.disabled = true;
-    setStatus("Отправляем сообщение и открываем диалог…", true);
+    setStatus("Отправляем сообщение в VK…", true);
     fetch("/vk/entry", {{
       method: "POST",
       headers: {{ "Content-Type": "application/json" }},
       body: JSON.stringify({{ vk_id: Number(vkId), flow: flow }})
     }})
       .then(function (r) {{
-        return r.text().then(function (t) {{
-          var j = null;
-          try {{ j = JSON.parse(t); }} catch (e) {{}}
-          return {{ ok: r.ok, status: r.status, j: j, raw: t }};
-        }});
+        return r.json().then(function (j) {{ return {{ ok: r.ok, status: r.status, j: j }}; }});
       }})
       .then(function (res) {{
         sending = false;
-        cta.disabled = false;
         if (res.ok && res.j && res.j.ok) {{
           goToDialog();
           return;
         }}
-        var msg = (res.j && res.j.error)
-          ? res.j.error
-          : ("Не удалось отправить (HTTP " + res.status + "). Открываем диалог…");
-        setStatus(msg, false);
-        setTimeout(goToDialog, 900);
+        var err = (res.j && res.j.error) ? res.j.error : "";
+        if (res.status === 403 || /разреш/i.test(err)) {{
+          setStatus("Сначала нажмите кнопку VK выше и разрешите сообщения сообществу.", false);
+          return;
+        }}
+        setStatus(err || "Не удалось отправить. Попробуйте ещё раз.", false);
       }})
       .catch(function () {{
         sending = false;
-        cta.disabled = false;
-        setStatus("Сеть недоступна. Открываем диалог…", false);
-        setTimeout(goToDialog, 900);
+        setStatus("Сеть недоступна. Попробуйте ещё раз.", false);
       }});
   }}
 
-  function onAllowed(userId) {{
+  function onMessagesAllowed(userId) {{
+    messagesAllowed = true;
     var id = normalizeId(userId);
-    console.log("VK allow-messages allowed raw=", userId, "id=", id);
-    if (!id) {{
-      setStatus("VK не передал id. Открываем диалог — напишите «розыгрыш» или нажмите Начать.", false);
-      setTimeout(goToDialog, 700);
+    console.log("allow-messages allowed", userId, id);
+    if (id) vkId = id;
+    setStatus("Сообщения разрешены. Теперь нажмите «Продолжить / Участвовать».", true);
+    if (vkId) sendEntryThenDialog();
+  }}
+
+  // --- OpenAPI widget (разрешение писать в ЛС) ---
+  try {{
+    VK.init({{ apiId: appId, onlyWidgets: true }});
+    if (VK.Observer && VK.Observer.subscribe) {{
+      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onMessagesAllowed);
+      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.denied", function () {{
+        messagesAllowed = false;
+        setStatus("Нужно разрешить сообщения сообществу.", false);
+      }});
+      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", function () {{
+        messagesAllowed = false;
+        setStatus("Нужно разрешить сообщения сообществу.", false);
+      }});
+    }}
+    if (typeof VK.addCallback === "function") {{
+      VK.addCallback("widgets.allowMessagesFromCommunity.allowed", onMessagesAllowed);
+    }}
+    VK.Widgets.AllowMessagesFromCommunity(
+      "vk_allow_messages_from_community",
+      {{ height: 30 }},
+      groupId
+    );
+  }} catch (e) {{
+    console.log("OpenAPI widget init error", e);
+  }}
+
+  // --- VK ID One Tap (стабильный vk_id) ---
+  function initOneTap() {{
+    if (!("VKIDSDK" in window)) {{
+      setStatus("Не загрузился VK ID. Обновите страницу.", false);
       return;
     }}
-    vkId = id;
-    setStatus("Сообщения разрешены. Отправляем…", true);
-    sendEntryThenDialog();
-  }}
+    var VKID = window.VKIDSDK;
+    VKID.Config.init({{
+      app: appId,
+      redirectUrl: redirectUrl,
+      responseMode: VKID.ConfigResponseMode.Callback,
+      source: VKID.ConfigSource.LOWCODE
+    }});
 
-  function onDenied() {{
-    vkId = null;
-    setStatus("Нужно нажать «Разрешить» в окне VK.", false);
-  }}
-
-  function bindAllowEvents() {{
-    if (window.VK && VK.Observer && VK.Observer.subscribe) {{
-      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onAllowed);
-      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.denied", onDenied);
-      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", onDenied);
-    }}
-    if (window.VK && typeof VK.addCallback === "function") {{
-      VK.addCallback("widgets.allowMessagesFromCommunity.allowed", onAllowed);
-      VK.addCallback("widgets.allowMessagesFromCommunity.denied", onDenied);
-      VK.addCallback("widgets.allowMessagesFromCommunity.declined", onDenied);
-    }}
-  }}
-
-  VK.init({{ apiId: {int(app_id)}, onlyWidgets: true }});
-  bindAllowEvents();
-  VK.Widgets.AllowMessagesFromCommunity(
-    "vk_allow_messages_from_community",
-    {{ height: 30 }},
-    {int(group_id)}
-  );
-
-  try {{
-    if (VK.Auth && VK.Auth.getLoginStatus) {{
-      VK.Auth.getLoginStatus(function (resp) {{
-        if (resp && resp.session && resp.session.mid) {{
-          vkId = String(resp.session.mid);
-        }}
+    var contentId = VKID.OneTapContentId.{onetap_content};
+    var oneTap = new VKID.OneTap();
+    var box = document.getElementById("VkIdSdkOneTap");
+    oneTap.render({{
+      container: box,
+      scheme: VKID.Scheme.DARK,
+      lang: VKID.Languages.RUS,
+      showAlternativeLogin: true,
+      contentId: contentId,
+      styles: {{ borderRadius: 14, height: 48 }}
+    }})
+      .on(VKID.WidgetEvents.ERROR, function (err) {{
+        console.log("VK ID OneTap error", err);
+        setStatus("Не удалось показать кнопку VK ID. Обновите страницу.", false);
+      }})
+      .on(VKID.OneTapInternalEvents.LOGIN_SUCCESS, function (payload) {{
+        setStatus("Вход выполнен, отправляем сообщение…", true);
+        VKID.Auth.exchangeCode(payload.code, payload.device_id)
+          .then(function (data) {{
+            var id = normalizeId(data) || normalizeId(data && data.user_id);
+            console.log("VK ID exchange", data, id);
+            if (!id) {{
+              setStatus("Не получили id пользователя VK. Попробуйте ещё раз.", false);
+              return;
+            }}
+            vkId = id;
+            sendEntryThenDialog();
+          }})
+          .catch(function (err) {{
+            console.log("VK ID exchange error", err);
+            setStatus("Не удалось завершить вход VK ID. Попробуйте ещё раз.", false);
+          }});
       }});
-    }}
-  }} catch (e) {{}}
+  }}
 
-  cta.addEventListener("click", function () {{
-    // Уже разрешено: не требуем «запретить/разрешить» — открываем диалог
-    // (и шлём сообщение, если уже знаем vk_id).
-    sendEntryThenDialog();
-  }});
+  initOneTap();
 }})();
 </script>
 """
@@ -290,15 +328,8 @@ def _landing_html(flow_key: str) -> str:
       display: inline-flex; align-items: center; justify-content: center;
       background: rgba(232, 197, 106, .15); color: var(--gold); font-size: 12px; font-weight: 700;
     }}
-    .widget {{ margin: 0 0 14px; min-height: 36px; }}
-    .cta {{
-      display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
-      padding: 14px 16px; cursor: pointer;
-      background: linear-gradient(180deg, #f0d48a 0%, var(--gold-deep) 100%);
-      color: #1a1208; font: 700 16px Manrope, sans-serif;
-      box-shadow: 0 8px 28px rgba(201, 162, 39, .28);
-    }}
-    .cta:disabled {{ opacity: .45; cursor: not-allowed; }}
+    .widget {{ margin: 0 0 16px; min-height: 36px; }}
+    .onetap {{ margin: 0 0 14px; min-height: 48px; }}
     .status {{
       font-size: 14px; margin: 0 0 14px; padding: 12px 14px; border-radius: 12px;
       background: rgba(255,255,255,.06); border: 1px solid rgba(232, 197, 106, .18);
@@ -397,7 +428,11 @@ async def entry_post(request: web.Request) -> web.Response:
                 status=403,
             )
         return web.json_response(
-            {"ok": False, "error": "Не удалось отправить сообщение. Попробуйте позже.", "detail": str(exc)[:180]},
+            {
+                "ok": False,
+                "error": "Не удалось отправить сообщение. Попробуйте позже.",
+                "detail": str(exc)[:180],
+            },
             status=502,
         )
     except Exception:
