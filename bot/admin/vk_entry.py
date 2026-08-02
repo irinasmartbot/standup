@@ -630,7 +630,7 @@ def _mini_app_html(default_flow: str = "") -> str:
   }}
 
   function openDialog() {{
-    var webUrl = "https://vk.com/write-" + groupId;
+    var webUrl = "https://vk.com/im?sel=-" + groupId;
     var appUrl = "vk://vk.com/write-" + groupId;
     var platform = new URLSearchParams(window.location.search || "").get("vk_platform") || "";
     if (/mobile_android|mobile_iphone|mobile_ipad|android|iphone|ipad/i.test(platform)) {{
