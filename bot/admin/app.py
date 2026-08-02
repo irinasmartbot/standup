@@ -5172,6 +5172,8 @@ async def events_hide_preview_page(request: web.Request) -> web.Response:
 
 
 def create_app(config: AdminConfig | None = None) -> web.Application:
+    from bot.admin import vk_entry
+
     app = web.Application()
     app["config"] = config or load_config()
     app.router.add_get("/", index_page)
@@ -5184,6 +5186,8 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_post("/admin/users/anonymize", users_anonymize_page)
     app.router.add_post("/admin/login", login_page)
     app.router.add_get("/admin/logout", logout_page)
+    # Публичные VK-ленды (без admin auth); nginx не закрывает /vk/*
+    vk_entry.register_routes(app)
     return app
 
 
