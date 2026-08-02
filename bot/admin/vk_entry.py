@@ -31,36 +31,22 @@ FLOWS: dict[str, dict[str, Any]] = {
         "title": "Бронирование",
         "headline": "Забронировать места",
         "lead": "Два шага: разрешите сообщения и нажмите «Продолжить» — откроем приложение VK с кнопкой брони.",
-        "cmd": "book",
         "ref": "standup_book",
         "onetap": "GET",
-        "button": "Забронировать места",
-        "message": (
-            "Отлично! Нажмите кнопку ниже, чтобы забронировать места "
-            "на <b>Проверку материала</b> 👇"
-        ),
     },
     "raffle": {
         "title": "Розыгрыш",
         "headline": "Участвовать в розыгрыше",
         "lead": "Два шага: разрешите сообщения и нажмите «Участвовать» — откроем приложение VK с инструкцией.",
-        "cmd": "raffle",
         "ref": "standup_rozygr",
         "onetap": "PARTICIPATE",
-        "button": "Участвовать в розыгрыше",
-        "message": "Нажмите кнопку ниже, чтобы начать участие в розыгрыше 👇",
     },
     "offline_gift": {
         "title": "Подарок",
         "headline": "Офлайн-розыгрыш подарка",
         "lead": "Два шага: разрешите сообщения и нажмите «Участвовать» — откроем приложение VK со списком.",
-        "cmd": "offline_gift",
         "ref": "offline_gift",
         "onetap": "PARTICIPATE",
-        "button": "Участвовать в розыгрыше подарка",
-        "message": (
-            "Нажмите кнопку ниже, чтобы выбрать шоу и попасть в список на подарок 👇"
-        ),
     },
 }
 
@@ -72,11 +58,97 @@ def _env_app_id() -> str:
     return (os.getenv("VK_OPENAPI_APP_ID") or "").strip()
 
 
-def _payload_keyboard(cmd: str, label: str) -> str:
+def _booking_start_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
-    kb.button(label, {"cmd": cmd}, color="primary")
+    kb.button("📅 Выбрать по дате", {"cmd": "check_date_page"}, color="primary")
+    kb.button("📍 Выбор по площадке", {"cmd": "check_venues"}, color="primary")
     kb.adjust(1)
     return kb.as_json()
+
+
+async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int) -> None:
+    """Сразу старт ветки бота — без промежуточной кнопки «нажмите ниже»."""
+    from bot.vk import raffle as vk_raffle
+
+    if flow_key == "raffle":
+        ok, reason, booking_id = vk_raffle.can_enter_raffle(vk_id)
+        if not ok:
+            await client.send_message(
+                vk_id,
+                reason,
+                keyboard=vk_raffle.blocked_keyboard(booking_id),
+            )
+            return
+        await client.send_message(
+            vk_id,
+            vk_raffle.start_text(settings.community_link),
+            keyboard=vk_raffle.start_keyboard(),
+        )
+        return
+
+    if flow_key == "booking":
+        await client.send_message(
+            vk_id,
+            (
+                "Привет! 😊 Я помогу тебе забронировать места на <b>Проверку материала</b> "
+                "от Moscow StandUp Show 🎤\n\nВыбирай формат поиска мероприятий 👇"
+            ),
+            keyboard=_booking_start_keyboard(),
+        )
+        return
+
+    # offline_gift
+    from bot.db.crud import get_offline_gift_today_events
+
+    events = get_offline_gift_today_events()
+    if not events:
+        await client.send_message(
+            vk_id,
+            (
+                "🎁 <b>Розыгрыш подарка</b>\n\n"
+                "На сегодня активных шоу не найдено. "
+                "Покажи это сообщение администратору или попробуй позже."
+            ),
+        )
+        return
+    if len(events) == 1:
+        event = events[0]
+        kb = VKKeyboardBuilder(inline=True)
+        kb.button(
+            "Участвовать в розыгрыше",
+            {"cmd": "ogift_event", "event_id": int(event["id"])},
+            color="primary",
+        )
+        kb.adjust(1)
+        title = str(event.get("title") or event.get("venue") or "шоу")
+        await client.send_message(
+            vk_id,
+            (
+                "🎁 <b>Розыгрыш подарка на шоу</b>\n\n"
+                f"<b>Сегодня:</b> {title}\n\n"
+                "Нажми кнопку ниже, чтобы попасть в список участников."
+            ),
+            keyboard=kb.as_json(),
+        )
+        return
+    kb = VKKeyboardBuilder(inline=True)
+    for event in events[:8]:
+        label = str(event.get("title") or event.get("venue") or f"Шоу #{event.get('id')}")[:40]
+        kb.button(
+            label,
+            {"cmd": "ogift_event", "event_id": int(event["id"])},
+            color="primary",
+        )
+    kb.adjust(1)
+    await client.send_message(
+        vk_id,
+        (
+            "🎁 <b>Розыгрыш подарка на шоу</b>\n\n"
+            "Чтобы я мог внести в нужный список, давайте зафиксируем "
+            "мероприятие, на котором Вы сейчас находитесь:"
+        ),
+        keyboard=kb.as_json(),
+    )
 
 
 def _landing_html(flow_key: str) -> str:
@@ -107,6 +179,7 @@ def _landing_html(flow_key: str) -> str:
         <div id="vk_allow_messages_from_community" class="widget"></div>
         <div id="VkIdSdkOneTap" class="onetap"></div>
         <p id="status" class="status" hidden></p>
+        <button type="button" id="openApp" class="cta" hidden>Открыть приложение VK</button>
         """
         ref_value = str(flow["ref"])
         onetap_content = flow.get("onetap") or "SIGN_IN"
@@ -124,6 +197,7 @@ def _landing_html(flow_key: str) -> str:
   var messagesAllowed = false;
   var sending = false;
   var statusEl = document.getElementById("status");
+  var openAppBtn = document.getElementById("openApp");
 
   function setStatus(text, ok) {{
     statusEl.hidden = !text;
@@ -143,41 +217,36 @@ def _landing_html(flow_key: str) -> str:
     return s && s !== "0" && s !== "undefined" && s !== "null" ? s : null;
   }}
 
-  function webDialogUrl() {{
-    return "https://vk.com/write-" + groupId + "?ref=" + encodeURIComponent(ref);
-  }}
-
-  function goToDialog() {{
-    // Сначала пробуем открыть именно приложение VK, не мобильный сайт.
-    setStatus("Открываем приложение VK…", true);
-    var webUrl = webDialogUrl();
+  function openVkAppOnly() {{
+    // Только приложение. Без https-фолбэка — иначе браузер просит логин VK.
     var ua = navigator.userAgent || "";
-    var isAndroid = /Android/i.test(ua);
-    var isIOS = /iPhone|iPad|iPod/i.test(ua);
-
-    if (isAndroid) {{
-      var intentUrl =
+    if (/Android/i.test(ua)) {{
+      window.location.href =
         "intent://vk.com/write-" + groupId +
-        "#Intent;scheme=https;package=com.vkontakte.android;" +
-        "S.browser_fallback_url=" + encodeURIComponent(webUrl) + ";end";
-      window.location.href = intentUrl;
+        "#Intent;scheme=https;package=com.vkontakte.android;end";
       return;
     }}
-
-    if (isIOS) {{
-      var started = Date.now();
+    if (/iPhone|iPad|iPod/i.test(ua)) {{
       window.location.href = "vk://vk.com/write-" + groupId;
-      setTimeout(function () {{
-        // Если приложение не перехватило — через ~0.9с уходим в https (браузер/сайт VK).
-        if (Date.now() - started < 1600) {{
-          window.location.href = webUrl;
-        }}
-      }}, 900);
       return;
     }}
-
-    window.location.href = webUrl;
+    // Десктоп: сайт VK ок (там обычно уже есть сессия).
+    window.location.href = "https://vk.com/write-" + groupId + "?ref=" + encodeURIComponent(ref);
   }}
+
+  function afterSendOk() {{
+    setStatus(
+      "Готово! Сообщение уже в VK. Нажмите кнопку ниже — откроется приложение (не браузер).",
+      true
+    );
+    openAppBtn.hidden = false;
+    // Пробуем сразу открыть приложение; если ОС проигнорирует — останется кнопка.
+    setTimeout(openVkAppOnly, 350);
+  }}
+
+  openAppBtn.addEventListener("click", function () {{
+    openVkAppOnly();
+  }});
 
   function sendEntryThenDialog() {{
     if (!vkId) {{
@@ -186,7 +255,7 @@ def _landing_html(flow_key: str) -> str:
     }}
     if (sending) return;
     sending = true;
-    setStatus("Отправляем сообщение в VK…", true);
+    setStatus("Запускаем сценарий в VK…", true);
     fetch("/vk/entry", {{
       method: "POST",
       headers: {{ "Content-Type": "application/json" }},
@@ -198,7 +267,7 @@ def _landing_html(flow_key: str) -> str:
       .then(function (res) {{
         sending = false;
         if (res.ok && res.j && res.j.ok) {{
-          goToDialog();
+          afterSendOk();
           return;
         }}
         var err = (res.j && res.j.error) ? res.j.error : "";
@@ -357,6 +426,13 @@ def _landing_html(flow_key: str) -> str:
     }}
     .widget {{ margin: 0 0 16px; min-height: 36px; }}
     .onetap {{ margin: 0 0 14px; min-height: 48px; }}
+    .cta {{
+      display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
+      margin: 0 0 12px; padding: 14px 16px; cursor: pointer;
+      background: linear-gradient(180deg, #f0d48a 0%, var(--gold-deep) 100%);
+      color: #1a1208; font: 700 16px Manrope, sans-serif;
+      box-shadow: 0 8px 28px rgba(201, 162, 39, .28);
+    }}
     .status {{
       font-size: 14px; margin: 0 0 14px; padding: 12px 14px; border-radius: 12px;
       background: rgba(255,255,255,.06); border: 1px solid rgba(232, 197, 106, .18);
@@ -440,9 +516,8 @@ async def entry_post(request: web.Request) -> web.Response:
         )
 
     client = VKClient(settings)
-    keyboard = _payload_keyboard(flow["cmd"], flow["button"])
     try:
-        await client.send_message(vk_id, flow["message"], keyboard=keyboard)
+        await _send_flow_chain(client, settings, flow_key, vk_id)
     except VKAPIError as exc:
         err = str(exc).lower()
         logger.warning("VK entry send failed vk_id=%s flow=%s: %s", vk_id, flow_key, exc)
