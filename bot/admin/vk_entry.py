@@ -679,7 +679,8 @@ def _mini_app_html(default_flow: str = "") -> str:
           sendEntry(false);
           return;
         }}
-        setStatus("Разрешите сообщения, чтобы бот смог написать вам.", false);
+        setStatus("Проверяем разрешение и отправляем сообщение…", true);
+        sendEntry(false);
       }})
       .catch(function (error) {{
         clearTimeout(slowTimer);
@@ -687,7 +688,8 @@ def _mini_app_html(default_flow: str = "") -> str:
           setStatus(normalizeError(error), false);
           return;
         }}
-        setStatus("VK не вернул ответ на разрешение. Нажмите кнопку ещё раз или проверьте личку.", false);
+        setStatus("VK не вернул ответ на разрешение. Проверяем и отправляем сообщение…", true);
+        sendEntry(false);
       }});
   }}
 
