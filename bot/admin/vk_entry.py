@@ -18,8 +18,6 @@ import os
 import time
 from html import escape
 from typing import Any
-from urllib.parse import quote
-
 from aiohttp import web
 
 from bot.vk.client import VKAPIError, VKClient
@@ -32,7 +30,7 @@ FLOWS: dict[str, dict[str, Any]] = {
     "booking": {
         "title": "Бронирование",
         "headline": "Забронировать места",
-        "lead": "Два шага: разрешите сообщения и нажмите «Продолжить» — откроем диалог с кнопкой брони.",
+        "lead": "Два шага: разрешите сообщения и нажмите «Продолжить» — откроем приложение VK с кнопкой брони.",
         "cmd": "book",
         "ref": "standup_book",
         "onetap": "GET",
@@ -45,7 +43,7 @@ FLOWS: dict[str, dict[str, Any]] = {
     "raffle": {
         "title": "Розыгрыш",
         "headline": "Участвовать в розыгрыше",
-        "lead": "Два шага: разрешите сообщения и нажмите «Участвовать» — откроем диалог с инструкцией.",
+        "lead": "Два шага: разрешите сообщения и нажмите «Участвовать» — откроем приложение VK с инструкцией.",
         "cmd": "raffle",
         "ref": "standup_rozygr",
         "onetap": "PARTICIPATE",
@@ -55,7 +53,7 @@ FLOWS: dict[str, dict[str, Any]] = {
     "offline_gift": {
         "title": "Подарок",
         "headline": "Офлайн-розыгрыш подарка",
-        "lead": "Два шага: разрешите сообщения и нажмите «Участвовать» — откроем диалог со списком.",
+        "lead": "Два шага: разрешите сообщения и нажмите «Участвовать» — откроем приложение VK со списком.",
         "cmd": "offline_gift",
         "ref": "offline_gift",
         "onetap": "PARTICIPATE",
@@ -104,15 +102,13 @@ def _landing_html(flow_key: str) -> str:
         <p class="lead">{escape(flow["lead"])}</p>
         <div class="steps">
           <p><span>1</span> Разрешите сообщения сообществу</p>
-          <p><span>2</span> Нажмите «Продолжить / Участвовать» — сразу откроется диалог</p>
+          <p><span>2</span> Нажмите «Продолжить / Участвовать» — откроется приложение VK</p>
         </div>
         <div id="vk_allow_messages_from_community" class="widget"></div>
         <div id="VkIdSdkOneTap" class="onetap"></div>
         <p id="status" class="status" hidden></p>
         """
-        dialog_url = (
-            f"https://vk.com/write-{int(group_id)}?ref={quote(str(flow['ref']), safe='')}"
-        )
+        ref_value = str(flow["ref"])
         onetap_content = flow.get("onetap") or "SIGN_IN"
         widget_js = f"""
 <script src="https://vk.com/js/api/openapi.js?169"></script>
@@ -120,10 +116,10 @@ def _landing_html(flow_key: str) -> str:
 <script>
 (function () {{
   var flow = {json.dumps(flow_key)};
-  var dialogUrl = {json.dumps(dialog_url)};
   var redirectUrl = {json.dumps(redirect_url)};
   var appId = {int(app_id)};
   var groupId = {int(group_id)};
+  var ref = {json.dumps(ref_value)};
   var vkId = null;
   var messagesAllowed = false;
   var sending = false;
@@ -147,9 +143,40 @@ def _landing_html(flow_key: str) -> str:
     return s && s !== "0" && s !== "undefined" && s !== "null" ? s : null;
   }}
 
+  function webDialogUrl() {{
+    return "https://vk.com/write-" + groupId + "?ref=" + encodeURIComponent(ref);
+  }}
+
   function goToDialog() {{
-    setStatus("Открываем диалог…", true);
-    window.location.href = dialogUrl;
+    // Сначала пробуем открыть именно приложение VK, не мобильный сайт.
+    setStatus("Открываем приложение VK…", true);
+    var webUrl = webDialogUrl();
+    var ua = navigator.userAgent || "";
+    var isAndroid = /Android/i.test(ua);
+    var isIOS = /iPhone|iPad|iPod/i.test(ua);
+
+    if (isAndroid) {{
+      var intentUrl =
+        "intent://vk.com/write-" + groupId +
+        "#Intent;scheme=https;package=com.vkontakte.android;" +
+        "S.browser_fallback_url=" + encodeURIComponent(webUrl) + ";end";
+      window.location.href = intentUrl;
+      return;
+    }}
+
+    if (isIOS) {{
+      var started = Date.now();
+      window.location.href = "vk://vk.com/write-" + groupId;
+      setTimeout(function () {{
+        // Если приложение не перехватило — через ~0.9с уходим в https (браузер/сайт VK).
+        if (Date.now() - started < 1600) {{
+          window.location.href = webUrl;
+        }}
+      }}, 900);
+      return;
+    }}
+
+    window.location.href = webUrl;
   }}
 
   function sendEntryThenDialog() {{
