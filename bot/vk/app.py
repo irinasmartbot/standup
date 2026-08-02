@@ -1619,11 +1619,12 @@ class VKBotApp:
         # Button clicks create a user message — remove it with previous bot nav screens.
         if payload.get("cmd") and message.get("id") is not None:
             self._queue_delete(peer_id, message.get("id"))
-        logger.info("VK message peer_id=%s vk_id=%s cmd=%s text=%r", peer_id, vk_id, cmd, text[:80])
         text_key = text.casefold()
         if text_key in {"сброс розыгрыш", "сброс розыгрыша", "/reset_rozygrysh"}:
             await self._reset_raffle_for_test(peer_id, vk_id)
             return
+        # ref логируем ниже после разбора; cmd/text — сразу.
+        logger.info("VK message peer_id=%s vk_id=%s cmd=%s text=%r", peer_id, vk_id, cmd, text[:80])
         if not cmd:
             context = self.peer_context.get(peer_id)
             text_commands = {
@@ -1701,14 +1702,30 @@ class VKBotApp:
                 if time.monotonic() - last_burst < 8.0:
                     return
 
-        # Розыгрыш:
-        # - явно словом «розыгрыш»;
-        # - deep link: кнопка Start с payload command=start и ref=...
-        # Нельзя брать голый message.ref: VK «липко» таскает ref на следующие
-        # сообщения (тогда «начать»/бронь ошибочно открывали розыгрыш).
+        # Deep link (write-/vk.me?ref=...):
+        # - кнопка Start: payload command=start + ref;
+        # - или текст «начать»/start при том же ref (у кого уже был диалог,
+        #   синей «Начать» часто нет — человек пишет слово).
+        # Нельзя брать голый message.ref на любой текст: VK «липко» таскает ref
+        # дальше (фото/кнопки). Кнопки с cmd (бронь и т.п.) сюда не попадают.
         ref = str(message.get("ref") or payload.get("ref") or "").strip().casefold()
         payload_command = str(payload.get("command") or "").strip().casefold()
-        is_gift_deeplink = _is_offline_gift_ref(ref) and payload_command == "start" and not cmd
+        is_start_entry = payload_command == "start" or text_key in {
+            "/start",
+            "start",
+            "начать",
+        }
+        if ref:
+            logger.info(
+                "VK ref peer_id=%s vk_id=%s ref=%r payload_command=%r start_entry=%s cmd=%s",
+                peer_id,
+                vk_id,
+                ref,
+                payload_command,
+                is_start_entry,
+                cmd,
+            )
+        is_gift_deeplink = _is_offline_gift_ref(ref) and is_start_entry and not cmd
         if cmd == "offline_gift" or is_gift_deeplink:
             event_id = _offline_gift_event_id_from_ref(ref)
             if event_id:
@@ -1717,16 +1734,12 @@ class VKBotApp:
                 await self._send_offline_gift_events(peer_id)
             return
 
-        is_raffle_deeplink = (
-            ref in _RAFFLE_REF_VALUES and payload_command == "start" and not cmd
-        )
+        is_raffle_deeplink = ref in _RAFFLE_REF_VALUES and is_start_entry and not cmd
         if cmd == "raffle" or is_raffle_deeplink:
             await self._send_raffle_start(peer_id, vk_id)
             return
 
-        is_booking_deeplink = (
-            ref in _BOOKING_REF_VALUES and payload_command == "start" and not cmd
-        )
+        is_booking_deeplink = ref in _BOOKING_REF_VALUES and is_start_entry and not cmd
         if cmd == "book" or is_booking_deeplink:
             # Как в TG: бесплатная бронь сразу открывает Проверку материала
             # (deep link с лендинга /vk/booking — до общего Start-меню)
