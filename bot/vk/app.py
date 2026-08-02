@@ -650,13 +650,16 @@ class VKBotApp:
     ) -> int | None:
         cmid = self._callback_cmid(peer_id) if replace_nav else None
         # Callback-кнопка: правим то же сообщение, без delete+send (иначе мигает «два экрана»).
-        if replace_nav and cmid and self._keyboard_is_inline(keyboard):
+        # С новым attachment in-place edit во VK часто оставляет СТАРОЕ фото
+        # (hitloto на экране BEST) — и fallback edit без attachment ещё хуже.
+        # Поэтому при смене картинки всегда шлём новое сообщение.
+        if replace_nav and cmid and self._keyboard_is_inline(keyboard) and not attachment:
             ok = await self.client.edit_message(
                 peer_id,
                 text,
                 conversation_message_id=int(cmid),
                 keyboard=keyboard,
-                attachment=attachment,
+                attachment=None,
             )
             if ok:
                 peer = int(peer_id)
@@ -665,8 +668,6 @@ class VKBotApp:
                 self.peer_dates_message_ids.pop(peer, None)
                 await self._delete_pending(peer_id)
                 return None
-            # Если edit с фото не прошёл — НЕ редактируем без attachment
-            # (VK снимает картинку). Уходим в send нового сообщения ниже.
 
         if replace_nav:
             await self._delete_nav(peer_id)
@@ -3034,7 +3035,7 @@ class VKBotApp:
         await self._send_text(
             peer_id,
             "Выбирай площадку:",
-            keyboard=_venues_keyboard(venues, "check_venue", "check"),
+            keyboard=_venues_keyboard(venues, "check_venue", "check_date_page"),
             attachment=self._random_cover_attachment(),
         )
         self._track(peer_id, EVENT_BROWSE_VENUES, props={"format": "proverka"})
@@ -3124,7 +3125,7 @@ class VKBotApp:
         kb = VKKeyboardBuilder(inline=True)
         kb.button("Забронировать", _payload("check_booking_start", event_id=event["id"]), color="primary")
         kb.button("Правила бронирования", _payload("booking_rules", event_id=event["id"]))
-        kb.button("Назад к датам", _payload("check"))
+        kb.button("Назад к датам", _payload("check_date_page"))
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(
@@ -3182,7 +3183,7 @@ class VKBotApp:
         await self._send_text(
             peer_id,
             "BEST: выбирай площадку:",
-            keyboard=_venues_keyboard(venues, "best_venue", "best"),
+            keyboard=_venues_keyboard(venues, "best_venue", "best_date_page"),
             attachment=self._random_cover_attachment(),
         )
         self._track(peer_id, EVENT_BROWSE_VENUES, props={"format": "best"})
@@ -3324,7 +3325,7 @@ class VKBotApp:
             kb.button("Купить билет", link=payment_url)
         else:
             kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
-        kb.button("Назад к датам", _payload("best"))
+        kb.button("Назад к датам", _payload("best_date_page"))
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(
@@ -3419,7 +3420,7 @@ class VKBotApp:
             kb.button("Купить билет", link=payment_url)
         else:
             kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
-        kb.button("Назад к датам", _payload("hitloto"))
+        kb.button("Назад к датам", _payload("hitloto_date_page"))
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(
