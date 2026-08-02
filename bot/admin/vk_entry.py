@@ -543,6 +543,7 @@ def _mini_app_html(default_flow: str = "") -> str:
   var sending = false;
   var autoStarted = false;
   var permissionRequested = false;
+  var dialogReady = false;
   var statusEl = document.getElementById("status");
   var leadEl = document.getElementById("lead");
   var actionsEl = document.getElementById("actions");
@@ -552,6 +553,12 @@ def _mini_app_html(default_flow: str = "") -> str:
     statusEl.hidden = !text;
     statusEl.textContent = text || "";
     statusEl.className = "status " + (ok ? "ok" : "err");
+  }}
+
+  function isMobilePlatform() {{
+    var platform = new URLSearchParams(window.location.search || "").get("vk_platform") || "";
+    var ua = navigator.userAgent || "";
+    return /mobile_android|mobile_iphone|mobile_ipad|android|iphone|ipad/i.test(platform + " " + ua);
   }}
 
   function parseFlowValue(value) {{
@@ -610,6 +617,15 @@ def _mini_app_html(default_flow: str = "") -> str:
     }});
   }}
 
+  function setVisibleButtonText(text) {{
+    var buttons = actionsEl.querySelectorAll("[data-flow]");
+    buttons.forEach(function (button) {{
+      if (!button.hidden && button.style.display !== "none") {{
+        button.textContent = text;
+      }}
+    }});
+  }}
+
   function setFlow(flow, singleButton) {{
     if (!flowLabels[flow]) return false;
     currentFlow = flow;
@@ -632,14 +648,13 @@ def _mini_app_html(default_flow: str = "") -> str:
   function openDialog() {{
     var webUrl = "https://vk.com/im?sel=-" + groupId;
     var appUrl = "vk://vk.com/write-" + groupId;
-    var platform = new URLSearchParams(window.location.search || "").get("vk_platform") || "";
-    if (/mobile_android|mobile_iphone|mobile_ipad|android|iphone|ipad/i.test(platform)) {{
+    if (isMobilePlatform()) {{
       window.location.href = appUrl;
     }} else {{
-      withTimeout(bridge.send("VKWebAppOpenURL", {{ url: webUrl }}), 1200)
-        .catch(function () {{
-          window.open(webUrl, "_blank");
-        }});
+      var opened = window.open(webUrl, "_blank");
+      if (!opened) {{
+        withTimeout(bridge.send("VKWebAppOpenURL", {{ url: webUrl }}), 1200).catch(function () {{}});
+      }}
     }}
     setTimeout(function () {{
       bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
@@ -694,8 +709,14 @@ def _mini_app_html(default_flow: str = "") -> str:
       .then(function (res) {{
         sending = false;
         if (res.ok && res.j && res.j.ok) {{
-          setStatus("Готово! Сообщение уже отправлено в личку VK.", true);
-          setTimeout(openDialog, 350);
+          if (isMobilePlatform()) {{
+            setStatus("Готово! Сообщение уже отправлено в личку VK.", true);
+            setTimeout(openDialog, 150);
+          }} else {{
+            dialogReady = true;
+            setStatus("Готово! Сообщение отправлено. Нажмите кнопку ниже, чтобы открыть диалог VK.", true);
+            setVisibleButtonText("Открыть диалог VK");
+          }}
           return;
         }}
         if (allowPermissionFallback && res.status === 403) {{
@@ -778,6 +799,10 @@ def _mini_app_html(default_flow: str = "") -> str:
   actionsEl.addEventListener("click", function (event) {{
     var button = event.target.closest("[data-flow]");
     if (!button) return;
+    if (dialogReady) {{
+      openDialog();
+      return;
+    }}
     start(button.getAttribute("data-flow"));
   }});
 
