@@ -14,9 +14,9 @@ Mini App:
 
 ```text
 https://go.moscowstandupshow.ru/vk-mini
-https://vk.com/app54704296_-211754732#flow=booking
-https://vk.com/app54704296_-211754732#flow=raffle
-https://vk.com/app54704296_-211754732#flow=offline_gift
+https://go.moscowstandupshow.ru/vk-mini/start/booking
+https://go.moscowstandupshow.ru/vk-mini/start/raffle
+https://go.moscowstandupshow.ru/vk-mini/start/offline_gift
 ```
 
 ## Как работает

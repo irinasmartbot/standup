@@ -57,7 +57,9 @@ FLOWS: dict[str, dict[str, Any]] = {
 }
 
 _ENTRY_COOLDOWN_SEC = 20.0
+_MINI_FLOW_HANDOFF_TTL_SEC = 300.0
 _last_entry: dict[tuple[int, str], float] = {}
+_mini_flow_handoff: dict[str, tuple[str, float]] = {}
 
 
 def _env_app_id() -> str:
@@ -70,6 +72,45 @@ def _env_mini_app_id() -> str:
 
 def _env_mini_app_secret() -> str:
     return (os.getenv("VK_MINI_APP_SECRET") or "").strip()
+
+
+def _request_ip(request: web.Request) -> str:
+    forwarded = (request.headers.get("X-Forwarded-For") or "").split(",", 1)[0].strip()
+    return forwarded or (request.remote or "")
+
+
+def _remember_mini_flow(request: web.Request, flow_key: str) -> None:
+    ip = _request_ip(request)
+    if not ip:
+        return
+    now = time.monotonic()
+    _mini_flow_handoff[ip] = (flow_key, now)
+    cutoff = now - _MINI_FLOW_HANDOFF_TTL_SEC
+    for key, (_, ts) in list(_mini_flow_handoff.items()):
+        if ts < cutoff:
+            _mini_flow_handoff.pop(key, None)
+
+
+def _mini_flow_from_handoff(request: web.Request) -> str:
+    ip = _request_ip(request)
+    if not ip:
+        return ""
+    item = _mini_flow_handoff.get(ip)
+    if not item:
+        return ""
+    flow_key, ts = item
+    if time.monotonic() - ts > _MINI_FLOW_HANDOFF_TTL_SEC:
+        _mini_flow_handoff.pop(ip, None)
+        return ""
+    return flow_key if flow_key in FLOWS else ""
+
+
+def _mini_app_vk_url(settings) -> str:
+    app_id = _env_mini_app_id()
+    if not app_id:
+        app_id = "54704296"
+    group_suffix = f"_-{int(settings.group_id)}" if settings.group_id else ""
+    return f"https://vk.com/app{app_id}{group_suffix}"
 
 
 def _formats_keyboard() -> str:
@@ -385,7 +426,7 @@ async def landing_offline_gift(_: web.Request) -> web.Response:
     return web.Response(text=_landing_html("offline_gift"), content_type="text/html")
 
 
-def _mini_app_html() -> str:
+def _mini_app_html(default_flow: str = "") -> str:
     settings = load_vk_settings()
     group_id = int(settings.group_id or 0)
     ready = bool(group_id and settings.group_token)
@@ -495,6 +536,7 @@ def _mini_app_html() -> str:
 
   var bridge = window.vkBridge || createFallbackBridge();
   var groupId = {group_id};
+  var serverFlow = {json.dumps(default_flow if default_flow in FLOWS else "")};
   var flowLabels = {json.dumps(flow_labels, ensure_ascii=False)};
   var currentFlow = null;
   var sending = false;
@@ -513,6 +555,7 @@ def _mini_app_html() -> str:
     if (!value) return "";
     var raw = String(value).replace(/^#/, "").replace(/^\\?/, "");
     try {{ raw = decodeURIComponent(raw); }} catch (_) {{}}
+    raw = raw.replace(/^\\/+/, "").replace(/^\\?/, "");
     if (flowLabels[raw]) return raw;
     var params = new URLSearchParams(raw);
     var flow = params.get("flow") || params.get("start") || params.get("start_param") || "";
@@ -584,7 +627,7 @@ def _mini_app_html() -> str:
 
   function openDialog() {{
     var url = "https://vk.com/write-" + groupId;
-    bridge.send("VKWebAppOpenURL", {{ url: url }})
+    withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), 1200)
       .catch(function () {{
         try {{
           window.open(url, "_top");
@@ -592,6 +635,13 @@ def _mini_app_html() -> str:
           window.location.href = url;
         }}
       }});
+    setTimeout(function () {{
+      try {{
+        window.top.location.href = url;
+      }} catch (_) {{
+        window.location.href = url;
+      }}
+    }}, 900);
   }}
 
   function sendEntry() {{
@@ -680,13 +730,29 @@ def _mini_app_html() -> str:
 
   bridge.send("VKWebAppInit").catch(function () {{}});
 
+  function handleFragmentEvent(event) {{
+    var raw = event && (event.data || (event.detail && event.detail));
+    if (!raw) return;
+    if (typeof raw === "string") {{
+      try {{ raw = JSON.parse(raw); }} catch (_) {{ return; }}
+    }}
+    var type = raw.type || (raw.detail && raw.detail.type);
+    var data = raw.data || (raw.detail && raw.detail.data) || {{}};
+    if (type !== "VKWebAppLocationChanged" && type !== "VKWebAppChangeFragment") return;
+    var flow = parseFlowValue(data.location || data.hash || data.fragment || "");
+    if (flow && !currentFlow) setFlow(flow, true);
+  }}
+
+  window.addEventListener("message", handleFragmentEvent);
+  document.addEventListener("VKWebAppEvent", handleFragmentEvent);
+
   actionsEl.addEventListener("click", function (event) {{
     var button = event.target.closest("[data-flow]");
     if (!button) return;
     start(button.getAttribute("data-flow"));
   }});
 
-  var initialFlow = flowFromLocation();
+  var initialFlow = parseFlowValue(serverFlow) || flowFromLocation();
   if (initialFlow) {{
     setFlow(initialFlow, true);
   }}
@@ -774,8 +840,19 @@ def _mini_app_html() -> str:
 </html>"""
 
 
-async def mini_app_page(_: web.Request) -> web.Response:
-    return web.Response(text=_mini_app_html(), content_type="text/html")
+async def mini_app_page(request: web.Request) -> web.Response:
+    query_flow = str(request.query.get("flow") or "").strip()
+    default_flow = query_flow if query_flow in FLOWS else _mini_flow_from_handoff(request)
+    return web.Response(text=_mini_app_html(default_flow), content_type="text/html")
+
+
+async def mini_app_start(request: web.Request) -> web.Response:
+    flow_key = str(request.match_info.get("flow") or "").strip()
+    if flow_key not in FLOWS:
+        raise web.HTTPNotFound(text="Unknown VK Mini App flow")
+    _remember_mini_flow(request, flow_key)
+    settings = load_vk_settings()
+    raise web.HTTPFound(_mini_app_vk_url(settings))
 
 
 def _verify_mini_launch_params(raw_query: str) -> tuple[bool, dict[str, str], str]:
@@ -962,6 +1039,7 @@ async def mini_entry_post(request: web.Request) -> web.Response:
 
 
 def register_routes(app: web.Application) -> None:
+    app.router.add_get("/vk-mini/start/{flow}", mini_app_start)
     app.router.add_get("/vk-mini", mini_app_page)
     app.router.add_get("/vk/booking", landing_booking)
     app.router.add_get("/vk/raffle", landing_raffle)
