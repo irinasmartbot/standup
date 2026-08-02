@@ -36,18 +36,21 @@ FLOWS: dict[str, dict[str, Any]] = {
     "booking": {
         "title": "Бронирование",
         "headline": "Забронировать места",
+        "button": "Забронировать места",
         "lead": "Разрешите сообщения сообществу — сразу пришлём в VK выбор формата шоу.",
         "ref": "standup_book",
     },
     "raffle": {
         "title": "Розыгрыш",
         "headline": "Участвовать в розыгрыше",
+        "button": "Участвовать в розыгрыше",
         "lead": "Разрешите сообщения сообществу — сразу пришлём в VK старт розыгрыша.",
         "ref": "standup_rozygr",
     },
     "offline_gift": {
         "title": "Подарок",
-        "headline": "Офлайн-розыгрыш подарка",
+        "headline": "Участвовать в розыгрыше на шоу",
+        "button": "Подарок на шоу",
         "lead": "Разрешите сообщения сообществу — сразу пришлём в VK список на подарок.",
         "ref": "offline_gift",
     },
@@ -389,6 +392,7 @@ def _mini_app_html() -> str:
     flow_labels = {
         key: {
             "headline": value["headline"],
+            "button": value["button"],
             "lead": value["lead"],
         }
         for key, value in FLOWS.items()
@@ -553,8 +557,9 @@ def _mini_app_html() -> str:
     buttons.forEach(function (button) {{
       var match = button.getAttribute("data-flow") === flow;
       button.hidden = !match;
+      button.style.display = match ? "" : "none";
       if (match) {{
-        button.textContent = flowLabels[flow].headline;
+        button.textContent = flowLabels[flow].button;
       }}
     }});
   }}
@@ -577,6 +582,18 @@ def _mini_app_html() -> str:
       "Не удалось выполнить действие. Попробуйте ещё раз.";
   }}
 
+  function openDialog() {{
+    var url = "https://vk.com/write-" + groupId;
+    bridge.send("VKWebAppOpenURL", {{ url: url }})
+      .catch(function () {{
+        try {{
+          window.open(url, "_top");
+        }} catch (_) {{
+          window.location.href = url;
+        }}
+      }});
+  }}
+
   function sendEntry() {{
     if (!currentFlow || sending) return;
     sending = true;
@@ -596,6 +613,7 @@ def _mini_app_html() -> str:
         sending = false;
         if (res.ok && res.j && res.j.ok) {{
           setStatus("Готово! Сообщение уже отправлено в личку VK.", true);
+          setTimeout(openDialog, 350);
           return;
         }}
         setStatus((res.j && res.j.error) || "Не удалось отправить сообщение.", false);
@@ -722,6 +740,7 @@ def _mini_app_html() -> str:
       margin: 0 0 22px; font-size: 16px; line-height: 1.45; color: var(--muted);
     }}
     .actions {{ display: grid; gap: 12px; margin: 0 0 14px; }}
+    [hidden] {{ display: none !important; }}
     .cta {{
       display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
       padding: 14px 16px; cursor: pointer;
