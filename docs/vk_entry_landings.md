@@ -1,7 +1,9 @@
-# VK entry landings
+# VK entry landings (упрощённый вход)
 
 Публичные ссылки запуска VK-бота на домене `go.moscowstandupshow.ru`  
 (без логина админки; `/admin` по-прежнему за basic auth).
+
+**Без OpenAPI-виджета и без ИП** — кнопка открывает диалог сообщества с `ref`.
 
 ## Ссылки
 
@@ -13,46 +15,42 @@ https://go.moscowstandupshow.ru/vk/offline-gift
 
 ## Как работает
 
-1. QR / ссылка → публичная страница.
-2. Виджет VK «Разрешить сообщения от сообщества» → страница получает `vk_id`.
-3. Кнопка на странице → `POST /vk/entry`.
-4. Backend шлёт человеку сообщение с inline-кнопкой:
-   - booking → `{"cmd":"book"}`
-   - raffle → `{"cmd":"raffle"}`
-   - offline_gift → `{"cmd":"offline_gift"}`
-5. VK-бот обрабатывает `cmd` как обычно.
+1. QR / ссылка → публичная страница на `go…`.
+2. Кнопка → `https://vk.com/write-{GROUP_ID}?ref=…` (или `vk.me/{screen_name}?ref=…`).
+3. Пользователь в VK нажимает «Начать».
+4. Бот получает `command=start` + `ref` и открывает нужную ветку:
+   - `standup_book` → бронь
+   - `standup_rozygr` → розыгрыш
+   - `offline_gift` → офлайн-подарок
+
+Важно: использовать именно `write-` / `vk.me`, не `vk.com/club…` — иначе `ref` часто не доходит.
 
 ## Код
 
-- `bot/admin/vk_entry.py` — страницы + API
-- Роуты регистрируются в `bot/admin/app.py` → `create_app()`
+- `bot/admin/vk_entry.py` — публичные страницы (сервит **standup-admin**, ветка **dev**)
+- `bot/vk/app.py` — разбор `ref` (VK-бот, ветка **vk-mvp**)
 
-Веб крутится процессом `standup-admin` (`/home/standup/app`, ветка **dev**).  
-VK-бот — отдельно (`/home/standup/vk-app`, ветка **vk-mvp**).
+## Env
 
-## Env (в `.env` админки на VPS)
+На админке (`/home/standup/app/.env`) достаточно того же, что у VK-бота:
 
 ```env
 VK_GROUP_ID=...
-VK_GROUP_TOKEN=...
-VK_OPENAPI_APP_ID=...
-VK_PUBLIC_ENTRY_BASE=https://go.moscowstandupshow.ru
+VK_COMMUNITY_LINK=https://vk.com/...   # запасной вариант, если нет GROUP_ID
 ```
 
-`VK_GROUP_*` обычно уже есть (те же, что у VK-бота).
-
-## VK Developers (разово)
-
-1. [dev.vk.com](https://dev.vk.com) → Мои приложения → Создать → тип **Сайт** / веб.
-2. Базовый домен: `go.moscowstandupshow.ru` (без `https://`).
-3. Скопировать **ID приложения** → `VK_OPENAPI_APP_ID`.
-4. В настройках сообщества: сообщения сообщества включены; бот/приложение может писать пользователям, которые разрешили сообщения.
+`VK_OPENAPI_APP_ID` для этого режима **не нужен**.
 
 ## Деплой
 
-1. Код лендов должен оказаться в **dev** (автодеплой `standup-admin`).
-2. На сервере дописать `VK_OPENAPI_APP_ID` и `VK_PUBLIC_ENTRY_BASE` в `/home/standup/app/.env`.
-3. `sudo systemctl restart standup-admin`
-4. Проверить три URL выше.
+1. Лендинги → ветка **dev** (автодеплой `standup-admin`).
+2. Обработка `ref` брони → ветка **vk-mvp**, ручной деплой VK-бота:
+   ```bash
+   ssh standup@31.128.47.4
+   cd /home/standup/vk-app && git pull && sudo systemctl restart standup-vk
+   ```
+3. Проверить три URL выше → «Начать» → нужная ветка бота.
 
-Пока нет `VK_OPENAPI_APP_ID`, страницы показывают «ещё настраивается» — админка не ломается.
+## Позже (опционально)
+
+Если появится ИП / приложение типа «Сайт» — можно вернуть OpenAPI-виджет «Разрешить сообщения» без обязательного «Начать».
