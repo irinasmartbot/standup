@@ -414,6 +414,7 @@ def _mini_app_html() -> str:
 <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
 <script>
 (function () {{
+  var bridge = window.vkBridge;
   var groupId = {group_id};
   var flowLabels = {json.dumps(flow_labels, ensure_ascii=False)};
   var currentFlow = null;
@@ -427,6 +428,11 @@ def _mini_app_html() -> str:
     statusEl.hidden = !text;
     statusEl.textContent = text || "";
     statusEl.className = "status " + (ok ? "ok" : "err");
+  }}
+
+  if (!bridge) {{
+    setStatus("Не загрузился VK Bridge. Закройте приложение и откройте снова.", false);
+    return;
   }}
 
   function setFlow(flow) {{
