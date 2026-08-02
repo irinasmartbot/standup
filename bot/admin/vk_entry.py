@@ -99,8 +99,8 @@ def _mini_flow_from_handoff(request: web.Request) -> str:
     if not item:
         return ""
     flow_key, ts = item
+    _mini_flow_handoff.pop(ip, None)
     if time.monotonic() - ts > _MINI_FLOW_HANDOFF_TTL_SEC:
-        _mini_flow_handoff.pop(ip, None)
         return ""
     return flow_key if flow_key in FLOWS else ""
 
@@ -757,7 +757,6 @@ def _mini_app_html(default_flow: str = "") -> str:
     setFlow(initialFlow, true);
   }}
   bridge.send("VKWebAppGetLaunchParams").then(function (data) {{
-    if (currentFlow) return;
     var flow = flowFromLaunchParams(data);
     if (flow) setFlow(flow, true);
   }}).catch(function () {{}});
