@@ -70,7 +70,26 @@ logger = logging.getLogger(__name__)
 DATES_PAGE_SIZE = 6
 VK_CHANNEL = "vkontakte"
 # Как в TG: не крутим в рандоме карточки площадок / хитлото / билет / отзывы.
-_EXCLUDED_RANDOM_COVER_KEYS = frozenset({"temple_bar", "escobar", "nebar", "hitloto_start"})
+_EXCLUDED_RANDOM_COVER_KEYS = frozenset(
+    {
+        "temple_bar",
+        "escobar",
+        "nebar",
+        "hitloto_start",
+        # Дубликат арта хитлото под «обычным» именем файла (попадало в рандом).
+        "photo_2026-07-21_01-59-43",
+    }
+)
+_EXCLUDED_RANDOM_COVER_NAMES = frozenset(
+    {
+        "temple_bar.jpg",
+        "escobar.jpg",
+        "nebar.jpg",
+        "ticket_template.jpg",
+        "hitloto_start.png",
+        "photo_2026-07-21_01-59-43.jpg",
+    }
+)
 # Deep link: vk.com/write-{group_id}?ref=standup_rozygr или vk.me/{screen_name}?ref=...
 # (ссылка вида vk.com/club...?ref= НЕ передаёт ref в message_new).
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
@@ -462,10 +481,12 @@ class VKBotApp:
         """Случайная обложка шоу (как в TG). Не трогает площадки / хитлото / билет."""
         # Блокируем и по ключу/имени, и по самому attachment id —
         # на случай если тот же файл попал в кэш под другим ключом.
-        banned_attachments = {
-            (self.images.get(key) or "").strip()
-            for key in ("hitloto_start", "temple_bar", "escobar", "nebar", "rozygrysh_otzyv_1", "rozygrysh_otzyv_2")
+        banned_keys = _EXCLUDED_RANDOM_COVER_KEYS | {
+            "rozygrysh_otzyv_1",
+            "rozygrysh_otzyv_2",
+            "photo_2026-07-21_01-59-43",
         }
+        banned_attachments = {(self.images.get(key) or "").strip() for key in banned_keys}
         banned_attachments.discard("")
         pool: list[str] = []
         for img in self.images.all():
@@ -477,7 +498,7 @@ class VKBotApp:
                 continue
             if attachment in banned_attachments:
                 continue
-            if key in _EXCLUDED_RANDOM_COVER_KEYS:
+            if key in banned_keys or name in _EXCLUDED_RANDOM_COVER_NAMES:
                 continue
             if (
                 key.startswith("hitloto")
@@ -491,12 +512,6 @@ class VKBotApp:
             ):
                 continue
             if "ticket" in key or "ticket" in name:
-                continue
-            if key in {"temple_bar", "escobar", "nebar"} or name in {
-                "temple_bar.jpg",
-                "escobar.jpg",
-                "nebar.jpg",
-            }:
                 continue
             pool.append(attachment)
         if pool:

@@ -41,11 +41,13 @@ DEFAULT_IMAGE_KEYS = {
 }
 
 # Same exclusions as TG random covers: venues, ticket, hitloto, reviews.
+# photo_2026-… — тот же арт хитлото, что hitloto_start.png (другое имя файла).
 _EXCLUDED_RANDOM_NAMES = {
     "temple_bar.jpg",
     "escobar.jpg",
     "nebar.jpg",
     "ticket_template.jpg",
+    "photo_2026-07-21_01-59-43.jpg",
 }
 # VK message photo upload is picky; keep under ~5 MB to avoid empty photo responses.
 _MAX_RANDOM_PHOTO_SIZE = 5 * 1024 * 1024
