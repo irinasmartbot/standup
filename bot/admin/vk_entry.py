@@ -13,12 +13,16 @@ POST /vk/entry
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
 import time
 from html import escape
 from typing import Any
+from urllib.parse import parse_qsl, urlencode
 
 from aiohttp import web
 
@@ -55,6 +59,14 @@ _last_entry: dict[tuple[int, str], float] = {}
 
 def _env_app_id() -> str:
     return (os.getenv("VK_OPENAPI_APP_ID") or "").strip()
+
+
+def _env_mini_app_id() -> str:
+    return (os.getenv("VK_MINI_APP_ID") or "").strip()
+
+
+def _env_mini_app_secret() -> str:
+    return (os.getenv("VK_MINI_APP_SECRET") or "").strip()
 
 
 def _formats_keyboard() -> str:
@@ -370,6 +382,262 @@ async def landing_offline_gift(_: web.Request) -> web.Response:
     return web.Response(text=_landing_html("offline_gift"), content_type="text/html")
 
 
+def _mini_app_html() -> str:
+    settings = load_vk_settings()
+    group_id = int(settings.group_id or 0)
+    ready = bool(group_id and settings.group_token)
+    flow_labels = {
+        key: {
+            "headline": value["headline"],
+            "lead": value["lead"],
+        }
+        for key, value in FLOWS.items()
+    }
+
+    if not ready:
+        body = """
+        <p class="warn">Мини-приложение ещё настраивается. Загляните чуть позже или напишите менеджеру.</p>
+        """
+        app_js = ""
+    else:
+        body = """
+        <p id="lead" class="lead">Выберите действие — сразу отправим нужный сценарий в личные сообщения VK.</p>
+        <div class="actions" id="actions">
+          <button type="button" class="cta" data-flow="booking">Забронировать места</button>
+          <button type="button" class="cta" data-flow="raffle">Участвовать в розыгрыше</button>
+          <button type="button" class="cta" data-flow="offline_gift">Подарок на шоу</button>
+        </div>
+        <p id="status" class="status" hidden></p>
+        <p class="hint">VK попросит разрешить сообщения от сообщества. После этого бот пришлёт продолжение в личку.</p>
+        """
+        app_js = f"""
+<script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
+<script>
+(function () {{
+  var groupId = {group_id};
+  var flowLabels = {json.dumps(flow_labels, ensure_ascii=False)};
+  var currentFlow = null;
+  var sending = false;
+  var statusEl = document.getElementById("status");
+  var leadEl = document.getElementById("lead");
+  var actionsEl = document.getElementById("actions");
+  var titleEl = document.getElementById("title");
+
+  function setStatus(text, ok) {{
+    statusEl.hidden = !text;
+    statusEl.textContent = text || "";
+    statusEl.className = "status " + (ok ? "ok" : "err");
+  }}
+
+  function setFlow(flow) {{
+    if (!flowLabels[flow]) return false;
+    currentFlow = flow;
+    titleEl.textContent = flowLabels[flow].headline;
+    leadEl.textContent = flowLabels[flow].lead;
+    return true;
+  }}
+
+  function flowFromHash() {{
+    var hash = (window.location.hash || "").replace(/^#/, "");
+    if (!hash) {{
+      hash = new URLSearchParams(window.location.search || "").get("hash") || "";
+    }}
+    var params = new URLSearchParams(hash.replace(/^#/, ""));
+    return params.get("flow") || "";
+  }}
+
+  function normalizeError(error) {{
+    if (!error) return "Не удалось выполнить действие. Попробуйте ещё раз.";
+    if (error.error_data && error.error_data.error_reason === "User denied") {{
+      return "Вы запретили сообщения. Нажмите кнопку ещё раз и разрешите сообщения от сообщества.";
+    }}
+    return error.error_description || error.error_reason || error.message ||
+      "Не удалось выполнить действие. Попробуйте ещё раз.";
+  }}
+
+  function sendEntry() {{
+    if (!currentFlow || sending) return;
+    sending = true;
+    setStatus("Отправляем сообщение в VK…", true);
+    fetch("/vk-mini/entry", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{
+        flow: currentFlow,
+        launch_params: window.location.search || ""
+      }})
+    }})
+      .then(function (r) {{
+        return r.json().then(function (j) {{ return {{ ok: r.ok, j: j }}; }});
+      }})
+      .then(function (res) {{
+        sending = false;
+        if (res.ok && res.j && res.j.ok) {{
+          setStatus("Готово! Сообщение уже отправлено в личку VK.", true);
+          return;
+        }}
+        setStatus((res.j && res.j.error) || "Не удалось отправить сообщение.", false);
+      }})
+      .catch(function () {{
+        sending = false;
+        setStatus("Сеть недоступна. Попробуйте ещё раз.", false);
+      }});
+  }}
+
+  function start(flow) {{
+    if (!setFlow(flow)) {{
+      setStatus("Неизвестный сценарий.", false);
+      return;
+    }}
+    setStatus("Запрашиваем разрешение на сообщения…", true);
+    bridge.send("VKWebAppAllowMessagesFromGroup", {{
+      group_id: groupId,
+      key: flow + ":" + Date.now()
+    }})
+      .then(function (data) {{
+        if (data && data.result) {{
+          sendEntry();
+          return;
+        }}
+        setStatus("Разрешите сообщения, чтобы бот смог написать вам.", false);
+      }})
+      .catch(function (error) {{
+        setStatus(normalizeError(error), false);
+      }});
+  }}
+
+  bridge.send("VKWebAppInit").catch(function () {{}});
+
+  actionsEl.addEventListener("click", function (event) {{
+    var button = event.target.closest("[data-flow]");
+    if (!button) return;
+    start(button.getAttribute("data-flow"));
+  }});
+
+  var initialFlow = flowFromHash();
+  if (initialFlow && setFlow(initialFlow)) {{
+    start(initialFlow);
+  }}
+}})();
+</script>
+"""
+
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VK · Moscow StandUp Show</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700&family=Pacifico&display=swap" rel="stylesheet">
+  <style>
+    :root {{
+      --bg0: #070708;
+      --gold: #e8c56a;
+      --gold-deep: #c9a227;
+      --text: #f7f3ea;
+      --muted: #d2c4b0;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0; min-height: 100vh; color: var(--text);
+      font-family: Manrope, sans-serif;
+      background:
+        radial-gradient(ellipse 90% 55% at 50% 100%, rgba(180, 30, 45, .45) 0%, transparent 55%),
+        radial-gradient(ellipse 70% 40% at 50% 0%, rgba(80, 10, 20, .55) 0%, transparent 50%),
+        linear-gradient(180deg, #12080c 0%, var(--bg0) 45%, #14060a 100%);
+    }}
+    main {{
+      width: min(440px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 72px;
+    }}
+    .brand {{
+      margin: 0 0 18px; font-family: Pacifico, cursive; font-size: 22px;
+      color: var(--gold); line-height: 1.2; text-shadow: 0 0 24px rgba(232, 197, 106, .25);
+    }}
+    h1 {{
+      margin: 0 0 14px; font-size: clamp(28px, 7vw, 38px); font-weight: 700;
+      line-height: 1.15; letter-spacing: -0.02em;
+    }}
+    .lead {{
+      margin: 0 0 22px; font-size: 16px; line-height: 1.45; color: var(--muted);
+    }}
+    .actions {{ display: grid; gap: 12px; margin: 0 0 14px; }}
+    .cta {{
+      display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
+      padding: 14px 16px; cursor: pointer;
+      background: linear-gradient(180deg, #f0d48a 0%, var(--gold-deep) 100%);
+      color: #1a1208; font: 700 16px Manrope, sans-serif;
+      box-shadow: 0 8px 28px rgba(201, 162, 39, .28);
+    }}
+    .hint {{
+      margin: 16px 0 0; font-size: 13px; line-height: 1.4; color: #a89884;
+    }}
+    .status {{
+      font-size: 14px; margin: 0 0 14px; padding: 12px 14px; border-radius: 12px;
+      background: rgba(255,255,255,.06); border: 1px solid rgba(232, 197, 106, .18);
+    }}
+    .status.ok {{ color: #d8f5d0; }}
+    .status.err {{ color: #ffd0d0; }}
+    .warn {{
+      background: rgba(232, 197, 106, .1); border: 1px solid rgba(232, 197, 106, .35);
+      padding: 14px 16px; border-radius: 12px; color: #ffe6b0;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand">Moscow StandUp Show</p>
+    <h1 id="title">Быстрый вход в VK</h1>
+    {body}
+  </main>
+  {app_js}
+</body>
+</html>"""
+
+
+async def mini_app_page(_: web.Request) -> web.Response:
+    return web.Response(text=_mini_app_html(), content_type="text/html")
+
+
+def _verify_mini_launch_params(raw_query: str) -> tuple[bool, dict[str, str], str]:
+    secret = _env_mini_app_secret()
+    if not secret:
+        return False, {}, "VK Mini App secret не настроен."
+
+    query = (raw_query or "").strip()
+    if query.startswith("?"):
+        query = query[1:]
+    params = dict(parse_qsl(query, keep_blank_values=True))
+    sign = params.get("sign") or ""
+    vk_params = sorted((k, v) for k, v in params.items() if k.startswith("vk_"))
+    if not sign or not vk_params:
+        return False, params, "Нет подписанных параметров запуска VK."
+
+    expected_bytes = hmac.new(
+        secret.encode("utf-8"),
+        urlencode(vk_params).encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    expected = base64.urlsafe_b64encode(expected_bytes).decode("utf-8").rstrip("=")
+    if not hmac.compare_digest(sign, expected):
+        return False, params, "Некорректная подпись запуска VK."
+
+    app_id = _env_mini_app_id()
+    if app_id and str(params.get("vk_app_id") or "") != app_id:
+        return False, params, "Mini App ID не совпадает с настройками сервера."
+
+    try:
+        vk_ts = int(params.get("vk_ts") or 0)
+    except (TypeError, ValueError):
+        vk_ts = 0
+    ttl = int(os.getenv("VK_MINI_LAUNCH_TTL_SEC", "86400") or "86400")
+    if vk_ts and ttl > 0 and abs(int(time.time()) - vk_ts) > ttl:
+        return False, params, "Сессия VK устарела. Откройте приложение заново."
+
+    return True, params, ""
+
+
 def _cooldown_hit(vk_id: int, flow: str) -> bool:
     key = (int(vk_id), flow)
     now = time.monotonic()
@@ -450,8 +718,75 @@ async def entry_post(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def mini_entry_post(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "Некорректный запрос."}, status=400)
+
+    flow_key = str((data or {}).get("flow") or "").strip()
+    if flow_key not in FLOWS:
+        return web.json_response({"ok": False, "error": "Неизвестный сценарий."}, status=400)
+
+    ok, params, error = _verify_mini_launch_params(str((data or {}).get("launch_params") or ""))
+    if not ok:
+        logger.warning("VK mini entry bad launch params flow=%s error=%s", flow_key, error)
+        return web.json_response({"ok": False, "error": error}, status=403)
+
+    try:
+        vk_id = int(params.get("vk_user_id") or 0)
+    except (TypeError, ValueError):
+        vk_id = 0
+    logger.info("VK mini entry request vk_id=%s flow=%s", vk_id, flow_key)
+    if vk_id <= 0:
+        return web.json_response({"ok": False, "error": "Не удалось определить VK id."}, status=400)
+
+    if _cooldown_hit(vk_id, flow_key):
+        return web.json_response(
+            {"ok": True, "ok_soft": True, "error": "Сообщение уже отправляли — проверьте личку VK."}
+        )
+
+    settings = load_vk_settings()
+    if not settings.is_configured:
+        logger.error("VK mini entry: group token/id not configured")
+        return web.json_response(
+            {"ok": False, "error": "Сервис временно недоступен."},
+            status=503,
+        )
+
+    client = VKClient(settings)
+    try:
+        await _send_flow_chain(client, settings, flow_key, vk_id)
+    except VKAPIError as exc:
+        err = str(exc).lower()
+        logger.warning("VK mini entry send failed vk_id=%s flow=%s: %s", vk_id, flow_key, exc)
+        if "permission" in err or "901" in err or "deny" in err or "can't send" in err:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error": "Не можем написать вам. Разрешите сообщения сообществу и попробуйте снова.",
+                },
+                status=403,
+            )
+        return web.json_response(
+            {"ok": False, "error": "Не удалось отправить сообщение. Попробуйте позже."},
+            status=502,
+        )
+    except Exception:
+        logger.exception("VK mini entry unexpected vk_id=%s flow=%s", vk_id, flow_key)
+        return web.json_response(
+            {"ok": False, "error": "Не удалось отправить сообщение. Попробуйте позже."},
+            status=502,
+        )
+
+    logger.info("VK mini entry ok vk_id=%s flow=%s", vk_id, flow_key)
+    return web.json_response({"ok": True})
+
+
 def register_routes(app: web.Application) -> None:
+    app.router.add_get("/vk-mini", mini_app_page)
     app.router.add_get("/vk/booking", landing_booking)
     app.router.add_get("/vk/raffle", landing_raffle)
     app.router.add_get("/vk/offline-gift", landing_offline_gift)
     app.router.add_post("/vk/entry", entry_post)
+    app.router.add_post("/vk-mini/entry", mini_entry_post)

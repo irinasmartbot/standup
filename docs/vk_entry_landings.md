@@ -10,6 +10,15 @@ https://go.moscowstandupshow.ru/vk/raffle
 https://go.moscowstandupshow.ru/vk/offline-gift
 ```
 
+Mini App:
+
+```text
+https://go.moscowstandupshow.ru/vk-mini
+https://vk.com/app54704296_-211754732#flow=booking
+https://vk.com/app54704296_-211754732#flow=raffle
+https://vk.com/app54704296_-211754732#flow=offline_gift
+```
+
 ## Как работает
 
 1. Страница грузит OpenAPI-виджет «Разрешить сообщения от сообщества».
@@ -29,6 +38,15 @@ VK_OPENAPI_APP_ID=54704100
 
 `VK_GROUP_*` — то же тестовое/боевое сообщество, от имени которого пишем.
 `VK_OPENAPI_APP_ID` — ID Web-приложения с базовым доменом `go.moscowstandupshow.ru`.
+
+Для Mini App:
+
+```env
+VK_MINI_APP_ID=54704296
+VK_MINI_APP_SECRET=...
+```
+
+`VK_MINI_APP_SECRET` — защищённый ключ из кабинета VK Mini Apps, не коммитить.
 
 ## Деплой
 
