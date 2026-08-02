@@ -505,21 +505,67 @@ def _mini_app_html() -> str:
     statusEl.className = "status " + (ok ? "ok" : "err");
   }}
 
-  function setFlow(flow) {{
+  function parseFlowValue(value) {{
+    if (!value) return "";
+    var raw = String(value).replace(/^#/, "").replace(/^\\?/, "");
+    try {{ raw = decodeURIComponent(raw); }} catch (_) {{}}
+    if (flowLabels[raw]) return raw;
+    var params = new URLSearchParams(raw);
+    var flow = params.get("flow") || params.get("start") || params.get("start_param") || "";
+    if (flowLabels[flow]) return flow;
+    var aliases = {{
+      book: "booking",
+      booking: "booking",
+      standup_book: "booking",
+      raffle: "raffle",
+      rozygr: "raffle",
+      rozygrysh: "raffle",
+      standup_rozygr: "raffle",
+      gift: "offline_gift",
+      offline_gift: "offline_gift"
+    }};
+    return aliases[raw] || "";
+  }}
+
+  function flowFromLocation() {{
+    var search = new URLSearchParams(window.location.search || "");
+    return (
+      parseFlowValue(window.location.hash || "") ||
+      parseFlowValue(search.get("flow") || "") ||
+      parseFlowValue(search.get("hash") || "") ||
+      parseFlowValue(search.get("vk_hash") || "") ||
+      parseFlowValue(search.get("start_param") || "")
+    );
+  }}
+
+  function flowFromLaunchParams(data) {{
+    if (!data) return "";
+    return (
+      parseFlowValue(data.hash || "") ||
+      parseFlowValue(data.vk_hash || "") ||
+      parseFlowValue(data.start_param || "") ||
+      parseFlowValue(data.flow || "")
+    );
+  }}
+
+  function showOnlyFlow(flow) {{
+    var buttons = actionsEl.querySelectorAll("[data-flow]");
+    buttons.forEach(function (button) {{
+      var match = button.getAttribute("data-flow") === flow;
+      button.hidden = !match;
+      if (match) {{
+        button.textContent = flowLabels[flow].headline;
+      }}
+    }});
+  }}
+
+  function setFlow(flow, singleButton) {{
     if (!flowLabels[flow]) return false;
     currentFlow = flow;
     titleEl.textContent = flowLabels[flow].headline;
     leadEl.textContent = flowLabels[flow].lead;
+    if (singleButton) showOnlyFlow(flow);
     return true;
-  }}
-
-  function flowFromHash() {{
-    var hash = (window.location.hash || "").replace(/^#/, "");
-    if (!hash) {{
-      hash = new URLSearchParams(window.location.search || "").get("hash") || "";
-    }}
-    var params = new URLSearchParams(hash.replace(/^#/, ""));
-    return params.get("flow") || "";
   }}
 
   function normalizeError(error) {{
@@ -560,25 +606,57 @@ def _mini_app_html() -> str:
       }});
   }}
 
+  function isUserDenied(error) {{
+    return !!(
+      error &&
+      (
+        error.error_reason === "User denied" ||
+        error.error_description === "User denied" ||
+        (error.error_data && error.error_data.error_reason === "User denied")
+      )
+    );
+  }}
+
+  function withTimeout(promise, ms) {{
+    return new Promise(function (resolve, reject) {{
+      var timer = setTimeout(function () {{
+        reject({{ error_description: "VK не ответил на запрос разрешения." }});
+      }}, ms);
+      promise.then(function (value) {{
+        clearTimeout(timer);
+        resolve(value);
+      }}).catch(function (error) {{
+        clearTimeout(timer);
+        reject(error);
+      }});
+    }});
+  }}
+
   function start(flow) {{
-    if (!setFlow(flow)) {{
+    if (!setFlow(flow, true)) {{
       setStatus("Неизвестный сценарий.", false);
       return;
     }}
     setStatus("Запрашиваем разрешение на сообщения…", true);
-    bridge.send("VKWebAppAllowMessagesFromGroup", {{
+    withTimeout(bridge.send("VKWebAppAllowMessagesFromGroup", {{
       group_id: groupId,
       key: flow + ":" + Date.now()
-    }})
+    }}), 8000)
       .then(function (data) {{
         if (data && data.result) {{
           sendEntry();
           return;
         }}
-        setStatus("Разрешите сообщения, чтобы бот смог написать вам.", false);
+        setStatus("Проверяем, можем ли уже написать вам…", true);
+        sendEntry();
       }})
       .catch(function (error) {{
-        setStatus(normalizeError(error), false);
+        if (isUserDenied(error)) {{
+          setStatus(normalizeError(error), false);
+          return;
+        }}
+        setStatus("VK не вернул ответ на разрешение. Проверяем личку напрямую…", true);
+        sendEntry();
       }});
   }}
 
@@ -590,10 +668,15 @@ def _mini_app_html() -> str:
     start(button.getAttribute("data-flow"));
   }});
 
-  var initialFlow = flowFromHash();
-  if (initialFlow && setFlow(initialFlow)) {{
-    start(initialFlow);
+  var initialFlow = flowFromLocation();
+  if (initialFlow) {{
+    setFlow(initialFlow, true);
   }}
+  bridge.send("VKWebAppGetLaunchParams").then(function (data) {{
+    if (currentFlow) return;
+    var flow = flowFromLaunchParams(data);
+    if (flow) setFlow(flow, true);
+  }}).catch(function () {{}});
 }})();
 </script>
 """
