@@ -541,6 +541,8 @@ def _mini_app_html(default_flow: str = "") -> str:
   var flowLabels = {json.dumps(flow_labels, ensure_ascii=False)};
   var currentFlow = null;
   var sending = false;
+  var autoStarted = false;
+  var permissionRequested = false;
   var statusEl = document.getElementById("status");
   var leadEl = document.getElementById("lead");
   var actionsEl = document.getElementById("actions");
@@ -645,10 +647,40 @@ def _mini_app_html(default_flow: str = "") -> str:
     }}, 1200);
   }}
 
-  function sendEntry() {{
+  function requestPermissionAndSend(flow) {{
+    if (permissionRequested) return;
+    permissionRequested = true;
+    sending = false;
+    setStatus("VK попросит разрешить сообщения. После разрешения сразу отправим продолжение…", true);
+    var slowTimer = setTimeout(function () {{
+      setStatus("Ждём разрешение VK. Обычно это занимает несколько секунд.", true);
+    }}, 2200);
+    withTimeout(bridge.send("VKWebAppAllowMessagesFromGroup", {{
+      group_id: groupId,
+      key: flow + ":" + Date.now()
+    }}), 8000)
+      .then(function (data) {{
+        clearTimeout(slowTimer);
+        if (data && data.result) {{
+          sendEntry(false);
+          return;
+        }}
+        setStatus("Разрешите сообщения, чтобы бот смог написать вам.", false);
+      }})
+      .catch(function (error) {{
+        clearTimeout(slowTimer);
+        if (isUserDenied(error)) {{
+          setStatus(normalizeError(error), false);
+          return;
+        }}
+        setStatus("VK не вернул ответ на разрешение. Нажмите кнопку ещё раз или проверьте личку.", false);
+      }});
+  }}
+
+  function sendEntry(allowPermissionFallback) {{
     if (!currentFlow || sending) return;
     sending = true;
-    setStatus("Отправляем сообщение в VK…", true);
+    setStatus("Отправляем сообщение в VK. Обычно оно приходит в течение пары секунд…", true);
     fetch("/vk-mini/entry", {{
       method: "POST",
       headers: {{ "Content-Type": "application/json" }},
@@ -658,13 +690,17 @@ def _mini_app_html(default_flow: str = "") -> str:
       }})
     }})
       .then(function (r) {{
-        return r.json().then(function (j) {{ return {{ ok: r.ok, j: j }}; }});
+        return r.json().then(function (j) {{ return {{ ok: r.ok, status: r.status, j: j }}; }});
       }})
       .then(function (res) {{
         sending = false;
         if (res.ok && res.j && res.j.ok) {{
           setStatus("Готово! Сообщение уже отправлено в личку VK.", true);
           setTimeout(openDialog, 350);
+          return;
+        }}
+        if (allowPermissionFallback && res.status === 403) {{
+          requestPermissionAndSend(currentFlow);
           return;
         }}
         setStatus((res.j && res.j.error) || "Не удалось отправить сообщение.", false);
@@ -710,37 +746,16 @@ def _mini_app_html(default_flow: str = "") -> str:
       setStatus("Неизвестный сценарий.", false);
       return;
     }}
-    if (messagesAlreadyAllowed()) {{
-      setStatus("Отправляем сообщение в VK. Обычно оно приходит в течение пары секунд…", true);
-      sendEntry();
-      return;
-    }}
-    setStatus("Сейчас VK попросит разрешить сообщения. После разрешения сообщение придёт в течение нескольких секунд…", true);
-    var slowTimer = setTimeout(function () {{
-      setStatus("Ждём ответ VK. Если окно разрешения уже было — проверьте личку, сообщение может прийти в течение 5–10 секунд.", true);
-    }}, 2200);
-    withTimeout(bridge.send("VKWebAppAllowMessagesFromGroup", {{
-      group_id: groupId,
-      key: flow + ":" + Date.now()
-    }}), 8000)
-      .then(function (data) {{
-        clearTimeout(slowTimer);
-        if (data && data.result) {{
-          sendEntry();
-          return;
-        }}
-        setStatus("Проверяем, можем ли уже написать вам…", true);
-        sendEntry();
-      }})
-      .catch(function (error) {{
-        clearTimeout(slowTimer);
-        if (isUserDenied(error)) {{
-          setStatus(normalizeError(error), false);
-          return;
-        }}
-        setStatus("VK не вернул ответ на разрешение. Проверяем личку напрямую…", true);
-        sendEntry();
-      }});
+    sendEntry(true);
+  }}
+
+  function autoStart(flow) {{
+    if (!flow || autoStarted) return;
+    autoStarted = true;
+    setFlow(flow, true);
+    setTimeout(function () {{
+      start(flow);
+    }}, 250);
   }}
 
   bridge.send("VKWebAppInit").catch(function () {{}});
@@ -770,10 +785,11 @@ def _mini_app_html(default_flow: str = "") -> str:
   var initialFlow = flowFromLocation() || parseFlowValue(serverFlow);
   if (initialFlow) {{
     setFlow(initialFlow, true);
+    autoStart(initialFlow);
   }}
   bridge.send("VKWebAppGetLaunchParams").then(function (data) {{
     var flow = flowFromLaunchParams(data);
-    if (flow) setFlow(flow, true);
+    if (flow) autoStart(flow);
   }}).catch(function () {{}});
 }})();
 </script>
