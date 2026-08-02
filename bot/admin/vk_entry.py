@@ -223,6 +223,7 @@ def _landing_html(flow_key: str) -> str:
         ref_value = str(flow["ref"])
         widget_js = f"""
 <script src="https://vk.com/js/api/openapi.js?169"></script>
+<script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
 <script>
 (function () {{
   var flow = {json.dumps(flow_key)};
@@ -626,21 +627,11 @@ def _mini_app_html(default_flow: str = "") -> str:
   }}
 
   function openDialog() {{
-    var url = "https://vk.com/write-" + groupId;
-    withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), 1200)
-      .catch(function () {{
-        try {{
-          window.open(url, "_top");
-        }} catch (_) {{
-          window.location.href = url;
-        }}
-      }});
+    // VKWebAppOpenURL opens vk.com/write in a browser on mobile, which is worse
+    // than leaving the user inside VK. Close the mini app and let the new DM
+    // notification lead the user to the chat.
     setTimeout(function () {{
-      try {{
-        window.top.location.href = url;
-      }} catch (_) {{
-        window.location.href = url;
-      }}
+      bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
     }}, 900);
   }}
 
