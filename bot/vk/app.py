@@ -418,6 +418,8 @@ class VKBotApp:
         self.peer_carousel_message_ids: dict[int, int] = {}
         self.peer_my_bookings_message_ids: dict[int, int] = {}
         self.peer_dates_message_ids: dict[int, int] = {}
+        # Keep dates-card photo across page edits: VK strips attachment if omitted.
+        self.peer_dates_attachments: dict[int, str] = {}
         self.peer_venues_message_ids: dict[int, int] = {}
         self.peer_offline_gift_message_ids: dict[int, int] = {}
         # cmid кнопки из текущего message_event — переживает рестарт бота.
@@ -643,7 +645,7 @@ class VKBotApp:
             if ok:
                 peer = int(peer_id)
                 self.peer_nav_message_ids.pop(peer, None)
-                self.peer_dates_message_ids.pop(peer, None)
+                self._clear_dates_card(peer)
                 await self._delete_pending(peer_id)
                 return None
             # Без вложения — частый случай, когда edit с photo падает; пробуем текст+кнопки.
@@ -658,7 +660,7 @@ class VKBotApp:
                 if ok:
                     peer = int(peer_id)
                     self.peer_nav_message_ids.pop(peer, None)
-                    self.peer_dates_message_ids.pop(peer, None)
+                    self._clear_dates_card(peer)
                     await self._delete_pending(peer_id)
                     return None
 
@@ -697,6 +699,18 @@ class VKBotApp:
             self._remember_nav(peer_id, message_id)
         return message_id
 
+    def _remember_dates_attachment(self, peer_id: int, attachment: str | None) -> None:
+        peer = int(peer_id)
+        if attachment:
+            self.peer_dates_attachments[peer] = attachment
+        else:
+            self.peer_dates_attachments.pop(peer, None)
+
+    def _clear_dates_card(self, peer_id: int) -> None:
+        peer = int(peer_id)
+        self.peer_dates_message_ids.pop(peer, None)
+        self.peer_dates_attachments.pop(peer, None)
+
     async def _send_or_edit_dates_card(
         self,
         peer_id: int,
@@ -709,13 +723,16 @@ class VKBotApp:
         """Листание дат: правим ту же карточку, без новых сообщений в чате."""
         peer = int(peer_id)
         existing_id = self.peer_dates_message_ids.get(peer)
+        if attachment:
+            self._remember_dates_attachment(peer, attachment)
+        # VK messages.edit без attachment снимает фото — всегда передаём сохранённое/новое.
+        keep_att = attachment or self.peer_dates_attachments.get(peer)
         if edit and await self._edit_card(
             peer_id,
             text,
             stored_message_id=existing_id,
             keyboard=keyboard,
-            # Не трогаем вложение: повторная картинка/пустой attachment даёт мигание.
-            attachment=None,
+            attachment=keep_att,
         ):
             if existing_id:
                 self.peer_dates_message_ids[peer] = int(existing_id)
@@ -731,10 +748,12 @@ class VKBotApp:
             peer_id,
             text,
             keyboard=keyboard,
-            attachment=attachment,
+            attachment=keep_att,
         )
         if mid:
             self.peer_dates_message_ids[peer] = int(mid)
+            if keep_att:
+                self._remember_dates_attachment(peer, keep_att)
 
     async def _load_events(self, event_format: str) -> list[dict[str, Any]]:
         if EVENTS_SOURCE != "postgres" or not DATABASE_URL:
@@ -752,7 +771,7 @@ class VKBotApp:
         self._clear_raffle_screenshot_wait(int(user_id))
         self.peer_carousel_message_ids.pop(int(peer_id), None)
         self.peer_my_bookings_message_ids.pop(int(peer_id), None)
-        self.peer_dates_message_ids.pop(int(peer_id), None)
+        self._clear_dates_card(peer_id)
         self.peer_venues_message_ids.pop(int(peer_id), None)
         if is_start:
             self._track(user_id, EVENT_BOT_START)
@@ -1835,7 +1854,7 @@ class VKBotApp:
             page = int(payload.get("page") or 0)
             if cmd == "check":
                 self.peer_context[peer_id] = "check"
-                self.peer_dates_message_ids.pop(int(peer_id), None)
+                self._clear_dates_card(peer_id)
                 self._track(vk_id, EVENT_BRANCH_PROVERKA)
                 await self._send_text(
                     peer_id,
@@ -1853,7 +1872,7 @@ class VKBotApp:
             return
         if cmd == "check_venues":
             self.peer_browse[peer_id] = "venue"
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self._send_check_venues(peer_id)
             return
         if cmd == "check_venue":
@@ -1871,7 +1890,7 @@ class VKBotApp:
             return
         if cmd == "check_date":
             self.peer_browse[peer_id] = "date"
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self._send_check_date(peer_id, payload.get("date") or "", vk_id=vk_id)
             return
         if cmd == "check_event":
@@ -1881,7 +1900,7 @@ class VKBotApp:
             page = int(payload.get("page") or 0)
             if cmd == "best":
                 self.peer_context[peer_id] = "best"
-                self.peer_dates_message_ids.pop(int(peer_id), None)
+                self._clear_dates_card(peer_id)
                 self._track(vk_id, EVENT_BRANCH_BEST)
                 await self._send_text(
                     peer_id,
@@ -1899,7 +1918,7 @@ class VKBotApp:
             return
         if cmd == "best_venues":
             self.peer_browse[peer_id] = "venue"
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self._send_best_venues(peer_id)
             return
         if cmd == "best_venue":
@@ -1931,7 +1950,7 @@ class VKBotApp:
             return
         if cmd == "best_date":
             self.peer_browse[peer_id] = "date"
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self._send_best_date(peer_id, payload.get("date") or "", vk_id=vk_id)
             return
         if cmd == "best_event":
@@ -1942,7 +1961,7 @@ class VKBotApp:
             if cmd == "hitloto":
                 self.peer_context[peer_id] = "hitloto"
                 self.peer_browse[peer_id] = "date"
-                self.peer_dates_message_ids.pop(int(peer_id), None)
+                self._clear_dates_card(peer_id)
                 self._track(vk_id, EVENT_BRANCH_HITLOTO)
                 await self._send_hitloto_dates(peer_id, page, entry=True, edit=False)
                 return
@@ -1950,7 +1969,7 @@ class VKBotApp:
             return
         if cmd == "hitloto_date":
             self.peer_browse[peer_id] = "date"
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self._send_hitloto_date(peer_id, payload.get("date") or "", vk_id=vk_id)
             return
         if cmd == "hitloto_event":
@@ -2584,7 +2603,7 @@ class VKBotApp:
 
     async def _send_raffle_date(self, peer_id: int, vk_id: int, date: str) -> None:
         await self._disable_callback_buttons(peer_id, vk_raffle.SUB_OK_DATES_TEXT)
-        self.peer_dates_message_ids.pop(int(peer_id), None)
+        self._clear_dates_card(peer_id)
 
         events = [e for e in await vk_raffle.future_best_events() if e.get("date") == date]
         if not events:
@@ -2966,7 +2985,7 @@ class VKBotApp:
             events = await self._load_events("proverka")
         except Exception:
             logger.exception("Failed to load check events")
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self.client.send_message(
                 peer_id,
                 "Не удалось загрузить даты. Попробуй ещё раз через минуту.",
@@ -2980,7 +2999,7 @@ class VKBotApp:
             return
         dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
         if not dates:
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self.client.send_message(peer_id, "Пока нет актуальных дат.", keyboard=self._main_menu_kb(peer_id))
             return
         max_page = max(0, (len(dates) - 1) // DATES_PAGE_SIZE)
@@ -3113,7 +3132,7 @@ class VKBotApp:
             events = await self._load_events("best")
         except Exception:
             logger.exception("Failed to load BEST events")
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self.client.send_message(
                 peer_id,
                 "Не удалось загрузить даты. Попробуй ещё раз через минуту.",
@@ -3127,7 +3146,7 @@ class VKBotApp:
             return
         dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
         if not dates:
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self.client.send_message(peer_id, "Пока нет актуальных мероприятий BEST.", keyboard=self._main_menu_kb(peer_id))
             return
         max_page = max(0, (len(dates) - 1) // DATES_PAGE_SIZE)
@@ -3319,7 +3338,7 @@ class VKBotApp:
             events = await self._load_events("hitloto")
         except Exception:
             logger.exception("Failed to load Hitloto events")
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self.client.send_message(
                 peer_id,
                 "Не удалось загрузить даты. Попробуй ещё раз через минуту.",
@@ -3328,7 +3347,7 @@ class VKBotApp:
             return
         dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
         if not dates:
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             kb = VKKeyboardBuilder(inline=True)
             kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
             kb.button("В главное меню", _payload("main_menu"))

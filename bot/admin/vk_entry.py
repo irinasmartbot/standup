@@ -67,6 +67,28 @@ def _formats_keyboard() -> str:
     return kb.as_json()
 
 
+def _gift_format_label(value: str) -> str:
+    return {
+        "proverka": "Проверка",
+        "best": "BEST",
+        "hitloto": "Хитлото",
+    }.get(value or "", value or "Шоу")
+
+
+def _gift_event_label(event: dict[str, Any]) -> str:
+    """Как в VK-боте: «19:00 · Temple Bar · BEST»."""
+    label = " · ".join(
+        part
+        for part in [
+            str(event.get("time") or "").strip(),
+            str(event.get("location") or "").strip(),
+            _gift_format_label(str(event.get("format") or "")),
+        ]
+        if part
+    )
+    return label or "шоу"
+
+
 async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int) -> None:
     """Сразу ветка бота — без сообщения «нажмите кнопку ниже»."""
     from bot.handlers.formats import FORMATS_TEXT
@@ -114,12 +136,11 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
             color="primary",
         )
         kb.adjust(1)
-        title = str(event.get("title") or event.get("venue") or "шоу")
         await client.send_message(
             vk_id,
             (
                 "🎁 <b>Розыгрыш подарка на шоу</b>\n\n"
-                f"<b>Сегодня:</b> {title}\n\n"
+                f"<b>Сегодня:</b> {_gift_event_label(event)}\n\n"
                 "Нажми кнопку ниже, чтобы попасть в список участников."
             ),
             keyboard=kb.as_json(),
@@ -127,7 +148,7 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
         return
     kb = VKKeyboardBuilder(inline=True)
     for event in events[:8]:
-        label = str(event.get("title") or event.get("venue") or f"Шоу #{event.get('id')}")[:40]
+        label = _gift_event_label(event)[:40]
         kb.button(
             label,
             {"cmd": "ogift_event", "event_id": int(event["id"])},
