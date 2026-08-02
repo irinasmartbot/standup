@@ -463,13 +463,28 @@ class VKBotApp:
         pool: list[str] = []
         for img in self.images.all():
             key = (img.key or "").strip().lower()
+            path = (img.path or "").replace("\\", "/").lower()
+            name = path.rsplit("/", 1)[-1] if path else key
             if not key or not img.attachment:
                 continue
             if key in _EXCLUDED_RANDOM_COVER_KEYS:
                 continue
-            if key.startswith("hitloto") or key.startswith("rozygrysh_otzyv"):
+            if (
+                key.startswith("hitloto")
+                or name.startswith("hitloto")
+                or "hitloto" in key
+                or "hitloto" in name
+                or key.startswith("rozygrysh_otzyv")
+                or name.startswith("rozygrysh_otzyv")
+            ):
                 continue
-            if "ticket" in key:
+            if "ticket" in key or "ticket" in name:
+                continue
+            if key in {"temple_bar", "escobar", "nebar"} or name in {
+                "temple_bar.jpg",
+                "escobar.jpg",
+                "nebar.jpg",
+            }:
                 continue
             pool.append(img.attachment)
         if pool:
@@ -485,7 +500,8 @@ class VKBotApp:
         )
         if poster:
             return poster
-        return self._random_cover_attachment() or self._cover_attachment("hitloto_start")
+        # Никогда не подставляем hitloto в общий fallback — только show_cover / random.
+        return self._random_cover_attachment() or self._cover_attachment("show_cover")
 
     def _queue_delete(self, peer_id: int, *message_ids: Any) -> None:
         bucket = self._pending_delete_ids.setdefault(int(peer_id), [])
@@ -645,24 +661,12 @@ class VKBotApp:
             if ok:
                 peer = int(peer_id)
                 self.peer_nav_message_ids.pop(peer, None)
-                self._clear_dates_card(peer)
+                # Не чистим peer_dates_attachments: иначе листание дат теряет фото.
+                self.peer_dates_message_ids.pop(peer, None)
                 await self._delete_pending(peer_id)
                 return None
-            # Без вложения — частый случай, когда edit с photo падает; пробуем текст+кнопки.
-            if attachment:
-                ok = await self.client.edit_message(
-                    peer_id,
-                    text,
-                    conversation_message_id=int(cmid),
-                    keyboard=keyboard,
-                    attachment=None,
-                )
-                if ok:
-                    peer = int(peer_id)
-                    self.peer_nav_message_ids.pop(peer, None)
-                    self._clear_dates_card(peer)
-                    await self._delete_pending(peer_id)
-                    return None
+            # Если edit с фото не прошёл — НЕ редактируем без attachment
+            # (VK снимает картинку). Уходим в send нового сообщения ниже.
 
         if replace_nav:
             await self._delete_nav(peer_id)
@@ -750,10 +754,15 @@ class VKBotApp:
             keyboard=keyboard,
             attachment=keep_att,
         )
+        # _send_text при in-place edit возвращает None и мог сбросить message_id —
+        # фото-attachment всё равно запоминаем заново для следующего листания.
+        if keep_att:
+            self._remember_dates_attachment(peer, keep_att)
         if mid:
             self.peer_dates_message_ids[peer] = int(mid)
-            if keep_att:
-                self._remember_dates_attachment(peer, keep_att)
+        elif edit or keep_att:
+            # Сообщение отредактировано по cmid — следующий page edit пойдёт по cmid кнопки.
+            pass
 
     async def _load_events(self, event_format: str) -> list[dict[str, Any]]:
         if EVENTS_SOURCE != "postgres" or not DATABASE_URL:
