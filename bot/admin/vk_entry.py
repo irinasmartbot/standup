@@ -627,12 +627,21 @@ def _mini_app_html(default_flow: str = "") -> str:
   }}
 
   function openDialog() {{
-    // VKWebAppOpenURL opens vk.com/write in a browser on mobile, which is worse
-    // than leaving the user inside VK. Close the mini app and let the new DM
-    // notification lead the user to the chat.
+    var webUrl = "https://vk.com/write-" + groupId;
+    var appUrl = "vk://vk.com/write-" + groupId;
+    var platform = new URLSearchParams(window.location.search || "").get("vk_platform") || "";
+    if (/mobile_android|mobile_iphone|mobile_ipad|android|iphone|ipad/i.test(platform)) {{
+      window.location.href = appUrl;
+    }} else {{
+      try {{
+        window.top.location.href = webUrl;
+      }} catch (_) {{
+        window.location.href = webUrl;
+      }}
+    }}
     setTimeout(function () {{
       bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-    }}, 900);
+    }}, 1200);
   }}
 
   function sendEntry() {{
@@ -743,7 +752,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     start(button.getAttribute("data-flow"));
   }});
 
-  var initialFlow = parseFlowValue(serverFlow) || flowFromLocation();
+  var initialFlow = flowFromLocation() || parseFlowValue(serverFlow);
   if (initialFlow) {{
     setFlow(initialFlow, true);
   }}
