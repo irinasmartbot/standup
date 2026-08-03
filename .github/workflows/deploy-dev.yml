@@ -1,9 +1,9 @@
-name: Deploy dev to VPS
+name: Deploy main to VPS
 
 on:
   push:
     branches:
-      - dev
+      - main
 
 jobs:
   deploy:
@@ -26,11 +26,11 @@ jobs:
           ssh -i ~/.ssh/vps_key "$VPS_USER@$VPS_HOST" <<'EOF'
           set -euo pipefail
           cd /home/standup/app
-          git fetch origin dev
-          git checkout dev
-          # Код на сервере всегда = origin/dev (.env не в git, не затрагивается).
+          git fetch origin main
+          git checkout main
+          # Код на сервере всегда = origin/main (.env не в git, не затрагивается).
           # Иначе локальные hotfix'ы на VPS блокируют pull.
-          git reset --hard origin/dev
+          git reset --hard origin/main
           git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc'
           /home/standup/app/venv/bin/python -m pip install -r requirements.txt
           /home/standup/app/venv/bin/python -c "from bot.db.crud import ensure_help_tables, ensure_raffle_tables, ensure_pdn_consent_columns; from bot.db.analytics import ensure_analytics_tables; ensure_raffle_tables(); ensure_help_tables(); ensure_analytics_tables(); ensure_pdn_consent_columns()"
@@ -54,15 +54,15 @@ jobs:
           else
             echo "standup-admin.service not found; skipping restart"
           fi
-          # VK-бот — отдельная копия (/home/standup/vk-app), тот же origin/dev.
+          # VK-бот — отдельная копия (/home/standup/vk-app), тот же origin/main.
           # Ошибки VK не валят весь деплой: TG/admin уже перезапущены выше.
           if [ -d /home/standup/vk-app/.git ]; then
             (
               set -euo pipefail
               cd /home/standup/vk-app
-              git fetch origin dev
-              git checkout dev
-              git reset --hard origin/dev
+              git fetch origin main
+              git checkout main
+              git reset --hard origin/main
               git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc' -e 'data/storage'
               /home/standup/vk-app/venv/bin/python -m pip install -r requirements.txt
               /home/standup/vk-app/venv/bin/python -c "import vk_bot"
