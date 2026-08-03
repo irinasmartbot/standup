@@ -28,6 +28,11 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 WELCOME_MARKER = "Мы делаем шоу в различных заведениях в центре Москвы каждый день"
 VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
+SYSTEM_PHOTO_FILES = {
+    "ticket_template.jpg",
+    "hitloto_start.png",
+    "photo_2026-07-21_01-59-43.jpg",
+}
 _VENUE_ALBUM_MESSAGE_IDS = {}
 BEST_DATES_PAGE_SIZE = 10
 
@@ -225,7 +230,7 @@ def _random_format_photo():
             if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
             and f != ticket_name
             and f.lower() not in VENUE_PHOTO_FILES
-            and f.lower() != "ticket_template.jpg"
+            and f.lower() not in SYSTEM_PHOTO_FILES
             and not f.lower().startswith("rozygrysh_otzyv")
             and not f.lower().startswith("hitloto")
         ]
@@ -237,6 +242,15 @@ def _random_format_photo():
 
 
 def _hitloto_photo():
+    preferred = (
+        "hitloto_start.png",
+        "hitloto_start.jpg",
+        "photo_2026-07-21_01-59-43.jpg",
+    )
+    for name in preferred:
+        path = os.path.join(PHOTOS_DIR, name)
+        if os.path.exists(path):
+            return FSInputFile(path)
     try:
         files = [
             f for f in os.listdir(PHOTOS_DIR)
