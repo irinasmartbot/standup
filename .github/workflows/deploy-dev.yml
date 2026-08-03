@@ -54,25 +54,29 @@ jobs:
           else
             echo "standup-admin.service not found; skipping restart"
           fi
-          # VK-бот — отдельная копия репозитория (/home/standup/vk-app), тот же origin/dev.
+          # VK-бот — отдельная копия (/home/standup/vk-app), тот же origin/dev.
+          # Ошибки VK не валят весь деплой: TG/admin уже перезапущены выше.
           if [ -d /home/standup/vk-app/.git ]; then
-            cd /home/standup/vk-app
-            git fetch origin dev
-            git checkout dev
-            git reset --hard origin/dev
-            git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc' -e 'data/storage'
-            /home/standup/vk-app/venv/bin/python -m pip install -r requirements.txt
-            /home/standup/vk-app/venv/bin/python -c "import vk_bot"
-            if sudo /usr/bin/systemctl list-unit-files standup-vk-bot.service --no-legend | grep -q standup-vk-bot.service; then
-              sudo /usr/bin/systemctl restart standup-vk-bot
-              sleep 2
-              sudo /usr/bin/systemctl is-active --quiet standup-vk-bot || (
-                sudo /usr/bin/journalctl -u standup-vk-bot -n 80 --no-pager
-                exit 1
-              )
-            else
-              echo "standup-vk-bot.service not found; skipping restart"
-            fi
+            (
+              set -euo pipefail
+              cd /home/standup/vk-app
+              git fetch origin dev
+              git checkout dev
+              git reset --hard origin/dev
+              git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc' -e 'data/storage'
+              /home/standup/vk-app/venv/bin/python -m pip install -r requirements.txt
+              /home/standup/vk-app/venv/bin/python -c "import vk_bot"
+              if sudo /usr/bin/systemctl list-unit-files standup-vk-bot.service --no-legend | grep -q standup-vk-bot.service; then
+                sudo /usr/bin/systemctl restart standup-vk-bot
+                sleep 2
+                sudo /usr/bin/systemctl is-active --quiet standup-vk-bot
+              else
+                echo "standup-vk-bot.service not found; skipping restart"
+              fi
+            ) || {
+              echo "WARNING: VK deploy failed; TG/admin already updated"
+              sudo /usr/bin/journalctl -u standup-vk-bot -n 40 --no-pager || true
+            }
           else
             echo "vk-app not found; skipping VK deploy"
           fi
