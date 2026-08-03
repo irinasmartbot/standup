@@ -756,54 +756,37 @@ class VKBotApp:
         attachment: str | None = None,
         edit: bool = False,
     ) -> None:
-        """Листание дат: правим ту же карточку, без новых сообщений в чате."""
+        """Карточка дат с фото.
+
+        Не используем messages.edit: у VK edit с attachment то снимает фото,
+        то оставляет старое. Листание = удалить старую карточку и прислать новую
+        (с новым random, если передан). Параметр edit сохранён для совместимости вызовов.
+        """
+        del edit  # листание больше не через in-place edit
         peer = int(peer_id)
-        existing_id = self.peer_dates_message_ids.get(peer)
-        remembered = self.peer_dates_attachments.get(peer)
-        if edit:
-            # При листании НЕ меняем attachment: messages.edit с новым photo
-            # у VK часто возвращает ok, но снимает картинку (остаётся «ред.» без фото).
-            keep_att = remembered or attachment
-            if not keep_att:
-                # После рестарта памяти нет — шлём новую карточку, не edit вслепую.
-                edit = False
-                keep_att = attachment or self._random_cover_attachment()
-        else:
-            keep_att = attachment or remembered or self._random_cover_attachment()
+        keep_att = attachment or self._random_cover_attachment()
         if keep_att:
             self._remember_dates_attachment(peer, keep_att)
-        if edit and keep_att and await self._edit_card(
-            peer_id,
-            text,
-            stored_message_id=existing_id,
-            keyboard=keyboard,
-            attachment=keep_att,
-        ):
-            if existing_id:
-                self.peer_dates_message_ids[peer] = int(existing_id)
-            return
-        if edit and (existing_id or self._callback_cmid(peer_id)):
-            logger.warning(
-                "Dates list edit failed peer_id=%s msg_id=%s cmid=%s, falling back to send",
-                peer_id,
-                existing_id,
-                self._callback_cmid(peer_id),
-            )
+
+        # Явно убираем предыдущую dates-карточку, если помним message_id
+        # (кнопочный cmid дополнительно чистит _send_text).
+        existing_id = self.peer_dates_message_ids.pop(peer, None)
+        if existing_id:
+            try:
+                await self.client.delete_messages(peer, [int(existing_id)])
+            except Exception:
+                logger.exception("Failed to delete previous dates card peer_id=%s", peer_id)
+
         mid = await self._send_text(
             peer_id,
             text,
             keyboard=keyboard,
             attachment=keep_att,
         )
-        # _send_text при in-place edit возвращает None и мог сбросить message_id —
-        # фото-attachment всё равно запоминаем заново для следующего листания.
         if keep_att:
             self._remember_dates_attachment(peer, keep_att)
         if mid:
             self.peer_dates_message_ids[peer] = int(mid)
-        elif edit or keep_att:
-            # Сообщение отредактировано по cmid — следующий page edit пойдёт по cmid кнопки.
-            pass
 
     async def _load_events(self, event_format: str) -> list[dict[str, Any]]:
         if EVENTS_SOURCE != "postgres" or not DATABASE_URL:
@@ -3060,7 +3043,7 @@ class VKBotApp:
             peer_id,
             "Проверка материала. Выбирай дату:",
             keyboard=keyboard,
-            attachment=None if edit else self._random_cover_attachment(),
+            attachment=self._random_cover_attachment(),
             edit=edit,
         )
         logger.info("Sent check dates: %s items page=%s", len(dates), page)
@@ -3207,7 +3190,7 @@ class VKBotApp:
             peer_id,
             "StandUp BEST. Выбирай дату:",
             keyboard=keyboard,
-            attachment=None if edit else self._random_cover_attachment(),
+            attachment=self._random_cover_attachment(),
             edit=edit,
         )
         logger.info("Sent BEST dates: %s items page=%s", len(dates), page)
@@ -3416,7 +3399,7 @@ class VKBotApp:
             peer_id,
             text,
             keyboard=keyboard,
-            attachment=None if edit else self._cover_attachment("hitloto_start", "show_cover"),
+            attachment=self._cover_attachment("hitloto_start", "show_cover"),
             edit=edit,
         )
 
