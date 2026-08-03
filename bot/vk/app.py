@@ -1749,13 +1749,17 @@ class VKBotApp:
         # ref логируем ниже после разбора; cmd/text — сразу.
         logger.info("VK message peer_id=%s vk_id=%s cmd=%s text=%r", peer_id, vk_id, cmd, text[:80])
         if cmd == "mail_fu":
+            import asyncio
+
             from bot.db.mailing import get_campaign_followup
 
             try:
                 cid = int(payload.get("cid") or 0)
             except (TypeError, ValueError):
                 cid = 0
-            follow = get_campaign_followup(cid) if cid else None
+            follow = (
+                await asyncio.to_thread(get_campaign_followup, cid) if cid else None
+            )
             if follow:
                 await self._send_text(peer_id, follow, replace_nav=False)
             else:

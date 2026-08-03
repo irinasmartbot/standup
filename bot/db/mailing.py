@@ -119,7 +119,14 @@ def normalize_filters(raw: dict | None) -> dict[str, Any]:
     statuses = data.get("booking_statuses") or []
     if isinstance(statuses, str):
         statuses = [s.strip() for s in statuses.split(",") if s.strip()]
-    statuses = [s for s in statuses if s in BOOKING_STATUSES]
+    # «active» = бронь или билет (частый смысл «активная бронь» у оператора).
+    expanded: list[str] = []
+    for status in statuses:
+        if status == "active":
+            expanded.extend(["booked", "confirmed"])
+        elif status in BOOKING_STATUSES:
+            expanded.append(status)
+    statuses = list(dict.fromkeys(expanded))
     try:
         exclude_days = int(data.get("exclude_sent_days") or 0)
     except (TypeError, ValueError):

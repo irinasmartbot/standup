@@ -64,6 +64,16 @@ async def _send_telegram(campaign: dict, peer_id: int) -> None:
             )
 
     disable_preview = bool(campaign.get("disable_link_preview"))
+    # aiogram 3.7+: disable_web_page_preview игнорируется — нужен LinkPreviewOptions.
+    # У sendPhoto параметра нет; превью ссылок относится только к текстовым сообщениям.
+    send_kwargs: dict = {}
+    if disable_preview:
+        try:
+            from aiogram.types import LinkPreviewOptions
+
+            send_kwargs["link_preview_options"] = LinkPreviewOptions(is_disabled=True)
+        except Exception:
+            send_kwargs["disable_web_page_preview"] = True
     bot = Bot(token=token)
     try:
         if photo_path and Path(photo_path).is_file():
@@ -82,7 +92,7 @@ async def _send_telegram(campaign: dict, peer_id: int) -> None:
                 text=text,
                 parse_mode="HTML",
                 reply_markup=markup,
-                disable_web_page_preview=disable_preview,
+                **send_kwargs,
             )
     finally:
         await bot.session.close()
