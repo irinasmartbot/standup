@@ -4,6 +4,7 @@ import logging
 from bot.config import DATABASE_URL, EVENTS_SOURCE
 from bot.db.analytics import ensure_analytics_tables
 from bot.db.crud import ensure_help_tables, ensure_raffle_tables
+from bot.db.mailing import ensure_mailing_tables
 from bot.vk.app import VKBotApp
 from bot.vk.client import VKClient
 from bot.vk.config import load_vk_settings
@@ -29,6 +30,7 @@ async def main():
     ensure_analytics_tables()
     ensure_help_tables()
     ensure_raffle_tables()
+    ensure_mailing_tables()
     logger.info("VK events source=%s", EVENTS_SOURCE)
     client = VKClient(settings)
     asyncio.create_task(
