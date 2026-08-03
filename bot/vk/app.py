@@ -1897,11 +1897,15 @@ class VKBotApp:
             )
             return
 
-        if text.lower() in {"/start", "start", "начать"} or cmd == "main_menu" or payload_command == "start":
+        if (
+            text.lower() in {"/start", "start", "начать", "старт"}
+            or cmd == "main_menu"
+            or payload_command == "start"
+        ):
             await self.send_menu(
                 peer_id,
                 vk_id=vk_id,
-                is_start=text.lower() in {"/start", "start", "начать"}
+                is_start=text.lower() in {"/start", "start", "начать", "старт"}
                 or payload_command == "start",
             )
             return
@@ -2073,16 +2077,25 @@ class VKBotApp:
         if await self._handle_raffle_flow(peer_id, vk_id, cmd=cmd, payload=payload):
             return
 
-        # Как в TG unknown_message:
-        # — неизвестные /команды → главное меню
+        # Как в TG:
+        # — неизвестные /команды и чужие кнопки (payload) → главное меню
+        # — слова «розыгрыш» / «подарок» / «старт» уже разобраны выше как cmd
         # — абракадабра / короткий спам → молчим
-        # — осмысленный текст → в техподдержку + «Спасибо!»
-        if text and not cmd:
+        # — осмысленный свободный текст → в техподдержку + «Спасибо!»
+        if cmd:
+            logger.info("Unknown VK cmd=%s → menu peer_id=%s", cmd, peer_id)
+            await self.send_menu(peer_id, vk_id=vk_id)
+            return
+        if text:
             if text.lstrip().startswith("/"):
                 await self.send_menu(peer_id, vk_id=vk_id)
                 return
             await self._handle_unknown_free_text(peer_id, vk_id, text)
             return
+        if payload:
+            # Кнопка с чужим payload без cmd (старые цепочки Salebot и т.п.)
+            logger.info("Unknown VK payload → menu peer_id=%s payload=%r", peer_id, payload)
+            await self.send_menu(peer_id, vk_id=vk_id)
 
     async def _handle_offline_gift_flow(
         self,

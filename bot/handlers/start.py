@@ -452,6 +452,47 @@ async def main_menu_command(message: Message, state: FSMContext):
     await _send_welcome(message)
 
 
+@router.message(
+    F.chat.type == "private",
+    F.text.func(lambda t: (t or "").casefold().strip() in {"начать", "старт"}),
+)
+async def start_word_alias(message: Message, state: FSMContext):
+    """Слова «начать» / «старт» — как /start без payload (не уводим в help/меню-заглушку)."""
+    await state.clear()
+    await refresh_user_commands(message.bot, message.from_user.id)
+    track_event(
+        EVENT_BOT_START,
+        telegram_id=message.from_user.id,
+        props={"payload": None, "via": "text_alias"},
+    )
+    await _send_welcome(message)
+
+
+@router.message(
+    F.chat.type == "private",
+    F.text.func(lambda t: (t or "").casefold().strip() in {"розыгрыш"}),
+)
+async def raffle_word_alias(message: Message, state: FSMContext):
+    await state.clear()
+    from bot.handlers.rozygrysh import send_raffle_start
+
+    await send_raffle_start(message, state)
+
+
+@router.message(
+    F.chat.type == "private",
+    F.text.func(
+        lambda t: (t or "").casefold().strip()
+        in {"подарок", "чек лист", "чек-лист", "chek_list", "check_list"}
+    ),
+)
+async def gift_word_alias(message: Message, state: FSMContext):
+    await state.clear()
+    from bot.handlers.offline_gift import send_check_list_start
+
+    await send_check_list_start(message)
+
+
 @router.message(Command("buy_ticket"), F.chat.type == "private")
 async def buy_ticket_command(message: Message, state: FSMContext):
     from bot.utils.reply_keyboard import clear_reply_keyboard
