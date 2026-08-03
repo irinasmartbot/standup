@@ -83,8 +83,11 @@ def load_env_file(path: str | Path = ".env") -> None:
 
 
 def detect_encoding(path: Path) -> str:
-    sample = path.read_bytes()[:8192]
-    for encoding in ("utf-8-sig", "cp1251", "utf-8"):
+    # Prefer UTF-8 when the sample is valid; cp1251 accepts almost any bytes
+    # and would win incorrectly if checked earlier. Salebot exports are often
+    # cp1251 with occasional stray bytes, so open() uses errors="replace".
+    sample = path.read_bytes()[:65536]
+    for encoding in ("utf-8-sig", "utf-8"):
         try:
             sample.decode(encoding)
             return encoding
@@ -95,7 +98,8 @@ def detect_encoding(path: Path) -> str:
 
 def iter_csv_rows(path: Path):
     encoding = detect_encoding(path)
-    with path.open("r", encoding=encoding, newline="") as fh:
+    print(f"  encoding={encoding}", flush=True)
+    with path.open("r", encoding=encoding, errors="replace", newline="") as fh:
         reader = csv.DictReader(fh, delimiter=";")
         for row in reader:
             yield row
