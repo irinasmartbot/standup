@@ -5365,7 +5365,7 @@ def _mailing_filters_from_form(form) -> dict:
             if item is None or hasattr(item, "file"):
                 continue
             text = str(item).strip()
-            if text:
+            if text in {"active", "booked", "confirmed", "cancelled", "annulled"}:
                 statuses.append(text)
     except Exception:
         statuses = []

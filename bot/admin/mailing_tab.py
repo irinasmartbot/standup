@@ -203,6 +203,7 @@ def render_mailing_tab(
       <label><input type="radio" name="channel" value="telegram" checked> Telegram</label>
       <label><input type="radio" name="channel" value="vkontakte"> VK</label>
       <label><input type="radio" name="channel" value="both"> Оба</label>
+      <p class="muted" style="margin:6px 0 0">VK-бронь попадёт в расчёт только если выбран <b>VK</b> или <b>Оба</b>.</p>
     </fieldset>
     <label>Текст сообщения
       <textarea name="body_html" rows="8" placeholder="Привет! В эту пятницу..."></textarea>
@@ -245,8 +246,9 @@ def render_mailing_tab(
     <fieldset class="mailing-row">
       <legend>Статус брони</legend>
       <p class="muted" style="margin:0 0 8px">Если ничего не выбрано — вся база канала (без фильтра по броням).</p>
-      <label><input type="checkbox" name="booking_statuses" value="booked"> Активная бронь</label>
-      <label><input type="checkbox" name="booking_statuses" value="confirmed"> Подтверждённый билет</label>
+      <label><input type="checkbox" name="booking_statuses" value="active"> Активная (бронь или билет)</label>
+      <label><input type="checkbox" name="booking_statuses" value="booked"> Только бронь без билета</label>
+      <label><input type="checkbox" name="booking_statuses" value="confirmed"> Только подтверждённый билет</label>
       <label><input type="checkbox" name="booking_statuses" value="cancelled"> Отмена</label>
       <label><input type="checkbox" name="booking_statuses" value="annulled"> Аннулировано</label>
     </fieldset>
@@ -294,10 +296,11 @@ def render_mailing_tab(
   var btn = document.getElementById('mail-preview-btn');
   var box = document.getElementById('mail-preview');
   if (!form || !btn || !box) return;
-  var STORAGE_KEY = 'admin-mailing-draft-v3';
+  var STORAGE_KEY = 'admin-mailing-draft-v4';
   try {
     sessionStorage.removeItem('admin-mailing-draft-v1');
     sessionStorage.removeItem('admin-mailing-draft-v2');
+    sessionStorage.removeItem('admin-mailing-draft-v3');
   } catch (e) {}
 
   function saveDraft(){
