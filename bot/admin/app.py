@@ -1138,6 +1138,7 @@ def _tabs(
     *,
     can_view_ops: bool = True,
     can_view_db: bool = False,
+    can_send_mailing: bool = False,
 ) -> str:
     if can_view_ops:
         tabs = [
@@ -1148,6 +1149,8 @@ def _tabs(
             ("analytics", "Аналитика"),
             ("audit", "Журнал"),
         ]
+        if can_send_mailing:
+            tabs.append(("mailing", "Рассылка"))
         if can_view_db:
             tabs.append(("db", "База"))
     else:
@@ -3371,6 +3374,7 @@ def _content(
     can_resend_tickets: bool = True,
     can_anonymize_user: bool = False,
     user_stage_by_user: dict | None = None,
+    mailing_data: dict | None = None,
 ) -> str:
     tab = filters.get("tab") or "date"
     if tab == "bookings":
@@ -3398,6 +3402,18 @@ def _content(
             tickets_event_id=(filters.get("tickets") or "") if can_resend_tickets else "",
             ticket_holders=ticket_holders if can_resend_tickets else None,
             can_resend_tickets=can_resend_tickets,
+        )
+    if tab == "mailing":
+        from bot.admin.mailing_tab import render_mailing_tab
+
+        data = mailing_data or {}
+        return render_mailing_tab(
+            flash=events_flash or data.get("flash") or "",
+            error=data.get("error") or "",
+            can_send=can_resend_tickets,
+            campaigns=data.get("campaigns"),
+            detail=data.get("detail"),
+            recipients=data.get("recipients"),
         )
     if tab == "audit":
         db_data = db_data or {"audit": []}
@@ -3430,6 +3446,7 @@ def render_admin_html(
     can_resend_tickets: bool = True,
     can_anonymize_user: bool | None = None,
     user_stage_by_user: dict | None = None,
+    mailing_data: dict | None = None,
 ) -> str:
     if can_anonymize_user is None:
         can_anonymize_user = bool(can_view_db)
@@ -3439,9 +3456,10 @@ def render_admin_html(
     is_audit = tab == "audit"
     is_analytics = tab == "analytics"
     is_events = tab == "events"
+    is_mailing = tab == "mailing"
     filters = (
         _normalize_event_filter(dashboard, filters)
-        if not is_analytics and not is_events and not is_db and not is_audit
+        if not is_analytics and not is_events and not is_db and not is_audit and not is_mailing
         else filters
     )
     date_value = _date_to_input(filters.get("date", ""))
@@ -4208,9 +4226,9 @@ def render_admin_html(
     <p>Автообновление каждые 30 секунд · источник данных: {_h(source_label)} · <a href="/admin/logout">выйти</a></p>
   </header>
   <main>
-    <nav class="tabs">{_tabs(filters, can_view_ops=can_view_ops, can_view_db=can_view_db)}</nav>
+    <nav class="tabs">{_tabs(filters, can_view_ops=can_view_ops, can_view_db=can_view_db, can_send_mailing=can_resend_tickets)}</nav>
     {summary_html}
-    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors, ticket_holders, can_resend_tickets=can_resend_tickets, can_anonymize_user=can_anonymize_user, user_stage_by_user=user_stage_by_user)}
+    {_content(dashboard, filters, db_data, analytics, user_extras, events_bundle, events_flash, events_errors, ticket_holders, can_resend_tickets=can_resend_tickets, can_anonymize_user=can_anonymize_user, user_stage_by_user=user_stage_by_user, mailing_data=mailing_data)}
   </main>
   <script>
     (function () {{
@@ -4495,7 +4513,16 @@ async def admin_page(request: web.Request) -> web.Response:
         filters["status"] = ""
     if filters.get("format") and filters["format"] not in FORMAT_OPTIONS:
         filters["format"] = ""
-    if filters.get("tab") not in {"date", "bookings", "users", "analytics", "events", "audit", "db"}:
+    if filters.get("tab") not in {
+        "date",
+        "bookings",
+        "users",
+        "analytics",
+        "events",
+        "audit",
+        "db",
+        "mailing",
+    }:
         filters["tab"] = "date"
     # Manager: «Мероприятия» + «По дате». Client/owner: full ops; tickets only for owner.
     if not can_view_ops:
@@ -4503,6 +4530,8 @@ async def admin_page(request: web.Request) -> web.Response:
             raise web.HTTPFound("/admin?tab=events")
         filters["tickets"] = ""
     elif filters.get("tab") == "db" and not can_view_db:
+        raise web.HTTPFound("/admin?tab=date")
+    elif filters.get("tab") == "mailing" and not can_resend:
         raise web.HTTPFound("/admin?tab=date")
     if not can_resend:
         filters["tickets"] = ""
@@ -4760,6 +4789,37 @@ async def admin_page(request: web.Request) -> web.Response:
                     }
 
                 user_extras = await loop.run_in_executor(None, _load_user_extras)
+    mailing_data = None
+    if filters.get("tab") == "mailing" and can_resend:
+        from bot.db.mailing import get_campaign, list_campaigns, list_recipients
+
+        def _load_mailing():
+            campaigns = list_campaigns(40)
+            detail = None
+            recipients = None
+            cid_raw = (request.query.get("campaign") or "").strip()
+            if cid_raw.isdigit():
+                detail = get_campaign(int(cid_raw))
+                if detail:
+                    rstatus = (request.query.get("rstatus") or "").strip()
+                    rpage = (request.query.get("rpage") or "1").strip()
+                    recipients = list_recipients(
+                        int(cid_raw),
+                        status=rstatus,
+                        page=int(rpage) if rpage.isdigit() else 1,
+                    )
+                    recipients["filter_status"] = rstatus
+            return {
+                "campaigns": campaigns,
+                "detail": detail,
+                "recipients": recipients,
+                "flash": (request.query.get("m_flash") or "").strip(),
+                "error": (request.query.get("m_err") or "").strip(),
+            }
+
+        mailing_data = await loop.run_in_executor(None, _load_mailing)
+        if mailing_data.get("flash"):
+            events_flash = mailing_data["flash"]
     return web.Response(
         text=render_admin_html(
             dashboard,
@@ -4777,6 +4837,7 @@ async def admin_page(request: web.Request) -> web.Response:
             can_resend_tickets=can_resend,
             can_anonymize_user=can_view_db,
             user_stage_by_user=user_stage_by_user,
+            mailing_data=mailing_data,
         ),
         content_type="text/html",
     )
@@ -5287,11 +5348,176 @@ async def events_hide_preview_page(request: web.Request) -> web.Response:
     )
 
 
+def _mailing_filters_from_form(form) -> dict:
+    statuses = form.getall("booking_statuses") if hasattr(form, "getall") else []
+    return {
+        "booking_statuses": list(statuses or []),
+        "booking_date_from": (form.get("booking_date_from") or "").strip(),
+        "booking_date_to": (form.get("booking_date_to") or "").strip(),
+        "has_phone": (form.get("has_phone") or "") in {"1", "on", "true", "yes"},
+        "exclude_blocked": (form.get("exclude_blocked") or "") in {"1", "on", "true", "yes"},
+        "exclude_sent_days": (form.get("exclude_sent_days") or "0").strip(),
+        "batch_limit": (form.get("batch_limit") or "").strip(),
+    }
+
+
+async def mailing_preview_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin/login")
+    form = await request.post()
+    channel = (form.get("channel") or "telegram").strip()
+    try:
+        interval = float((form.get("interval_sec") or "0.1").strip() or "0.1")
+    except ValueError:
+        interval = 0.1
+    from bot.db.mailing import estimate_duration_sec, format_duration, preview_audience
+
+    try:
+        data = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: preview_audience(channel, _mailing_filters_from_form(form)),
+        )
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    capped = int(data.get("capped_total") or 0)
+    data["eta"] = format_duration(estimate_duration_sec(capped, interval))
+    data["interval_sec"] = interval
+    return web.json_response(data)
+
+
+async def mailing_create_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin/login")
+    form = await request.post()
+    channel = (form.get("channel") or "telegram").strip()
+    title = (form.get("title") or "").strip()
+    body_html = (form.get("body_html") or "").strip()
+    button_text = (form.get("button_text") or "").strip()
+    button_url = (form.get("button_url") or "").strip()
+    followup_html = (form.get("followup_html") or "").strip()
+    try:
+        interval = float((form.get("interval_sec") or "0.1").strip() or "0.1")
+    except ValueError:
+        interval = 0.1
+
+    photo_path = None
+    photo = form.get("photo")
+    if photo is not None and getattr(photo, "file", None):
+        raw = photo.file.read()
+        if raw:
+            from pathlib import Path
+
+            root = Path(__file__).resolve().parents[2]
+            media_dir = root / "data" / "mailing"
+            media_dir.mkdir(parents=True, exist_ok=True)
+            filename = getattr(photo, "filename", "") or "photo.jpg"
+            ext = Path(filename).suffix.lower()
+            if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+                ext = ".jpg"
+            tmp_name = f"upload_{int(asyncio.get_running_loop().time() * 1000)}{ext}"
+            dest = media_dir / tmp_name
+            dest.write_bytes(raw)
+            photo_path = str(dest)
+
+    from pathlib import Path
+    from urllib.parse import quote
+
+    from bot.db.admin_audit import log_admin_action
+    from bot.db.mailing import create_campaign, set_campaign_photo
+
+    try:
+        campaign = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: create_campaign(
+                title=title,
+                channel=channel,
+                body_html=body_html,
+                interval_sec=interval,
+                filters=_mailing_filters_from_form(form),
+                photo_path=photo_path,
+                button_text=button_text,
+                button_url=button_url,
+                followup_html=followup_html,
+                created_by=_admin_role(request, config) or "owner",
+                start=True,
+            ),
+        )
+    except Exception as exc:
+        if photo_path:
+            try:
+                Path(photo_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        raise web.HTTPFound(f"/admin?tab=mailing&m_err={quote(str(exc)[:200])}")
+
+    if photo_path and campaign.get("id"):
+        root = Path(__file__).resolve().parents[2]
+        final = root / "data" / "mailing" / f"{int(campaign['id'])}{Path(photo_path).suffix}"
+        try:
+            Path(photo_path).replace(final)
+            await asyncio.get_running_loop().run_in_executor(
+                None, set_campaign_photo, int(campaign["id"]), str(final)
+            )
+            campaign["photo_path"] = str(final)
+        except Exception:
+            pass
+
+    log_admin_action(
+        actor_role=_admin_role(request, config) or "owner",
+        action="mailing_create",
+        entity_type="mailing_campaign",
+        entity_id=str(campaign.get("id")),
+        details={
+            "channel": channel,
+            "total": campaign.get("total_count"),
+            "interval_sec": interval,
+        },
+    )
+    flash = quote(
+        f"Кампания #{campaign.get('id')} запущена · {campaign.get('total_count')} получателей"
+    )
+    raise web.HTTPFound(f"/admin?tab=mailing&m_flash={flash}")
+
+
+async def mailing_status_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin/login")
+    form = await request.post()
+    cid = (form.get("campaign_id") or "").strip()
+    status = (form.get("status") or "").strip()
+    if not cid.isdigit():
+        raise web.HTTPFound("/admin?tab=mailing")
+    from bot.db.admin_audit import log_admin_action
+    from bot.db.mailing import set_campaign_status
+
+    allowed = {"paused", "queued", "cancelled"}
+    if status not in allowed:
+        raise web.HTTPFound("/admin?tab=mailing")
+    await asyncio.get_running_loop().run_in_executor(
+        None, set_campaign_status, int(cid), status
+    )
+    log_admin_action(
+        actor_role=_admin_role(request, config) or "owner",
+        action="mailing_status",
+        entity_type="mailing_campaign",
+        entity_id=cid,
+        details={"status": status},
+    )
+    raise web.HTTPFound(f"/admin?tab=mailing&campaign={cid}")
+
+
 def create_app(config: AdminConfig | None = None) -> web.Application:
     from bot.admin import vk_entry
+    from bot.admin.mailing_worker import start_mailing_worker
+    from bot.db.mailing import ensure_mailing_tables
 
-    app = web.Application()
+    app = web.Application(client_max_size=20 * 1024 * 1024)
     app["config"] = config or load_config()
+    ensure_mailing_tables()
+    start_mailing_worker(app)
     app.router.add_get("/", index_page)
     app.router.add_get("/admin", admin_page)
     app.router.add_get("/admin/raffle-screen/{submission_id}", raffle_screen_page)
@@ -5300,6 +5526,9 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_post("/admin/events/restore", events_restore_page)
     app.router.add_post("/admin/events/resend-ticket", events_resend_ticket_page)
     app.router.add_post("/admin/users/anonymize", users_anonymize_page)
+    app.router.add_post("/admin/mailing/preview", mailing_preview_page)
+    app.router.add_post("/admin/mailing/create", mailing_create_page)
+    app.router.add_post("/admin/mailing/status", mailing_status_page)
     app.router.add_post("/admin/login", login_page)
     app.router.add_get("/admin/logout", logout_page)
     # Публичные VK-ленды (без admin auth); nginx не закрывает /vk/*

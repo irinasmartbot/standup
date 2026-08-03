@@ -194,3 +194,55 @@ ALTER TABLE users
 
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS consent_version TEXT;
+
+
+-- Admin mailing / broadcast campaigns
+CREATE TABLE IF NOT EXISTS mailing_campaigns (
+    id BIGSERIAL PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    channel TEXT NOT NULL
+        CHECK (channel IN ('telegram', 'vkontakte', 'both')),
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'queued', 'running', 'paused', 'done', 'cancelled')),
+    body_html TEXT NOT NULL DEFAULT '',
+    photo_path TEXT,
+    button_text TEXT,
+    button_url TEXT,
+    followup_html TEXT,
+    interval_sec NUMERIC(8, 3) NOT NULL DEFAULT 0.100,
+    batch_limit INTEGER,
+    filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+    total_count INTEGER NOT NULL DEFAULT 0,
+    sent_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    created_by TEXT NOT NULL DEFAULT 'owner'
+);
+
+CREATE TABLE IF NOT EXISTS mailing_recipients (
+    id BIGSERIAL PRIMARY KEY,
+    campaign_id BIGINT NOT NULL
+        REFERENCES mailing_campaigns(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL CHECK (channel IN ('telegram', 'vkontakte')),
+    peer_id BIGINT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'sent', 'failed', 'skipped')),
+    error TEXT,
+    sent_at TIMESTAMPTZ,
+    UNIQUE (campaign_id, channel, peer_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mailing_recipients_pending
+    ON mailing_recipients (campaign_id, id)
+    WHERE status = 'pending';
+
+CREATE INDEX IF NOT EXISTS idx_mailing_recipients_user_sent
+    ON mailing_recipients (user_id, channel, sent_at)
+    WHERE status = 'sent';
+
+CREATE INDEX IF NOT EXISTS idx_mailing_campaigns_status
+    ON mailing_campaigns (status, id);

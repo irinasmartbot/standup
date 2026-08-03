@@ -1748,6 +1748,19 @@ class VKBotApp:
             return
         # ref логируем ниже после разбора; cmd/text — сразу.
         logger.info("VK message peer_id=%s vk_id=%s cmd=%s text=%r", peer_id, vk_id, cmd, text[:80])
+        if cmd == "mail_fu":
+            from bot.db.mailing import get_campaign_followup
+
+            try:
+                cid = int(payload.get("cid") or 0)
+            except (TypeError, ValueError):
+                cid = 0
+            follow = get_campaign_followup(cid) if cid else None
+            if follow:
+                await self._send_text(peer_id, follow, replace_nav=False)
+            else:
+                await self.client.send_message(peer_id, "Сообщение недоступно.")
+            return
         if not cmd:
             context = self.peer_context.get(peer_id)
             text_commands = {
