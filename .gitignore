@@ -7,6 +7,10 @@ venv/
 bookings.db
 bookings.db-*
 
+# VK attachment ids — серверный кэш, git reset не должен его затирать
+data/storage/vk_system_images.json
+data/storage/vk_event_images.json
+
 # медиафайлы — хранятся локально и позже переедут в S3
 *.jpg
 *.jpeg

@@ -116,9 +116,14 @@ sudo journalctl -u standup-vk-bot -n 80 --no-pager
 
 ```bash
 cd /home/standup/vk-app
+# Кэш картинок больше не в git — перед reset всё равно лучше сохранить:
+cp -a data/storage/vk_system_images.json /tmp/vk_system_images.json.bak 2>/dev/null || true
 git fetch origin vk-mvp
 git reset --hard origin/vk-mvp
+test -f data/storage/vk_system_images.json || cp -a /tmp/vk_system_images.json.bak data/storage/vk_system_images.json
 ./venv/bin/pip install -r requirements.txt
+# Если рандом снова «один кадр» — перезалить пул обложек (не затирает .env):
+./venv/bin/python scripts/upload_vk_system_images.py --force
 sudo systemctl restart standup-vk-bot
 ```
 

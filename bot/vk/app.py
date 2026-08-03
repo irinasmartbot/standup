@@ -73,7 +73,26 @@ logger = logging.getLogger(__name__)
 DATES_PAGE_SIZE = 6
 VK_CHANNEL = "vkontakte"
 # Как в TG: не крутим в рандоме карточки площадок / хитлото / билет / отзывы.
-_EXCLUDED_RANDOM_COVER_KEYS = frozenset({"temple_bar", "escobar", "nebar", "hitloto_start"})
+_EXCLUDED_RANDOM_COVER_KEYS = frozenset(
+    {
+        "temple_bar",
+        "escobar",
+        "nebar",
+        "hitloto_start",
+        # Дубликат арта хитлото под «обычным» именем файла (попадало в рандом).
+        "photo_2026-07-21_01-59-43",
+    }
+)
+_EXCLUDED_RANDOM_COVER_NAMES = frozenset(
+    {
+        "temple_bar.jpg",
+        "escobar.jpg",
+        "nebar.jpg",
+        "ticket_template.jpg",
+        "hitloto_start.png",
+        "photo_2026-07-21_01-59-43.jpg",
+    }
+)
 # Deep link: vk.com/write-{group_id}?ref=standup_rozygr или vk.me/{screen_name}?ref=...
 # (ссылка вида vk.com/club...?ref= НЕ передаёт ref в message_new).
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
@@ -421,6 +440,8 @@ class VKBotApp:
         self.peer_carousel_message_ids: dict[int, int] = {}
         self.peer_my_bookings_message_ids: dict[int, int] = {}
         self.peer_dates_message_ids: dict[int, int] = {}
+        # Keep dates-card photo across page edits: VK strips attachment if omitted.
+        self.peer_dates_attachments: dict[int, str] = {}
         self.peer_venues_message_ids: dict[int, int] = {}
         self.peer_offline_gift_message_ids: dict[int, int] = {}
         # cmid кнопки из текущего message_event — переживает рестарт бота.
@@ -461,18 +482,41 @@ class VKBotApp:
 
     def _random_cover_attachment(self) -> str | None:
         """Случайная обложка шоу (как в TG). Не трогает площадки / хитлото / билет."""
+        # Блокируем и по ключу/имени, и по самому attachment id —
+        # на случай если тот же файл попал в кэш под другим ключом.
+        banned_keys = _EXCLUDED_RANDOM_COVER_KEYS | {
+            "rozygrysh_otzyv_1",
+            "rozygrysh_otzyv_2",
+            "photo_2026-07-21_01-59-43",
+        }
+        banned_attachments = {(self.images.get(key) or "").strip() for key in banned_keys}
+        banned_attachments.discard("")
         pool: list[str] = []
         for img in self.images.all():
             key = (img.key or "").strip().lower()
-            if not key or not img.attachment:
+            path = (img.path or "").replace("\\", "/").lower()
+            name = path.rsplit("/", 1)[-1] if path else key
+            attachment = (img.attachment or "").strip()
+            if not key or not attachment:
                 continue
-            if key in _EXCLUDED_RANDOM_COVER_KEYS:
+            if attachment in banned_attachments:
                 continue
-            if key.startswith("hitloto") or key.startswith("rozygrysh_otzyv"):
+            if key in banned_keys or name in _EXCLUDED_RANDOM_COVER_NAMES:
                 continue
-            if "ticket" in key:
+            if (
+                key.startswith("hitloto")
+                or name.startswith("hitloto")
+                or "hitloto" in key
+                or "hitloto" in name
+                or "хитлото" in key
+                or "хитлото" in name
+                or key.startswith("rozygrysh_otzyv")
+                or name.startswith("rozygrysh_otzyv")
+            ):
                 continue
-            pool.append(img.attachment)
+            if "ticket" in key or "ticket" in name:
+                continue
+            pool.append(attachment)
         if pool:
             return random.choice(pool)
         return self._cover_attachment("show_cover")
@@ -486,7 +530,8 @@ class VKBotApp:
         )
         if poster:
             return poster
-        return self._random_cover_attachment() or self._cover_attachment("hitloto_start")
+        # Никогда не подставляем hitloto в общий fallback — только show_cover / random.
+        return self._random_cover_attachment() or self._cover_attachment("show_cover")
 
     def _queue_delete(self, peer_id: int, *message_ids: Any) -> None:
         bucket = self._pending_delete_ids.setdefault(int(peer_id), [])
@@ -635,38 +680,31 @@ class VKBotApp:
     ) -> int | None:
         cmid = self._callback_cmid(peer_id) if replace_nav else None
         # Callback-кнопка: правим то же сообщение, без delete+send (иначе мигает «два экрана»).
-        if replace_nav and cmid and self._keyboard_is_inline(keyboard):
+        # Важно: edit БЕЗ attachment во VK снимает фото — годится только для текстовых экранов.
+        # С новым attachment in-place edit часто оставляет СТАРОЕ фото (hitloto на BEST).
+        if replace_nav and cmid and self._keyboard_is_inline(keyboard) and not attachment:
             ok = await self.client.edit_message(
                 peer_id,
                 text,
                 conversation_message_id=int(cmid),
                 keyboard=keyboard,
-                attachment=attachment,
+                attachment=None,
             )
             if ok:
                 peer = int(peer_id)
                 self.peer_nav_message_ids.pop(peer, None)
+                # Не чистим peer_dates_attachments: иначе листание дат теряет фото.
                 self.peer_dates_message_ids.pop(peer, None)
                 await self._delete_pending(peer_id)
                 return None
-            # Без вложения — частый случай, когда edit с photo падает; пробуем текст+кнопки.
-            if attachment:
-                ok = await self.client.edit_message(
-                    peer_id,
-                    text,
-                    conversation_message_id=int(cmid),
-                    keyboard=keyboard,
-                    attachment=None,
-                )
-                if ok:
-                    peer = int(peer_id)
-                    self.peer_nav_message_ids.pop(peer, None)
-                    self.peer_dates_message_ids.pop(peer, None)
-                    await self._delete_pending(peer_id)
-                    return None
 
         if replace_nav:
             await self._delete_nav(peer_id)
+            # Сообщение с кнопкой часто не в peer_nav_message_ids (dates-card / после рестарта).
+            # Без удаления по cmid старый постер хитлото остаётся в чате над новым экраном.
+            if cmid:
+                await self.client.delete_by_cmids(peer_id, [int(cmid)])
+                self._clear_dates_card(peer_id)
         clear_id: int | None = None
         # Сброс reply-клавиатуры только вне callback: иначе лишний flash-сообщение.
         if self._keyboard_is_inline(keyboard) and not cmid:
@@ -700,6 +738,18 @@ class VKBotApp:
             self._remember_nav(peer_id, message_id)
         return message_id
 
+    def _remember_dates_attachment(self, peer_id: int, attachment: str | None) -> None:
+        peer = int(peer_id)
+        if attachment:
+            self.peer_dates_attachments[peer] = attachment
+        else:
+            self.peer_dates_attachments.pop(peer, None)
+
+    def _clear_dates_card(self, peer_id: int) -> None:
+        peer = int(peer_id)
+        self.peer_dates_message_ids.pop(peer, None)
+        self.peer_dates_attachments.pop(peer, None)
+
     async def _send_or_edit_dates_card(
         self,
         peer_id: int,
@@ -709,33 +759,35 @@ class VKBotApp:
         attachment: str | None = None,
         edit: bool = False,
     ) -> None:
-        """Листание дат: правим ту же карточку, без новых сообщений в чате."""
+        """Карточка дат с фото.
+
+        Не используем messages.edit: у VK edit с attachment то снимает фото,
+        то оставляет старое. Листание = удалить старую карточку и прислать новую
+        (с новым random, если передан). Параметр edit сохранён для совместимости вызовов.
+        """
+        del edit  # листание больше не через in-place edit
         peer = int(peer_id)
-        existing_id = self.peer_dates_message_ids.get(peer)
-        if edit and await self._edit_card(
-            peer_id,
-            text,
-            stored_message_id=existing_id,
-            keyboard=keyboard,
-            # Не трогаем вложение: повторная картинка/пустой attachment даёт мигание.
-            attachment=None,
-        ):
-            if existing_id:
-                self.peer_dates_message_ids[peer] = int(existing_id)
-            return
-        if edit and (existing_id or self._callback_cmid(peer_id)):
-            logger.warning(
-                "Dates list edit failed peer_id=%s msg_id=%s cmid=%s, falling back to send",
-                peer_id,
-                existing_id,
-                self._callback_cmid(peer_id),
-            )
+        keep_att = attachment or self._random_cover_attachment()
+        if keep_att:
+            self._remember_dates_attachment(peer, keep_att)
+
+        # Явно убираем предыдущую dates-карточку, если помним message_id
+        # (кнопочный cmid дополнительно чистит _send_text).
+        existing_id = self.peer_dates_message_ids.pop(peer, None)
+        if existing_id:
+            try:
+                await self.client.delete_messages(peer, [int(existing_id)])
+            except Exception:
+                logger.exception("Failed to delete previous dates card peer_id=%s", peer_id)
+
         mid = await self._send_text(
             peer_id,
             text,
             keyboard=keyboard,
-            attachment=attachment,
+            attachment=keep_att,
         )
+        if keep_att:
+            self._remember_dates_attachment(peer, keep_att)
         if mid:
             self.peer_dates_message_ids[peer] = int(mid)
 
@@ -755,7 +807,7 @@ class VKBotApp:
         self._clear_raffle_screenshot_wait(int(user_id))
         self.peer_carousel_message_ids.pop(int(peer_id), None)
         self.peer_my_bookings_message_ids.pop(int(peer_id), None)
-        self.peer_dates_message_ids.pop(int(peer_id), None)
+        self._clear_dates_card(peer_id)
         self.peer_venues_message_ids.pop(int(peer_id), None)
         if is_start:
             self._track(user_id, EVENT_BOT_START)
@@ -1540,6 +1592,29 @@ class VKBotApp:
         self._peer_cmd_cooldown[key] = now
         return prev is not None and (now - prev) < 1.5
 
+    async def _enrich_message_ref(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Long Poll часто без ref — подтянуть через messages.getById."""
+        mid = message.get("id")
+        if mid is None:
+            return message
+        full = await self.client.get_message_by_id(int(mid))
+        if not full:
+            return message
+        ref = full.get("ref")
+        if not ref:
+            logger.info(
+                "VK getById id=%s has no ref (keys=%s)",
+                mid,
+                sorted(str(k) for k in full.keys()),
+            )
+            return message
+        enriched = dict(message)
+        enriched["ref"] = ref
+        if full.get("ref_source") is not None:
+            enriched["ref_source"] = full.get("ref_source")
+        logger.info("VK getById enriched id=%s ref=%r", mid, ref)
+        return enriched
+
     async def handle_update(self, update: dict[str, Any]) -> None:
         utype = update.get("type")
         if utype == "message_event":
@@ -1667,11 +1742,12 @@ class VKBotApp:
         # Button clicks create a user message — remove it with previous bot nav screens.
         if payload.get("cmd") and message.get("id") is not None:
             self._queue_delete(peer_id, message.get("id"))
-        logger.info("VK message peer_id=%s vk_id=%s cmd=%s text=%r", peer_id, vk_id, cmd, text[:80])
         text_key = text.casefold()
         if text_key in {"сброс розыгрыш", "сброс розыгрыша", "/reset_rozygrysh"}:
             await self._reset_raffle_for_test(peer_id, vk_id)
             return
+        # ref логируем ниже после разбора; cmd/text — сразу.
+        logger.info("VK message peer_id=%s vk_id=%s cmd=%s text=%r", peer_id, vk_id, cmd, text[:80])
         if not cmd:
             context = self.peer_context.get(peer_id)
             text_commands = {
@@ -1749,14 +1825,33 @@ class VKBotApp:
                 if time.monotonic() - last_burst < 8.0:
                     return
 
-        # Розыгрыш:
-        # - явно словом «розыгрыш»;
-        # - deep link: кнопка Start с payload command=start и ref=...
-        # Нельзя брать голый message.ref: VK «липко» таскает ref на следующие
-        # сообщения (тогда «начать»/бронь ошибочно открывали розыгрыш).
-        ref = str(message.get("ref") or payload.get("ref") or "").strip().casefold()
+        # Deep link (write-/vk.me?ref=...):
+        # - кнопка Start: payload command=start + ref;
+        # - или текст «начать»/start при том же ref (у кого уже был диалог,
+        #   синей «Начать» часто нет — человек пишет слово).
+        # Нельзя брать голый message.ref на любой текст: VK «липко» таскает ref
+        # дальше (фото/кнопки). Кнопки с cmd (бронь и т.п.) сюда не попадают.
         payload_command = str(payload.get("command") or "").strip().casefold()
-        is_gift_deeplink = _is_offline_gift_ref(ref) and payload_command == "start" and not cmd
+        is_start_entry = payload_command == "start" or text_key in {
+            "/start",
+            "start",
+            "начать",
+        }
+        # Long Poll часто не кладёт ref в event — добираем через messages.getById.
+        if is_start_entry and not cmd and not (message.get("ref") or payload.get("ref")):
+            message = await self._enrich_message_ref(message)
+        ref = str(message.get("ref") or payload.get("ref") or "").strip().casefold()
+        if is_start_entry:
+            logger.info(
+                "VK start_entry peer_id=%s vk_id=%s ref=%r payload_command=%r cmd=%s msg_id=%s",
+                peer_id,
+                vk_id,
+                ref,
+                payload_command,
+                cmd,
+                message.get("id"),
+            )
+        is_gift_deeplink = _is_offline_gift_ref(ref) and is_start_entry and not cmd
         if cmd == "offline_gift" or is_gift_deeplink:
             event_id = _offline_gift_event_id_from_ref(ref)
             if event_id:
@@ -1765,16 +1860,12 @@ class VKBotApp:
                 await self._send_offline_gift_events(peer_id)
             return
 
-        is_raffle_deeplink = (
-            ref in _RAFFLE_REF_VALUES and payload_command == "start" and not cmd
-        )
+        is_raffle_deeplink = ref in _RAFFLE_REF_VALUES and is_start_entry and not cmd
         if cmd == "raffle" or is_raffle_deeplink:
             await self._send_raffle_start(peer_id, vk_id)
             return
 
-        is_booking_deeplink = (
-            ref in _BOOKING_REF_VALUES and payload_command == "start" and not cmd
-        )
+        is_booking_deeplink = ref in _BOOKING_REF_VALUES and is_start_entry and not cmd
         if cmd == "book" or is_booking_deeplink:
             # Как в TG: бесплатная бронь сразу открывает Проверку материала
             # (deep link с лендинга /vk/booking — до общего Start-меню)
@@ -1844,7 +1935,7 @@ class VKBotApp:
             page = int(payload.get("page") or 0)
             if cmd == "check":
                 self.peer_context[peer_id] = "check"
-                self.peer_dates_message_ids.pop(int(peer_id), None)
+                self._clear_dates_card(peer_id)
                 self._track(vk_id, EVENT_BRANCH_PROVERKA)
                 await self._send_text(
                     peer_id,
@@ -1862,7 +1953,7 @@ class VKBotApp:
             return
         if cmd == "check_venues":
             self.peer_browse[peer_id] = "venue"
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self._send_check_venues(peer_id)
             return
         if cmd == "check_venue":
@@ -1880,7 +1971,7 @@ class VKBotApp:
             return
         if cmd == "check_date":
             self.peer_browse[peer_id] = "date"
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self._send_check_date(peer_id, payload.get("date") or "", vk_id=vk_id)
             return
         if cmd == "check_event":
@@ -1890,7 +1981,7 @@ class VKBotApp:
             page = int(payload.get("page") or 0)
             if cmd == "best":
                 self.peer_context[peer_id] = "best"
-                self.peer_dates_message_ids.pop(int(peer_id), None)
+                self._clear_dates_card(peer_id)
                 self._track(vk_id, EVENT_BRANCH_BEST)
                 await self._send_text(
                     peer_id,
@@ -1908,7 +1999,7 @@ class VKBotApp:
             return
         if cmd == "best_venues":
             self.peer_browse[peer_id] = "venue"
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self._send_best_venues(peer_id)
             return
         if cmd == "best_venue":
@@ -1940,7 +2031,7 @@ class VKBotApp:
             return
         if cmd == "best_date":
             self.peer_browse[peer_id] = "date"
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self._send_best_date(peer_id, payload.get("date") or "", vk_id=vk_id)
             return
         if cmd == "best_event":
@@ -1951,7 +2042,7 @@ class VKBotApp:
             if cmd == "hitloto":
                 self.peer_context[peer_id] = "hitloto"
                 self.peer_browse[peer_id] = "date"
-                self.peer_dates_message_ids.pop(int(peer_id), None)
+                self._clear_dates_card(peer_id)
                 self._track(vk_id, EVENT_BRANCH_HITLOTO)
                 await self._send_hitloto_dates(peer_id, page, entry=True, edit=False)
                 return
@@ -1959,7 +2050,7 @@ class VKBotApp:
             return
         if cmd == "hitloto_date":
             self.peer_browse[peer_id] = "date"
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self._send_hitloto_date(peer_id, payload.get("date") or "", vk_id=vk_id)
             return
         if cmd == "hitloto_event":
@@ -2593,7 +2684,7 @@ class VKBotApp:
 
     async def _send_raffle_date(self, peer_id: int, vk_id: int, date: str) -> None:
         await self._disable_callback_buttons(peer_id, vk_raffle.SUB_OK_DATES_TEXT)
-        self.peer_dates_message_ids.pop(int(peer_id), None)
+        self._clear_dates_card(peer_id)
 
         events = [e for e in await vk_raffle.future_best_events() if e.get("date") == date]
         if not events:
@@ -2977,7 +3068,7 @@ class VKBotApp:
             events = await self._load_events("proverka")
         except Exception:
             logger.exception("Failed to load check events")
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self.client.send_message(
                 peer_id,
                 "Не удалось загрузить даты. Попробуй ещё раз через минуту.",
@@ -2991,7 +3082,7 @@ class VKBotApp:
             return
         dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
         if not dates:
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self.client.send_message(peer_id, "Пока нет актуальных дат.", keyboard=self._main_menu_kb(peer_id))
             return
         max_page = max(0, (len(dates) - 1) // DATES_PAGE_SIZE)
@@ -3017,7 +3108,7 @@ class VKBotApp:
         await self._send_text(
             peer_id,
             "Выбирай площадку:",
-            keyboard=_venues_keyboard(venues, "check_venue", "check"),
+            keyboard=_venues_keyboard(venues, "check_venue", "check_date_page"),
             attachment=self._random_cover_attachment(),
         )
         self._track(peer_id, EVENT_BROWSE_VENUES, props={"format": "proverka"})
@@ -3107,7 +3198,7 @@ class VKBotApp:
         kb = VKKeyboardBuilder(inline=True)
         kb.button("Забронировать", _payload("check_booking_start", event_id=event["id"]), color="primary")
         kb.button("Правила бронирования", _payload("booking_rules", event_id=event["id"]))
-        kb.button("Назад к датам", _payload("check"))
+        kb.button("Назад к датам", _payload("check_date_page"))
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(
@@ -3124,7 +3215,7 @@ class VKBotApp:
             events = await self._load_events("best")
         except Exception:
             logger.exception("Failed to load BEST events")
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self.client.send_message(
                 peer_id,
                 "Не удалось загрузить даты. Попробуй ещё раз через минуту.",
@@ -3138,7 +3229,7 @@ class VKBotApp:
             return
         dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
         if not dates:
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self.client.send_message(peer_id, "Пока нет актуальных мероприятий BEST.", keyboard=self._main_menu_kb(peer_id))
             return
         max_page = max(0, (len(dates) - 1) // DATES_PAGE_SIZE)
@@ -3165,7 +3256,7 @@ class VKBotApp:
         await self._send_text(
             peer_id,
             "BEST: выбирай площадку:",
-            keyboard=_venues_keyboard(venues, "best_venue", "best"),
+            keyboard=_venues_keyboard(venues, "best_venue", "best_date_page"),
             attachment=self._random_cover_attachment(),
         )
         self._track(peer_id, EVENT_BROWSE_VENUES, props={"format": "best"})
@@ -3307,7 +3398,7 @@ class VKBotApp:
             kb.button("Купить билет", link=payment_url)
         else:
             kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
-        kb.button("Назад к датам", _payload("best"))
+        kb.button("Назад к датам", _payload("best_date_page"))
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(
@@ -3330,7 +3421,7 @@ class VKBotApp:
             events = await self._load_events("hitloto")
         except Exception:
             logger.exception("Failed to load Hitloto events")
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             await self.client.send_message(
                 peer_id,
                 "Не удалось загрузить даты. Попробуй ещё раз через минуту.",
@@ -3339,7 +3430,7 @@ class VKBotApp:
             return
         dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
         if not dates:
-            self.peer_dates_message_ids.pop(int(peer_id), None)
+            self._clear_dates_card(peer_id)
             kb = VKKeyboardBuilder(inline=True)
             kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
             kb.button("В главное меню", _payload("main_menu"))
@@ -3402,7 +3493,7 @@ class VKBotApp:
             kb.button("Купить билет", link=payment_url)
         else:
             kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
-        kb.button("Назад к датам", _payload("hitloto"))
+        kb.button("Назад к датам", _payload("hitloto_date_page"))
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(
