@@ -2074,9 +2074,13 @@ class VKBotApp:
             return
 
         # Как в TG unknown_message:
+        # — неизвестные /команды → главное меню
         # — абракадабра / короткий спам → молчим
         # — осмысленный текст → в техподдержку + «Спасибо!»
         if text and not cmd:
+            if text.lstrip().startswith("/"):
+                await self.send_menu(peer_id, vk_id=vk_id)
+                return
             await self._handle_unknown_free_text(peer_id, vk_id, text)
             return
 
