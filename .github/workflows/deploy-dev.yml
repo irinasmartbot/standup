@@ -31,7 +31,7 @@ jobs:
           # Код на сервере всегда = origin/main (.env не в git, не затрагивается).
           # Иначе локальные hotfix'ы на VPS блокируют pull.
           git reset --hard origin/main
-          git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc'
+          git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc' -e 'фото'
           /home/standup/app/venv/bin/python -m pip install -r requirements.txt
           /home/standup/app/venv/bin/python -c "from bot.db.crud import ensure_help_tables, ensure_raffle_tables, ensure_pdn_consent_columns; from bot.db.analytics import ensure_analytics_tables; ensure_raffle_tables(); ensure_help_tables(); ensure_analytics_tables(); ensure_pdn_consent_columns()"
           /home/standup/app/venv/bin/python -c "import main"
@@ -63,7 +63,7 @@ jobs:
               git fetch origin main
               git checkout main
               git reset --hard origin/main
-              git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc' -e 'data/storage'
+              git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc' -e 'data/storage' -e 'фото'
               /home/standup/vk-app/venv/bin/python -m pip install -r requirements.txt
               /home/standup/vk-app/venv/bin/python -c "import vk_bot"
               if sudo /usr/bin/systemctl list-unit-files standup-vk-bot.service --no-legend | grep -q standup-vk-bot.service; then

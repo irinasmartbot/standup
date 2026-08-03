@@ -48,6 +48,11 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 WELCOME_MARKER = "Мы делаем шоу в различных заведениях в центре Москвы каждый день"
 VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
+SYSTEM_PHOTO_FILES = {
+    "ticket_template.jpg",
+    "hitloto_start.png",
+    "photo_2026-07-21_01-59-43.jpg",
+}
 MAX_RANDOM_PHOTO_SIZE = 10 * 1024 * 1024
 
 
@@ -60,7 +65,7 @@ def _random_check_photo():
             if f.lower().endswith((".jpg", ".jpeg", ".png"))
             and f != ticket_name
             and f.lower() not in VENUE_PHOTO_FILES
-            and f.lower() != "ticket_template.jpg"
+            and f.lower() not in SYSTEM_PHOTO_FILES
             and not f.lower().startswith("rozygrysh_otzyv")
             and not f.lower().startswith("hitloto")
             and os.path.getsize(os.path.join(PHOTOS_DIR, f)) <= MAX_RANDOM_PHOTO_SIZE

@@ -99,6 +99,11 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PHOTOS_DIR = os.path.join(_PROJECT_ROOT, "фото")
 VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
+SYSTEM_PHOTO_FILES = {
+    "ticket_template.jpg",
+    "hitloto_start.png",
+    "photo_2026-07-21_01-59-43.jpg",
+}
 RAFFLE_DATES_PAGE_SIZE = 10
 OTZYV_PHOTO_1 = os.path.join(PHOTOS_DIR, "rozygrysh_otzyv_1.jpg")
 OTZYV_PHOTO_2 = os.path.join(PHOTOS_DIR, "rozygrysh_otzyv_2.jpg")
@@ -267,7 +272,7 @@ def _random_photo():
             if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
             and f != ticket_name
             and f.lower() not in VENUE_PHOTO_FILES
-            and f.lower() != "ticket_template.jpg"
+            and f.lower() not in SYSTEM_PHOTO_FILES
             and not f.lower().startswith("rozygrysh_otzyv")
             and not f.lower().startswith("hitloto")
         ]
