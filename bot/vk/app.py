@@ -759,11 +759,20 @@ class VKBotApp:
         """Листание дат: правим ту же карточку, без новых сообщений в чате."""
         peer = int(peer_id)
         existing_id = self.peer_dates_message_ids.get(peer)
-        if attachment:
-            self._remember_dates_attachment(peer, attachment)
-        # VK messages.edit без attachment снимает фото — всегда передаём сохранённое/новое.
-        keep_att = attachment or self.peer_dates_attachments.get(peer)
-        if edit and await self._edit_card(
+        remembered = self.peer_dates_attachments.get(peer)
+        if edit:
+            # При листании НЕ меняем attachment: messages.edit с новым photo
+            # у VK часто возвращает ok, но снимает картинку (остаётся «ред.» без фото).
+            keep_att = remembered or attachment
+            if not keep_att:
+                # После рестарта памяти нет — шлём новую карточку, не edit вслепую.
+                edit = False
+                keep_att = attachment or self._random_cover_attachment()
+        else:
+            keep_att = attachment or remembered or self._random_cover_attachment()
+        if keep_att:
+            self._remember_dates_attachment(peer, keep_att)
+        if edit and keep_att and await self._edit_card(
             peer_id,
             text,
             stored_message_id=existing_id,
@@ -3051,7 +3060,7 @@ class VKBotApp:
             peer_id,
             "Проверка материала. Выбирай дату:",
             keyboard=keyboard,
-            attachment=self._random_cover_attachment(),
+            attachment=None if edit else self._random_cover_attachment(),
             edit=edit,
         )
         logger.info("Sent check dates: %s items page=%s", len(dates), page)
@@ -3198,7 +3207,7 @@ class VKBotApp:
             peer_id,
             "StandUp BEST. Выбирай дату:",
             keyboard=keyboard,
-            attachment=self._random_cover_attachment(),
+            attachment=None if edit else self._random_cover_attachment(),
             edit=edit,
         )
         logger.info("Sent BEST dates: %s items page=%s", len(dates), page)
@@ -3407,7 +3416,7 @@ class VKBotApp:
             peer_id,
             text,
             keyboard=keyboard,
-            attachment=self._cover_attachment("hitloto_start", "show_cover"),
+            attachment=None if edit else self._cover_attachment("hitloto_start", "show_cover"),
             edit=edit,
         )
 
