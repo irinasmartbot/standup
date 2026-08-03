@@ -2601,19 +2601,25 @@ def _users_tab(
                 )
         if user.get("consent_accepted_at"):
             consent_ver = (user.get("consent_version") or "").strip()
-            consent_line = (
-                f'<p><b>Согласие на ПДн:</b> да · {_h(_fmt_msk(user.get("consent_accepted_at")))}'
+            consent_box = (
+                '<div class="user-consent-box user-consent-yes">'
+                "<b>Согласие на ПДн:</b> да"
+                f' · {_h(_fmt_msk(user.get("consent_accepted_at")))}'
                 + (f' · {_h(consent_ver)}' if consent_ver else "")
-                + "</p>"
+                + "</div>"
             )
         else:
-            consent_line = '<p><b>Согласие на ПДн:</b> нет</p>'
+            consent_box = (
+                '<div class="user-consent-box user-consent-no">'
+                "<b>Согласие на ПДн:</b> нет"
+                "</div>"
+            )
         detail = (
             '<section class="card user-detail">'
             f'<h2>{_h(user["name"] or "Без имени")}</h2>'
             f'<p class="muted">user_id: {_h(user.get("user_id") or "—")} · {_h(user["phone"])} · '
             f'@{_h(user["username"])} · источник: {_h(user["source"])}</p>'
-            f"{consent_line}"
+            f"{consent_box}"
             '<div class="mini-metrics">'
             f'<span>Всего броней: <b>{len(user["bookings"])}</b></span>'
             f'<span>Активных: <b>{user["status_counts"].get("booked", 0)}</b></span>'
@@ -3825,6 +3831,15 @@ def render_admin_html(
       padding:10px 14px; font:inherit; cursor:pointer;
     }}
     .user-anonymize-box button:hover {{ background:#991b1b; }}
+    .user-consent-box {{
+      margin:10px 0 14px; padding:10px 14px; border-radius:12px; font-size:14px;
+    }}
+    .user-consent-yes {{
+      border:1px solid #bbf7d0; background:#f0fdf4; color:#166534;
+    }}
+    .user-consent-no {{
+      border:1px solid #e2e8f0; background:#f8fafc; color:#475569;
+    }}
     .show-format-stats b {{ display:block; margin-top:2px; font-size:18px; line-height:1.2; }}
     .show-format-stats small {{ display:block; margin-top:2px; font-size:11px; }}
     .show-format-block h3, .branch-card h3 {{ margin:0 0 10px; font-size:16px; }}
