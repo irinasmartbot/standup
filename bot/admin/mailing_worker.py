@@ -63,6 +63,7 @@ async def _send_telegram(campaign: dict, peer_id: int) -> None:
                 ]
             )
 
+    disable_preview = bool(campaign.get("disable_link_preview"))
     bot = Bot(token=token)
     try:
         if photo_path and Path(photo_path).is_file():
@@ -81,7 +82,7 @@ async def _send_telegram(campaign: dict, peer_id: int) -> None:
                 text=text,
                 parse_mode="HTML",
                 reply_markup=markup,
-                disable_web_page_preview=False,
+                disable_web_page_preview=disable_preview,
             )
     finally:
         await bot.session.close()

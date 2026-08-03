@@ -103,6 +103,12 @@ def ensure_mailing_tables() -> None:
                     ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT false
                     """
                 )
+                cur.execute(
+                    """
+                    ALTER TABLE mailing_campaigns
+                    ADD COLUMN IF NOT EXISTS disable_link_preview BOOLEAN NOT NULL DEFAULT false
+                    """
+                )
             conn.commit()
     except Exception:
         logger.exception("ensure_mailing_tables failed")
@@ -126,18 +132,18 @@ def normalize_filters(raw: dict | None) -> dict[str, Any]:
         batch_limit = None
     if batch_limit is not None:
         batch_limit = max(1, min(batch_limit, 100_000))
-    date_mode = (data.get("date_mode") or "event").strip().lower()
-    if date_mode not in ("event", "status"):
-        date_mode = "event"
+    # Только дата шоу (event_date). Одна заполненная дата = конкретный день.
+    date_from = (data.get("date_from") or data.get("booking_date_from") or "").strip() or None
+    date_to = (data.get("date_to") or data.get("booking_date_to") or "").strip() or None
+    if date_from and not date_to:
+        date_to = date_from
+    elif date_to and not date_from:
+        date_from = date_to
     return {
         "booking_statuses": statuses,
-        "date_mode": date_mode,
-        "date_from": (
-            (data.get("date_from") or data.get("booking_date_from") or "").strip() or None
-        ),
-        "date_to": (
-            (data.get("date_to") or data.get("booking_date_to") or "").strip() or None
-        ),
+        "date_mode": "event",
+        "date_from": date_from,
+        "date_to": date_to,
         "has_phone": bool(data.get("has_phone")),
         "exclude_blocked": bool(data.get("exclude_blocked", True)),
         "exclude_sent_days": exclude_days,
@@ -176,29 +182,18 @@ def _audience_sql(channel: str, filters: dict) -> tuple[str, dict]:
     statuses = list(filters.get("booking_statuses") or [])
     date_from = filters.get("date_from") or filters.get("booking_date_from")
     date_to = filters.get("date_to") or filters.get("booking_date_to")
-    date_mode = (filters.get("date_mode") or "event").strip().lower()
     if statuses or date_from or date_to:
         booking_where = ["b.user_id = u.id"]
         if statuses:
             params["booking_statuses"] = list(statuses)
             booking_where.append("b.status = ANY(%(booking_statuses)s)")
-        use_event_dates = date_mode != "status" and (date_from or date_to)
-        if date_from or date_to:
-            if date_mode == "status":
-                ts = _status_ts_sql()
-                if date_from:
-                    params["date_from"] = date_from
-                    booking_where.append(f"({ts})::date >= %(date_from)s::date")
-                if date_to:
-                    params["date_to"] = date_to
-                    booking_where.append(f"({ts})::date <= %(date_to)s::date")
-            else:
-                if date_from:
-                    params["date_from"] = date_from
-                    booking_where.append("e.event_date >= %(date_from)s::date")
-                if date_to:
-                    params["date_to"] = date_to
-                    booking_where.append("e.event_date <= %(date_to)s::date")
+        use_event_dates = bool(date_from or date_to)
+        if date_from:
+            params["date_from"] = date_from
+            booking_where.append("e.event_date >= %(date_from)s::date")
+        if date_to:
+            params["date_to"] = date_to
+            booking_where.append("e.event_date <= %(date_to)s::date")
         from_sql = (
             "bookings b JOIN events e ON e.id = b.event_id"
             if use_event_dates
@@ -301,6 +296,7 @@ def create_campaign(
     button_text: str | None = None,
     button_url: str | None = None,
     followup_html: str | None = None,
+    disable_link_preview: bool = False,
     created_by: str = "owner",
     start: bool = True,
 ) -> dict:
@@ -331,12 +327,12 @@ def create_campaign(
                 """
                 INSERT INTO mailing_campaigns (
                     title, channel, status, body_html, photo_path,
-                    button_text, button_url, followup_html,
+                    button_text, button_url, followup_html, disable_link_preview,
                     interval_sec, batch_limit, filters, total_count, created_by
                 )
                 VALUES (
                     %(title)s, %(channel)s, %(status)s, %(body_html)s, %(photo_path)s,
-                    %(button_text)s, %(button_url)s, %(followup_html)s,
+                    %(button_text)s, %(button_url)s, %(followup_html)s, %(disable_link_preview)s,
                     %(interval_sec)s, %(batch_limit)s, %(filters)s, 0, %(created_by)s
                 )
                 RETURNING *
@@ -350,6 +346,7 @@ def create_campaign(
                     "button_text": button_text,
                     "button_url": button_url,
                     "followup_html": followup_html,
+                    "disable_link_preview": bool(disable_link_preview),
                     "interval_sec": interval_sec,
                     "batch_limit": filters_n.get("batch_limit"),
                     "filters": Json(filters_n),

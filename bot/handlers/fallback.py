@@ -16,18 +16,29 @@ router = Router(name="fallback")
 
 @router.callback_query(F.message.chat.type == "private")
 async def unknown_callback(call: CallbackQuery, state: FSMContext):
-    """Старые/чужие inline-кнопки (Salebot и т.п.) → главное меню."""
-    data = (call.data or "")[:80]
+    """Старые/чужие inline-кнопки (Salebot и т.п.) → главное меню.
+
+    mail_fu:* обрабатываем здесь как запасной путь, если роутер рассылки
+    по какой-то причине не сработал раньше.
+    """
+    data = call.data or ""
+    if data.startswith("mail_fu:"):
+        from bot.handlers.mailing_callbacks import mailing_followup
+
+        await mailing_followup(call)
+        return
+
+    data_short = data[:80]
     logger.info(
         "Unknown callback → menu telegram_id=%s data=%r",
         call.from_user.id if call.from_user else None,
-        data,
+        data_short,
     )
     await state.clear()
     track_event(
         EVENT_CMD_MAIN_MENU,
         telegram_id=call.from_user.id,
-        props={"via": "unknown_callback", "data": data or None},
+        props={"via": "unknown_callback", "data": data_short or None},
     )
     try:
         await call.answer()

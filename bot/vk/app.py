@@ -1849,6 +1849,7 @@ class VKBotApp:
             "/start",
             "start",
             "начать",
+            "старт",
         }
         # Long Poll часто не кладёт ref в event — добираем через messages.getById.
         if is_start_entry and not cmd and not (message.get("ref") or payload.get("ref")):
@@ -1866,6 +1867,11 @@ class VKBotApp:
             )
         is_gift_deeplink = _is_offline_gift_ref(ref) and is_start_entry and not cmd
         if cmd == "offline_gift" or is_gift_deeplink:
+            self._track(
+                vk_id,
+                EVENT_BOT_START,
+                props={"payload": ref or "offline_gift", "via": "deeplink"},
+            )
             event_id = _offline_gift_event_id_from_ref(ref)
             if event_id:
                 await self._join_offline_gift_event(peer_id, vk_id, event_id)
@@ -1875,6 +1881,11 @@ class VKBotApp:
 
         is_raffle_deeplink = ref in _RAFFLE_REF_VALUES and is_start_entry and not cmd
         if cmd == "raffle" or is_raffle_deeplink:
+            self._track(
+                vk_id,
+                EVENT_BOT_START,
+                props={"payload": ref or "raffle", "via": "deeplink"},
+            )
             await self._send_raffle_start(peer_id, vk_id)
             return
 
@@ -1882,6 +1893,11 @@ class VKBotApp:
         if cmd == "book" or is_booking_deeplink:
             # Как в TG: бесплатная бронь сразу открывает Проверку материала
             # (deep link с лендинга /vk/booking — до общего Start-меню)
+            self._track(
+                vk_id,
+                EVENT_BOT_START,
+                props={"payload": ref or "booking", "via": "deeplink"},
+            )
             self.peer_context[peer_id] = "check"
             self._track(vk_id, EVENT_BRANCH_PROVERKA)
             await self._send_text(
