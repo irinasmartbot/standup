@@ -671,6 +671,26 @@ def build_dashboard(rows: list[dict]) -> dict:
     return {"events": list(events.values()), "bookings": bookings, "users": users, "totals": totals}
 
 
+def _user_channel(user: dict) -> str:
+    """Messenger for UI/filters: prefer ids (source='import' is not a channel)."""
+    if user.get("vk_id"):
+        return "vkontakte"
+    if user.get("telegram_id"):
+        return "telegram"
+    source = (user.get("source") or "").strip().lower()
+    if source in ("telegram", "vkontakte"):
+        return source
+    return ""
+
+
+def _channel_badge_html(channel: str) -> str:
+    if channel == "vkontakte":
+        return '<span class="channel-badge channel-vk">VK</span>'
+    if channel == "telegram":
+        return '<span class="channel-badge channel-tg">TG</span>'
+    return '<span class="channel-badge">?</span>'
+
+
 def _user_from_directory_row(row: dict) -> dict:
     uid = int(row["id"])
     key = str(uid)
@@ -735,14 +755,15 @@ def _users_directory_where(q: str, status: str, channel: str = "") -> tuple[str,
         )
     if channel in ("telegram", "vkontakte"):
         params["channel"] = channel
-        # Как в карточке: source, иначе vk_id → vkontakte, иначе telegram.
+        # ids first: imported users have source='import', not telegram/vkontakte.
         where.append(
             "("
             "CASE "
-            "WHEN NULLIF(TRIM(COALESCE(u.source, '')), '') IS NOT NULL "
-            "THEN TRIM(u.source) "
             "WHEN u.vk_id IS NOT NULL THEN 'vkontakte' "
-            "ELSE 'telegram' "
+            "WHEN u.telegram_id IS NOT NULL THEN 'telegram' "
+            "WHEN TRIM(COALESCE(u.source, '')) IN ('telegram', 'vkontakte') "
+            "THEN TRIM(u.source) "
+            "ELSE '' "
             "END"
             ") = %(channel)s"
         )
@@ -2519,12 +2540,25 @@ def _users_tab(
         total_bookings = user.get("bookings_total")
         if total_bookings is None:
             total_bookings = len(user.get("bookings") or [])
+        channel = _user_channel(user)
+        source = (user.get("source") or "").strip()
+        source_note = f" · {_h(source)}" if source and source not in ("telegram", "vkontakte") else ""
+        username = (user.get("username") or "").strip()
+        phone = (user.get("phone") or "").strip()
+        contact_main = _h(phone) if phone else "—"
+        contact_sub = f"@{_h(username)}" if username else ""
+        contact_cell = (
+            f"{contact_main}<br><span class='muted'>{contact_sub}</span>"
+            if contact_sub
+            else contact_main
+        )
         rows.append(
             "<tr>"
             f"<td>{_h(user.get('user_id') or '—')}</td>"
             f"<td><a href='{_query_link(filters, u=user['key'], page=filters.get('page') or '1')}'>{_h(user['name'] or 'Без имени')}</a>"
-            f"<br><span class='muted'>{_h(user['source'])}</span></td>"
-            f"<td>{_h(user['phone'])}<br><span class='muted'>@{_h(user['username'])}</span></td>"
+            f"<br>{_channel_badge_html(channel)}"
+            f"<span class='muted'>{source_note}</span></td>"
+            f"<td>{contact_cell}</td>"
             f"<td>{int(total_bookings)}</td>"
             f"<td>{user['status_counts'].get('booked', 0)}</td>"
             f"<td>{user['status_counts'].get('confirmed', 0)}</td>"
@@ -2642,11 +2676,15 @@ def _users_tab(
                 "<b>Согласие на ПДн:</b> нет"
                 "</div>"
             )
+        detail_channel = _user_channel(user)
+        detail_username = (user.get("username") or "").strip()
+        detail_phone = (user.get("phone") or "").strip() or "—"
+        detail_user_bit = f" · @{_h(detail_username)}" if detail_username else ""
         detail = (
             '<section class="card user-detail">'
-            f'<h2>{_h(user["name"] or "Без имени")}</h2>'
-            f'<p class="muted">user_id: {_h(user.get("user_id") or "—")} · {_h(user["phone"])} · '
-            f'@{_h(user["username"])} · источник: {_h(user["source"])}</p>'
+            f'<h2>{_h(user["name"] or "Без имени")} {_channel_badge_html(detail_channel)}</h2>'
+            f'<p class="muted">user_id: {_h(user.get("user_id") or "—")} · {_h(detail_phone)}'
+            f'{detail_user_bit} · источник: {_h(user["source"])}</p>'
             f"{consent_box}"
             '<div class="mini-metrics">'
             f'<span>Всего броней: <b>{len(user["bookings"])}</b></span>'
@@ -3466,6 +3504,13 @@ def render_admin_html(
     .tabs {{ display:flex; gap:10px; margin:0 0 16px; padding-left:16px; flex-wrap:wrap; }}
     .tab, .pill {{ padding:10px 14px; border-radius:999px; border:1px solid var(--line); color:#111827; background:white; text-decoration:none; }}
     .tab.active, .pill.active {{ background:#111827; color:white; border-color:#111827; }}
+    .channel-badge {{
+      display:inline-block; margin-right:4px; padding:1px 7px; border-radius:6px;
+      font-size:11px; font-weight:700; letter-spacing:.02em; vertical-align:middle;
+      border:1px solid var(--line); background:#f8fafc; color:#475467;
+    }}
+    .channel-badge.channel-tg {{ background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; }}
+    .channel-badge.channel-vk {{ background:#eef2ff; color:#3730a3; border-color:#c7d2fe; }}
     .summary {{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:16px; margin-bottom:20px; }}
     .analytics-summary {{ grid-template-columns: repeat(5, minmax(0,1fr)); }}
     .analytics-audience {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
