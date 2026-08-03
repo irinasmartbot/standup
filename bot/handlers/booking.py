@@ -1286,12 +1286,25 @@ async def unknown_message(message: Message, state: FSMContext):
         message.document and (message.document.mime_type or "").startswith("image/")
     ):
         return
+
+    text = message.text or message.caption or ""
+
+    # Старые/неизвестные /команды (в т.ч. из Salebot) → главное меню.
+    # Известные команды перехватываются раньше своими хендлерами.
+    if (message.text or "").startswith("/"):
+        await state.clear()
+        from bot.handlers.start import _send_welcome
+        from bot.utils.bot_commands import refresh_user_commands
+
+        await refresh_user_commands(message.bot, message.from_user.id)
+        await _send_welcome(message)
+        return
+
     if await state.get_state() is not None:
         return
 
     from bot.handlers.start import _is_meaningful_free_text, submit_help_question
 
-    text = message.text or message.caption or ""
     # Короткий спам / абракадабра — молчим и меню не показываем
     if not _is_meaningful_free_text(text):
         return
