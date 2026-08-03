@@ -4516,15 +4516,24 @@ async def admin_page(request: web.Request) -> web.Response:
             list_keys = [u["key"] for u in page_data["users"]]
             selected_key = (filters.get("u") or "").strip()
             selected_uid = int(selected_key) if selected_key.isdigit() else None
-            if selected_uid and selected_key not in users_map:
-                one = fetch_one_directory_user(config, selected_uid)
-                if one:
-                    users_map[one["key"]] = one
+            directory_user = None
+            if selected_uid:
+                directory_user = fetch_one_directory_user(config, selected_uid)
+                if directory_user:
+                    users_map[directory_user["key"]] = directory_user
             if selected_uid and selected_key in users_map:
                 booking_rows = fetch_user_booking_rows(config, selected_uid)
                 detail_dash = build_dashboard(booking_rows)
                 detail_user = (detail_dash.get("users") or {}).get(selected_key)
                 if detail_user:
+                    # build_dashboard из броней не знает про согласие ПДн — переносим с directory.
+                    base = directory_user or users_map.get(selected_key) or {}
+                    detail_user["consent_accepted_at"] = base.get("consent_accepted_at")
+                    detail_user["consent_version"] = base.get("consent_version") or ""
+                    if not detail_user.get("telegram_id"):
+                        detail_user["telegram_id"] = base.get("telegram_id")
+                    if not detail_user.get("vk_id"):
+                        detail_user["vk_id"] = base.get("vk_id")
                     users_map[selected_key] = detail_user
                 elif selected_key in users_map:
                     # гость без броней — оставляем карточку из directory
