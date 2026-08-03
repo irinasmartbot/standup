@@ -415,6 +415,7 @@ def list_campaigns(limit: int = 40) -> list[dict]:
                 """
                 SELECT *
                 FROM mailing_campaigns
+                WHERE title IS DISTINCT FROM 'test-followup'
                 ORDER BY id DESC
                 LIMIT %(limit)s
                 """,
@@ -736,11 +737,18 @@ def search_users_for_test(q: str, *, channel: str = "", limit: int = 20) -> list
             return [dict(r) for r in cur.fetchall()]
 
 
-def create_followup_stub(*, followup_html: str, body_html: str = "", created_by: str = "owner") -> int:
+def create_followup_stub(
+    *,
+    followup_html: str,
+    body_html: str = "",
+    channel: str = "telegram",
+    created_by: str = "owner",
+) -> int:
     """Store follow-up text so test/callback buttons can resolve mail_fu:<id>."""
     ensure_mailing_tables()
     if not _use_postgres():
         raise RuntimeError("PostgreSQL required")
+    ch = channel if channel in ("telegram", "vkontakte", "both") else "telegram"
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -751,12 +759,13 @@ def create_followup_stub(*, followup_html: str, body_html: str = "", created_by:
                     started_at, finished_at
                 )
                 VALUES (
-                    'test-followup', 'telegram', 'done', %(body)s, %(followup)s,
+                    'test-followup', %(channel)s, 'done', %(body)s, %(followup)s,
                     0, '{}'::jsonb, 0, %(created_by)s, NOW(), NOW()
                 )
                 RETURNING id
                 """,
                 {
+                    "channel": ch,
                     "body": body_html or "",
                     "followup": (followup_html or "").strip(),
                     "created_by": created_by or "owner",

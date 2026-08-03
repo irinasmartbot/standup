@@ -5486,20 +5486,28 @@ async def mailing_test_page(request: web.Request) -> web.Response:
 
     send_channel = None
     peer_id = None
-    if channel_pref == "telegram" and user.get("telegram_id"):
+    if channel_pref == "telegram":
+        if not user.get("telegram_id"):
+            return web.json_response(
+                {"error": "У пользователя нет Telegram id — выберите VK или другого человека"},
+                status=400,
+            )
         send_channel, peer_id = "telegram", int(user["telegram_id"])
-    elif channel_pref == "vkontakte" and user.get("vk_id"):
+    elif channel_pref == "vkontakte":
+        if not user.get("vk_id"):
+            return web.json_response(
+                {"error": "У пользователя нет VK id — выберите Telegram или другого человека"},
+                status=400,
+            )
         send_channel, peer_id = "vkontakte", int(user["vk_id"])
     elif channel_pref == "both":
-        if user.get("telegram_id"):
-            send_channel, peer_id = "telegram", int(user["telegram_id"])
-        elif user.get("vk_id"):
+        # Для теста «Оба» шлём туда, где есть id; если оба — в VK (чтобы не путать с дефолтом TG).
+        if user.get("vk_id"):
             send_channel, peer_id = "vkontakte", int(user["vk_id"])
+        elif user.get("telegram_id"):
+            send_channel, peer_id = "telegram", int(user["telegram_id"])
     else:
-        if user.get("telegram_id"):
-            send_channel, peer_id = "telegram", int(user["telegram_id"])
-        elif user.get("vk_id"):
-            send_channel, peer_id = "vkontakte", int(user["vk_id"])
+        return web.json_response({"error": "Некорректный канал"}, status=400)
 
     if not send_channel or not peer_id:
         return web.json_response(
@@ -5515,6 +5523,7 @@ async def mailing_test_page(request: web.Request) -> web.Response:
             lambda: create_followup_stub(
                 followup_html=followup_html,
                 body_html=body_html,
+                channel=send_channel,
                 created_by=_admin_role(request, config) or "owner",
             ),
         )

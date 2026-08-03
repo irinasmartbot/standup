@@ -235,7 +235,7 @@ def render_mailing_tab(
         <input type="number" name="batch_limit" min="1" max="100000" placeholder="все" lang="en">
       </label>
       <label>Не слать, если уже слали за N дней
-        <input type="number" name="exclude_sent_days" value="1" min="0" max="3650" lang="en">
+        <input type="number" name="exclude_sent_days" value="0" min="0" max="3650" lang="en">
       </label>
     </div>
     <fieldset class="mailing-row">
@@ -296,11 +296,12 @@ def render_mailing_tab(
   var btn = document.getElementById('mail-preview-btn');
   var box = document.getElementById('mail-preview');
   if (!form || !btn || !box) return;
-  var STORAGE_KEY = 'admin-mailing-draft-v4';
+  var STORAGE_KEY = 'admin-mailing-draft-v5';
   try {
     sessionStorage.removeItem('admin-mailing-draft-v1');
     sessionStorage.removeItem('admin-mailing-draft-v2');
     sessionStorage.removeItem('admin-mailing-draft-v3');
+    sessionStorage.removeItem('admin-mailing-draft-v4');
   } catch (e) {}
 
   function saveDraft(){
@@ -391,11 +392,20 @@ def render_mailing_tab(
         var interval = parseInterval(fd.get('interval_sec'));
         var n = d.capped_total || 0;
         var eta = (n > 0) ? fmt((n-1)*interval) : '0 сек';
+        var chLabel = {telegram:'Telegram', vkontakte:'VK', both:'Оба'}[fd.get('channel')] || fd.get('channel');
+        var f = d.filters || {};
+        var statuses = (f.booking_statuses || []).join(', ') || 'любой статус / без фильтра по броням';
+        var df = f.date_from || '';
+        var dt = f.date_to || '';
+        var dateLabel = df ? (df === dt || !dt ? df : (df + ' … ' + dt)) : 'без даты шоу';
         var html =
           '<b>К отправке: ' + n + '</b>' +
           ' <span class="muted">(TG ' + (d.telegram||0) + ' · VK ' + (d.vkontakte||0) +
           (d.batch_limit ? (', лимит ' + d.batch_limit) : '') +
-          ')</span><br>Примерное время: <b>' + eta + '</b> при интервале ' + interval + ' сек';
+          ')</span><br>Примерное время: <b>' + eta + '</b> при интервале ' + interval + ' сек' +
+          '<br><span class="muted">Считаем по: канал <b>' + chLabel + '</b> · ' +
+          statuses + ' · ' + dateLabel +
+          ' · exclude ' + (f.exclude_sent_days || 0) + ' дн.</span>';
         box.innerHTML = html;
         box.dataset.previewHtml = html;
         saveDraft();
@@ -471,7 +481,9 @@ def render_mailing_tab(
     if (!uid) { testStatus.innerHTML = '<span class="events-error">Сначала выберите пользователя из списка</span>'; return; }
     var fd = new FormData(form);
     fd.set('user_id', uid);
-    testStatus.innerHTML = '<span class="muted">Отправляем тест…</span>';
+    // Явно фиксируем канал (чтобы не уехать в дефолтный telegram).
+    fd.set('channel', selectedChannel());
+    testStatus.innerHTML = '<span class="muted">Отправляем тест в ' + selectedChannel() + '…</span>';
     fetch('/admin/mailing/test', {method:'POST', body: fd, credentials:'same-origin'})
       .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
       .then(function(res){
