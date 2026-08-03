@@ -269,6 +269,7 @@ def render_mailing_tab(
     </div>
     <div class="mailing-actions">
       <button type="button" id="mail-preview-btn">Посчитать аудиторию</button>
+      <button type="button" id="mail-reset-filters-btn" class="mail-secondary-btn">Сбросить фильтры</button>
       <button type="submit">Запустить рассылку</button>
     </div>
   </form>
@@ -296,12 +297,13 @@ def render_mailing_tab(
   var btn = document.getElementById('mail-preview-btn');
   var box = document.getElementById('mail-preview');
   if (!form || !btn || !box) return;
-  var STORAGE_KEY = 'admin-mailing-draft-v5';
+  var STORAGE_KEY = 'admin-mailing-draft-v6';
   try {
     sessionStorage.removeItem('admin-mailing-draft-v1');
     sessionStorage.removeItem('admin-mailing-draft-v2');
     sessionStorage.removeItem('admin-mailing-draft-v3');
     sessionStorage.removeItem('admin-mailing-draft-v4');
+    sessionStorage.removeItem('admin-mailing-draft-v5');
   } catch (e) {}
 
   function saveDraft(){
@@ -352,10 +354,7 @@ def render_mailing_tab(
         el.value = data[el.name];
       }
     }
-    if (data.__preview && String(data.__preview).indexOf('events-error') === -1) {
-      box.innerHTML = data.__preview;
-      box.dataset.previewHtml = data.__preview;
-    }
+    // Старое превью не восстанавливаем — легко принять нули за свежий расчёт.
   }
 
   function fmt(sec){
@@ -377,40 +376,87 @@ def render_mailing_tab(
   form.addEventListener('input', saveDraft);
   form.addEventListener('change', saveDraft);
 
+  var resetBtn = document.getElementById('mail-reset-filters-btn');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', function(){
+      form.querySelectorAll('input[name="booking_statuses"]').forEach(function(el){ el.checked = false; });
+      form.querySelectorAll('input[name="has_phone"]').forEach(function(el){ el.checked = false; });
+      form.querySelectorAll('input[name="exclude_blocked"]').forEach(function(el){ el.checked = true; });
+      ['date_from','date_to','batch_limit'].forEach(function(name){
+        var el = form.querySelector('[name="'+name+'"]');
+        if (el) el.value = '';
+      });
+      var ex = form.querySelector('[name="exclude_sent_days"]');
+      if (ex) ex.value = '0';
+      var both = form.querySelector('input[name="channel"][value="both"]');
+      if (both) both.checked = true;
+      box.innerHTML = '<span class="muted">Фильтры сброшены. Нажмите «Посчитать аудиторию».</span>';
+      delete box.dataset.previewHtml;
+      saveDraft();
+    });
+  }
+
   btn.addEventListener('click', function(){
     var fd = new FormData(form);
+    // Без картинки — обычный urlencoded надёжнее для preview.
+    fd.delete('photo');
     box.innerHTML = '<span class="muted">Считаем…</span>';
     fetch('/admin/mailing/preview', {method:'POST', body: fd, credentials:'same-origin'})
-      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(r){
+        return r.text().then(function(text){
+          var d = null;
+          try { d = text ? JSON.parse(text) : {}; } catch (e) { d = null; }
+          return {ok:r.ok, status:r.status, d:d, text:text};
+        });
+      })
       .then(function(res){
-        var d = res.d || {};
+        var d = res.d;
+        if (!d) {
+          box.innerHTML = '<span class="events-error">Ответ не JSON (HTTP ' + res.status +
+            '). Обновите страницу или перезапустите admin.</span>';
+          delete box.dataset.previewHtml;
+          return;
+        }
         if (!res.ok || d.error) {
-          box.innerHTML = '<span class="events-error">' + (d.error || 'Ошибка расчёта') + '</span>';
+          box.innerHTML = '<span class="events-error">' + (d.error || ('Ошибка HTTP ' + res.status)) + '</span>';
           delete box.dataset.previewHtml;
           return;
         }
         var interval = parseInterval(fd.get('interval_sec'));
         var n = d.capped_total || 0;
         var eta = (n > 0) ? fmt((n-1)*interval) : '0 сек';
-        var chLabel = {telegram:'Telegram', vkontakte:'VK', both:'Оба'}[fd.get('channel')] || fd.get('channel');
+        var sel = d.selected_channel || fd.get('channel') || 'telegram';
+        var chLabel = {telegram:'Telegram', vkontakte:'VK', both:'Оба'}[sel] || sel;
         var f = d.filters || {};
-        var statuses = (f.booking_statuses || []).join(', ') || 'любой статус / без фильтра по броням';
+        var statuses = (f.booking_statuses || []).join(', ') || 'без фильтра по броням';
         var df = f.date_from || '';
         var dt = f.date_to || '';
         var dateLabel = df ? (df === dt || !dt ? df : (df + ' … ' + dt)) : 'без даты шоу';
+        var db = d.db_totals || {};
+        var hint = '';
+        if (n === 0 && ((db.telegram||0) + (db.vkontakte||0)) > 0) {
+          hint = '<br><span class="events-error">В базе есть пользователи (TG ' +
+            (db.telegram||0) + ' · VK ' + (db.vkontakte||0) +
+            '), но фильтры отсеяли всех. Нажмите «Сбросить фильтры».</span>';
+        } else if (n === 0) {
+          hint = '<br><span class="events-error">В базе 0 пользователей с TG/VK id — проверьте DATABASE_URL у admin.</span>';
+        }
         var html =
-          '<b>К отправке: ' + n + '</b>' +
-          ' <span class="muted">(TG ' + (d.telegram||0) + ' · VK ' + (d.vkontakte||0) +
+          '<b>К отправке (' + chLabel + '): ' + n + '</b>' +
+          ' <span class="muted">(по фильтрам TG ' + (d.telegram||0) + ' · VK ' + (d.vkontakte||0) +
           (d.batch_limit ? (', лимит ' + d.batch_limit) : '') +
+          '; в базе всего TG ' + (db.telegram||0) + ' · VK ' + (db.vkontakte||0) +
           ')</span><br>Примерное время: <b>' + eta + '</b> при интервале ' + interval + ' сек' +
-          '<br><span class="muted">Считаем по: канал <b>' + chLabel + '</b> · ' +
-          statuses + ' · ' + dateLabel +
-          ' · exclude ' + (f.exclude_sent_days || 0) + ' дн.</span>';
+          '<br><span class="muted">Считаем по: ' + statuses + ' · ' + dateLabel +
+          ' · exclude ' + (f.exclude_sent_days || 0) + ' дн.</span>' + hint;
         box.innerHTML = html;
         box.dataset.previewHtml = html;
         saveDraft();
       })
-      .catch(function(){ box.innerHTML = '<span class="events-error">Не удалось посчитать</span>'; });
+      .catch(function(err){
+        box.innerHTML = '<span class="events-error">Не удалось посчитать: ' +
+          (err && err.message ? err.message : 'сеть') + '</span>';
+      });
   });
 
   form.addEventListener('submit', function(){
@@ -521,6 +567,9 @@ def render_mailing_tab(
   .mailing-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   .mailing-actions button, .inline-form button {
     padding:8px 12px; border-radius:10px; border:1px solid #111827; background:#111827; color:#fff; cursor:pointer;
+  }
+  .mailing-actions button.mail-secondary-btn {
+    background:#fff; color:#111827;
   }
   .inline-form { display:inline; margin:0; }
   .inline-form button { background:#fff; color:#111827; }

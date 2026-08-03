@@ -172,6 +172,8 @@ def _status_ts_sql() -> str:
 
 def _audience_sql(channel: str, filters: dict) -> tuple[str, dict]:
     """Build SELECT user_id, channel, peer_id for one messenger channel."""
+    if channel not in ("telegram", "vkontakte"):
+        raise ValueError("bad channel")
     params: dict[str, Any] = {"msg_channel": channel}
     where = ["TRUE"]
     if channel == "telegram":
@@ -196,10 +198,10 @@ def _audience_sql(channel: str, filters: dict) -> tuple[str, dict]:
             booking_where.append("b.status = ANY(%(booking_statuses)s)")
         use_event_dates = bool(date_from or date_to)
         if date_from:
-            params["date_from"] = date_from
+            params["date_from"] = str(date_from)
             booking_where.append("e.event_date >= %(date_from)s::date")
         if date_to:
-            params["date_to"] = date_to
+            params["date_to"] = str(date_to)
             booking_where.append("e.event_date <= %(date_to)s::date")
         from_sql = (
             "bookings b JOIN events e ON e.id = b.event_id"
@@ -226,10 +228,12 @@ def _audience_sql(channel: str, filters: dict) -> tuple[str, dict]:
             """
         )
 
+    where_sql = " AND ".join(where)
+    # channel — только whitelist-значение, в SELECT безопасно как литерал.
     sql = f"""
-        SELECT u.id AS user_id, %(msg_channel)s AS channel, {peer_expr} AS peer_id
+        SELECT u.id AS user_id, '{channel}'::text AS channel, {peer_expr} AS peer_id
         FROM users u
-        WHERE {" AND ".join(where)}
+        WHERE {where_sql}
     """
     return sql, params
 
@@ -241,24 +245,38 @@ def preview_audience(channel: str, filters: dict | None) -> dict[str, Any]:
     if channel not in CHANNELS:
         raise ValueError("bad channel")
     if not _use_postgres():
-        return {
-            "telegram": 0,
-            "vkontakte": 0,
-            "total": 0,
-            "batch_limit": filters.get("batch_limit"),
-            "filters": filters,
-        }
+        raise RuntimeError(
+            "Рассылка недоступна: нужен PostgreSQL "
+            "(BOOKINGS_SOURCE=postgres и DATABASE_URL)."
+        )
 
-    channels = ["telegram", "vkontakte"] if channel == "both" else [channel]
     counts = {"telegram": 0, "vkontakte": 0}
+    db_totals = {"telegram": 0, "vkontakte": 0}
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
-            for ch in channels:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE telegram_id IS NOT NULL)::int AS telegram,
+                    COUNT(*) FILTER (WHERE vk_id IS NOT NULL)::int AS vkontakte
+                FROM users
+                """
+            )
+            row = cur.fetchone() or {}
+            db_totals["telegram"] = int(row.get("telegram") or 0)
+            db_totals["vkontakte"] = int(row.get("vkontakte") or 0)
+
+            # Всегда оба канала в ответе — чтобы в UI не казалось, что VK «пустой»,
+            # когда выбран только Telegram.
+            for ch in ("telegram", "vkontakte"):
                 sql, params = _audience_sql(ch, filters)
                 cur.execute(f"SELECT COUNT(*) AS n FROM ({sql}) AS aud", params)
                 counts[ch] = int(cur.fetchone()["n"] or 0)
 
-    total = counts["telegram"] + counts["vkontakte"]
+    if channel == "both":
+        total = counts["telegram"] + counts["vkontakte"]
+    else:
+        total = counts[channel]
     limit = filters.get("batch_limit")
     capped = min(total, limit) if limit else total
     return {
@@ -268,6 +286,8 @@ def preview_audience(channel: str, filters: dict | None) -> dict[str, Any]:
         "capped_total": capped,
         "batch_limit": limit,
         "filters": filters,
+        "db_totals": db_totals,
+        "selected_channel": channel,
     }
 
 

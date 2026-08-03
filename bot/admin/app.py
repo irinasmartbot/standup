@@ -5369,17 +5369,20 @@ def _mailing_filters_from_form(form) -> dict:
                 statuses.append(text)
     except Exception:
         statuses = []
-    date_from = (form.get("date_from") or form.get("booking_date_from") or "").strip()
-    date_to = (form.get("date_to") or form.get("booking_date_to") or "").strip()
+    date_from = _form_text(form, "date_from") or _form_text(form, "booking_date_from")
+    date_to = _form_text(form, "date_to") or _form_text(form, "booking_date_to")
+    # type=date шлёт YYYY-MM-DD; если вдруг дд.мм.гггг — нормализуем.
+    date_from = _date_to_input(date_from) or date_from
+    date_to = _date_to_input(date_to) or date_to
     return {
         "booking_statuses": statuses,
         "date_mode": "event",
         "date_from": date_from,
         "date_to": date_to,
-        "has_phone": (form.get("has_phone") or "") in {"1", "on", "true", "yes"},
-        "exclude_blocked": (form.get("exclude_blocked") or "") in {"1", "on", "true", "yes"},
-        "exclude_sent_days": (form.get("exclude_sent_days") or "0").strip(),
-        "batch_limit": (form.get("batch_limit") or "").strip(),
+        "has_phone": _form_text(form, "has_phone") in {"1", "on", "true", "yes"},
+        "exclude_blocked": _form_text(form, "exclude_blocked") in {"1", "on", "true", "yes"},
+        "exclude_sent_days": _form_text(form, "exclude_sent_days", "0") or "0",
+        "batch_limit": _form_text(form, "batch_limit"),
     }
 
 
@@ -5391,13 +5394,24 @@ def _parse_interval_sec(raw) -> float:
         return 0.1
 
 
+def _form_text(form, key: str, default: str = "") -> str:
+    """Read a plain form field; ignore file uploads mistakenly bound to the name."""
+    try:
+        value = form.get(key)
+    except Exception:
+        return default
+    if value is None or hasattr(value, "file"):
+        return default
+    return str(value).strip()
+
+
 async def mailing_preview_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config) or not _can_resend_tickets(request, config):
-        raise web.HTTPFound("/admin/login")
+        return web.json_response({"error": "Нет доступа"}, status=403)
     form = await request.post()
-    channel = (form.get("channel") or "telegram").strip()
-    interval = _parse_interval_sec(form.get("interval_sec"))
+    channel = _form_text(form, "channel", "telegram") or "telegram"
+    interval = _parse_interval_sec(_form_text(form, "interval_sec", "0.1"))
     from bot.db.mailing import estimate_duration_sec, format_duration, preview_audience
 
     try:
