@@ -82,6 +82,24 @@ def name_confirm_keyboard(name: str = "") -> str:
     return kb.as_json()
 
 
+def pdn_consent_keyboard() -> str:
+    from bot.pdn_consent import BTN_GIVE_CONSENT, VK_CMD_CONSENT
+
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button(BTN_GIVE_CONSENT, _payload(VK_CMD_CONSENT), color="positive")
+    kb.adjust(1)
+    return kb.as_json()
+
+
+def pdn_consent_accepted_keyboard() -> str:
+    from bot.pdn_consent import BTN_CONSENT_ACCEPTED
+
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button(BTN_CONSENT_ACCEPTED, _payload("pdn_consent_done"), color="positive")
+    kb.adjust(1)
+    return kb.as_json()
+
+
 def guests_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     for n in (1, 2, 3, 4):

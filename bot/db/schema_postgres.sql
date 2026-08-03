@@ -188,3 +188,9 @@ ALTER TABLE users
 
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS consent_accepted_at TIMESTAMPTZ;
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS consent_version TEXT;

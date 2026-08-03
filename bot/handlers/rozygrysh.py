@@ -75,8 +75,16 @@ from bot.db.crud import (
     save_ticket_message_id,
     set_raffle_awaiting_screenshot,
     set_rozygrysh_used,
+    has_pdn_consent,
+    set_pdn_consent,
     update_booking_status,
     update_raffle_submission_status,
+)
+from bot.pdn_consent import (
+    BTN_CONSENT_ACCEPTED,
+    BTN_GIVE_CONSENT,
+    CB_CONSENT_RAFFLE,
+    CONSENT_TEXT,
 )
 from bot.services.sheets import load_events
 from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
@@ -1429,6 +1437,22 @@ def _phone_kb():
     )
 
 
+async def _ask_raffle_name(call: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    name = (data.get("name") or "").strip() or _full_name(call.from_user)
+    await state.update_data(name=name)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Все верно 👌", callback_data="rz_name_ok")
+    kb.button(text="Изменить", callback_data="rz_name_change")
+    kb.adjust(2)
+    await call.message.answer(
+        "Для бронирования вам нужно заполнить некоторые данные\n\n"
+        f"Ваше имя <b>{escape(name)}</b>, верно?",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
+
+
 @router.callback_query(F.data.startswith("rz_book_"))
 async def rz_book(call: CallbackQuery, state: FSMContext):
     if not await _guard_action(call):
@@ -1459,20 +1483,40 @@ async def rz_book(call: CallbackQuery, state: FSMContext):
         call.from_user.id, event["date"], exclude_time=event["time"], for_alert=True
     )
 
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Все верно 👌", callback_data="rz_name_ok")
-    kb.button(text="Изменить", callback_data="rz_name_change")
-    kb.adjust(2)
-    await call.message.answer(
-        "Для бронирования вам нужно заполнить некоторые данные\n\n"
-        f"Ваше имя <b>{escape(name)}</b>, верно?",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML",
-    )
+    if not has_pdn_consent(telegram_id=call.from_user.id):
+        kb = InlineKeyboardBuilder()
+        kb.button(text=BTN_GIVE_CONSENT, callback_data=CB_CONSENT_RAFFLE)
+        kb.adjust(1)
+        await call.message.answer(CONSENT_TEXT, reply_markup=kb.as_markup())
+        if same_day_alert:
+            await call.answer(same_day_alert, show_alert=True)
+        else:
+            await call.answer()
+        return
+
+    await _ask_raffle_name(call, state)
     if same_day_alert:
         await call.answer(same_day_alert, show_alert=True)
     else:
         await call.answer()
+
+
+@router.callback_query(F.data == CB_CONSENT_RAFFLE)
+async def pdn_consent_raffle(call: CallbackQuery, state: FSMContext):
+    set_pdn_consent(
+        telegram_id=call.from_user.id,
+        username=getattr(call.from_user, "username", None),
+        source="telegram",
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text=BTN_CONSENT_ACCEPTED, callback_data="pdn_consent_done")
+    kb.adjust(1)
+    try:
+        await call.message.edit_reply_markup(reply_markup=kb.as_markup())
+    except Exception:
+        pass
+    await call.answer()
+    await _ask_raffle_name(call, state)
 
 
 @router.callback_query(F.data == "rz_name_ok")

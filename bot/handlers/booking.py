@@ -18,6 +18,13 @@ from bot.db.crud import (
     update_booking_status, update_booking_guests, get_total_guests,
     save_ticket_message_id, save_confirm_message_id, get_last_phone,
     get_active_bookings_by_user, get_booking_format,
+    has_pdn_consent, set_pdn_consent,
+)
+from bot.pdn_consent import (
+    BTN_CONSENT_ACCEPTED,
+    BTN_GIVE_CONSENT,
+    CB_CONSENT_BOOKING,
+    CONSENT_TEXT,
 )
 from bot.services.sheets import load_events, get_event
 from bot.utils.bot_commands import refresh_user_commands
@@ -415,6 +422,32 @@ async def show_booking_rules(call: CallbackQuery):
     await call.answer()
 
 
+async def _ask_booking_name(call: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    name = (data.get("name") or "").strip()
+    if not name:
+        name = call.from_user.first_name or ""
+        if call.from_user.last_name:
+            name += f" {call.from_user.last_name}"
+        await state.update_data(name=name)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Все верно 👌", callback_data="name_confirm")
+    kb.button(text="Изменить", callback_data="name_change")
+    kb.adjust(2)
+    await call.message.answer(
+        f"Для бронирования вам нужно заполнить некоторые данные\n\nВаше имя <b>{escape(name)}</b>, верно?",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
+
+
+async def _send_pdn_consent_tg(message, callback_data: str) -> None:
+    kb = InlineKeyboardBuilder()
+    kb.button(text=BTN_GIVE_CONSENT, callback_data=callback_data)
+    kb.adjust(1)
+    await message.answer(CONSENT_TEXT, reply_markup=kb.as_markup())
+
+
 @router.callback_query(F.data.startswith("book_event_"))
 async def start_booking(call: CallbackQuery, state: FSMContext):
     event_date, event_time = call.data.replace("book_event_", "", 1).split("_", 1)
@@ -459,19 +492,42 @@ async def start_booking(call: CallbackQuery, state: FSMContext):
         call.from_user.id, event_date, exclude_time=event_time, for_alert=True
     )
 
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Все верно 👌", callback_data="name_confirm")
-    kb.button(text="Изменить", callback_data="name_change")
-    kb.adjust(2)
-    await call.message.answer(
-        f"Для бронирования вам нужно заполнить некоторые данные\n\nВаше имя <b>{name}</b>, верно?",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML",
-    )
+    if not has_pdn_consent(telegram_id=call.from_user.id):
+        await _send_pdn_consent_tg(call.message, CB_CONSENT_BOOKING)
+        if same_day_alert:
+            await call.answer(same_day_alert, show_alert=True)
+        else:
+            await call.answer()
+        return
+
+    await _ask_booking_name(call, state)
     if same_day_alert:
         await call.answer(same_day_alert, show_alert=True)
     else:
         await call.answer()
+
+
+@router.callback_query(F.data == CB_CONSENT_BOOKING)
+async def pdn_consent_booking(call: CallbackQuery, state: FSMContext):
+    set_pdn_consent(
+        telegram_id=call.from_user.id,
+        username=getattr(call.from_user, "username", None),
+        source="telegram",
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text=BTN_CONSENT_ACCEPTED, callback_data="pdn_consent_done")
+    kb.adjust(1)
+    try:
+        await call.message.edit_reply_markup(reply_markup=kb.as_markup())
+    except Exception:
+        pass
+    await call.answer()
+    await _ask_booking_name(call, state)
+
+
+@router.callback_query(F.data == "pdn_consent_done")
+async def pdn_consent_done(call: CallbackQuery):
+    await call.answer()
 
 
 def _phone_kb():

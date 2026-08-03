@@ -817,6 +817,119 @@ def set_rozygrysh_used(telegram_id=None, used: bool = True, *, vk_id=None):
         conn.commit()
 
 
+def ensure_pdn_consent_columns() -> None:
+    if not _use_postgres():
+        return
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_accepted_at TIMESTAMPTZ"
+            )
+            cur.execute(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_version TEXT"
+            )
+        conn.commit()
+
+
+def has_pdn_consent(telegram_id=None, *, vk_id=None, version: str | None = None) -> bool:
+    """True, если пользователь уже принял согласие нужной версии.
+
+    Без PostgreSQL (локальный sqlite) — True, чтобы не блокировать разработку.
+    """
+    if not _use_postgres():
+        return True
+    if telegram_id is None and vk_id is None:
+        return False
+    from bot.pdn_consent import CONSENT_VERSION
+
+    need_version = version or CONSENT_VERSION
+    ensure_pdn_consent_columns()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            if vk_id is not None:
+                cur.execute(
+                    """
+                    SELECT consent_accepted_at IS NOT NULL
+                           AND COALESCE(consent_version, '') = %s
+                    FROM users
+                    WHERE vk_id = %s
+                    """,
+                    (need_version, int(vk_id)),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT consent_accepted_at IS NOT NULL
+                           AND COALESCE(consent_version, '') = %s
+                    FROM users
+                    WHERE telegram_id = %s
+                    """,
+                    (need_version, int(telegram_id)),
+                )
+            row = cur.fetchone()
+            return bool(row and row[0])
+
+
+def set_pdn_consent(
+    telegram_id=None,
+    *,
+    vk_id=None,
+    version: str | None = None,
+    username=None,
+    source=None,
+) -> None:
+    if not _use_postgres():
+        return
+    if telegram_id is None and vk_id is None:
+        raise ValueError("telegram_id or vk_id required")
+    from bot.pdn_consent import CONSENT_VERSION
+
+    consent_version = version or CONSENT_VERSION
+    ensure_pdn_consent_columns()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            if vk_id is not None:
+                _upsert_user(
+                    cur,
+                    None,
+                    username,
+                    None,
+                    None,
+                    vk_id=int(vk_id),
+                    source=source or "vkontakte",
+                )
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET consent_accepted_at = %s,
+                        consent_version = %s,
+                        last_active_at = %s
+                    WHERE vk_id = %s
+                    """,
+                    (datetime.now(), consent_version, datetime.now(), int(vk_id)),
+                )
+            else:
+                _upsert_user(
+                    cur,
+                    int(telegram_id),
+                    username,
+                    None,
+                    None,
+                    source=source or "telegram",
+                )
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET consent_accepted_at = %s,
+                        consent_version = %s,
+                        last_active_at = %s
+                    WHERE telegram_id = %s
+                    """,
+                    (datetime.now(), consent_version, datetime.now(), int(telegram_id)),
+                )
+        conn.commit()
+
+
 def get_active_raffle_booking(telegram_id=None, *, vk_id=None):
     if not _use_postgres():
         return None
@@ -2216,6 +2329,7 @@ def anonymize_user(user_id: int) -> dict:
         return result
 
     uid = int(user_id)
+    ensure_pdn_consent_columns()
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -2376,6 +2490,8 @@ def anonymize_user(user_id: int) -> dict:
                     rozygrysh_used = false,
                     is_blocked = true,
                     blocked_at = COALESCE(blocked_at, now()),
+                    consent_accepted_at = NULL,
+                    consent_version = NULL,
                     last_active_at = now()
                 WHERE id = %s
                 """,

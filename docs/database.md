@@ -77,8 +77,12 @@
 | phone | TEXT | Номер телефона |
 | source | TEXT | Источник: telegram / vkontakte |
 | rozygrysh_used | INTEGER | Использовал розыгрыш: 0 = нет, 1 = да |
+| consent_accepted_at | TIMESTAMPTZ | Когда принято согласие на обработку ПДн |
+| consent_version | TEXT | Версия текста согласия (`consent_v1_short`) |
 | created_at | TEXT | Дата первого обращения |
 | last_active_at | TEXT | Дата последней активности |
+
+Согласие спрашивается один раз перед именем/телефоном (бронь и розыгрыш, TG и VK). При смене версии в `bot/pdn_consent.py` экран показывают снова.
 
 ### Логика `rozygrysh_used`
 

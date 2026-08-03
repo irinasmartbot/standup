@@ -694,6 +694,8 @@ def _user_from_directory_row(row: dict) -> dict:
         "telegram_id": row.get("telegram_id"),
         "vk_id": row.get("vk_id"),
         "source": source,
+        "consent_accepted_at": row.get("consent_accepted_at"),
+        "consent_version": row.get("consent_version") or "",
         "bookings": [],
         "status_counts": counts,
         "guests_confirmed": 0,
@@ -810,6 +812,9 @@ def fetch_one_directory_user(config: AdminConfig, user_id: int) -> dict | None:
     if not _use_postgres(config) or not user_id:
         return None
     try:
+        from bot.db.crud import ensure_pdn_consent_columns
+
+        ensure_pdn_consent_columns()
         with psycopg.connect(config.database_url, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -822,6 +827,8 @@ def fetch_one_directory_user(config: AdminConfig, user_id: int) -> dict | None:
                         u.username,
                         u.phone,
                         u.source,
+                        u.consent_accepted_at,
+                        u.consent_version,
                         COUNT(b.id) AS bookings_total,
                         COUNT(b.id) FILTER (WHERE b.status = 'booked') AS cnt_booked,
                         COUNT(b.id) FILTER (WHERE b.status = 'confirmed') AS cnt_confirmed,
@@ -2592,11 +2599,21 @@ def _users_tab(
                     "</form>"
                     "</div>"
                 )
+        if user.get("consent_accepted_at"):
+            consent_ver = (user.get("consent_version") or "").strip()
+            consent_line = (
+                f'<p><b>Согласие на ПДн:</b> да · {_h(_fmt_msk(user.get("consent_accepted_at")))}'
+                + (f' · {_h(consent_ver)}' if consent_ver else "")
+                + "</p>"
+            )
+        else:
+            consent_line = '<p><b>Согласие на ПДн:</b> нет</p>'
         detail = (
             '<section class="card user-detail">'
             f'<h2>{_h(user["name"] or "Без имени")}</h2>'
             f'<p class="muted">user_id: {_h(user.get("user_id") or "—")} · {_h(user["phone"])} · '
             f'@{_h(user["username"])} · источник: {_h(user["source"])}</p>'
+            f"{consent_line}"
             '<div class="mini-metrics">'
             f'<span>Всего броней: <b>{len(user["bookings"])}</b></span>'
             f'<span>Активных: <b>{user["status_counts"].get("booked", 0)}</b></span>'

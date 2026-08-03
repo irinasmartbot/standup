@@ -37,8 +37,11 @@ from bot.db.crud import (
     ensure_user,
     get_booking,
     get_last_phone,
+    has_pdn_consent,
+    set_pdn_consent,
     update_booking_status,
 )
+from bot.pdn_consent import CONSENT_TEXT, VK_CMD_CONSENT
 from bot.handlers.booking import BOOKING_RULES_TEXT as TG_BOOKING_RULES_TEXT
 from bot.handlers.formats import (
     BUY_TICKET_TEXT as TG_BUY_TICKET_TEXT,
@@ -830,7 +833,25 @@ class VKBotApp:
         if same_day_alert:
             await self.client.send_message(peer_id, same_day_alert)
 
-        await self._ask_name(peer_id, vk_id, self.booking_sessions[vk_id])
+        session = self.booking_sessions[vk_id]
+        if not await self._maybe_ask_pdn_consent(peer_id, vk_id, session):
+            return
+        await self._ask_name(peer_id, vk_id, session)
+
+    async def _maybe_ask_pdn_consent(
+        self, peer_id: int, vk_id: int, session: dict
+    ) -> bool:
+        """False = показали экран согласия, цепочку пока не продолжаем."""
+        if has_pdn_consent(vk_id=vk_id):
+            return True
+        session["step"] = "waiting_pdn_consent"
+        await self._send_text(
+            peer_id,
+            CONSENT_TEXT,
+            keyboard=vk_booking.pdn_consent_keyboard(),
+            replace_nav=False,
+        )
+        return False
 
     async def _ask_name(self, peer_id: int, vk_id: int, session: dict) -> None:
         """Как в TG: предложить имя из профиля VK или попросить ввести."""
@@ -1286,6 +1307,25 @@ class VKBotApp:
         if cmd == "booking_get_ticket":
             await self._issue_ticket(peer_id, int(payload.get("booking_id") or 0))
             return True
+        if cmd == "pdn_consent_done":
+            return True
+        if cmd == VK_CMD_CONSENT:
+            if not session:
+                await self._send_text(
+                    peer_id,
+                    "Сессия бронирования сброшена. Выбери дату ещё раз 😊",
+                    replace_nav=False,
+                )
+                return True
+            set_pdn_consent(vk_id=vk_id, source=VK_CHANNEL)
+            await self._send_text(
+                peer_id,
+                CONSENT_TEXT,
+                keyboard=vk_booking.pdn_consent_accepted_keyboard(),
+                replace_nav=True,
+            )
+            await self._ask_name(peer_id, vk_id, session)
+            return True
         if cmd in {"booking_name_ok", "booking_name_change"}:
             if not session:
                 await self._send_text(
@@ -1366,6 +1406,14 @@ class VKBotApp:
             return True
 
         step = session.get("step")
+        if step == "waiting_pdn_consent":
+            await self._send_text(
+                peer_id,
+                CONSENT_TEXT,
+                keyboard=vk_booking.pdn_consent_keyboard(),
+                replace_nav=False,
+            )
+            return True
         if step == vk_booking.STEP_NAME and text:
             session["name"] = text.strip()
             await self._ask_phone(peer_id, vk_id, session)
@@ -2617,6 +2665,8 @@ class VKBotApp:
         session["event_format"] = "best"
         session["guests_fixed"] = 1
         self._track(vk_id, EVENT_BOOKING_START, props={"format": "rozygrysh"})
+        if not await self._maybe_ask_pdn_consent(peer_id, vk_id, session):
+            return
         await self._ask_name_or_phone_raffle(peer_id, vk_id, session)
 
     async def _ask_name_or_phone_raffle(self, peer_id: int, vk_id: int, session: dict) -> None:

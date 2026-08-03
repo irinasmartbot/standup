@@ -33,7 +33,7 @@ jobs:
           git reset --hard origin/dev
           git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc'
           /home/standup/app/venv/bin/python -m pip install -r requirements.txt
-          /home/standup/app/venv/bin/python -c "from bot.db.crud import ensure_help_tables, ensure_raffle_tables; from bot.db.analytics import ensure_analytics_tables; ensure_raffle_tables(); ensure_help_tables(); ensure_analytics_tables()"
+          /home/standup/app/venv/bin/python -c "from bot.db.crud import ensure_help_tables, ensure_raffle_tables, ensure_pdn_consent_columns; from bot.db.analytics import ensure_analytics_tables; ensure_raffle_tables(); ensure_help_tables(); ensure_analytics_tables(); ensure_pdn_consent_columns()"
           /home/standup/app/venv/bin/python -c "import main"
           /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format proverka --source-sheet "Проверка материала"
           /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format best --source-sheet "StandUp BEST"
@@ -53,6 +53,28 @@ jobs:
             )
           else
             echo "standup-admin.service not found; skipping restart"
+          fi
+          # VK-бот — отдельная копия репозитория (/home/standup/vk-app), тот же origin/dev.
+          if [ -d /home/standup/vk-app/.git ]; then
+            cd /home/standup/vk-app
+            git fetch origin dev
+            git checkout dev
+            git reset --hard origin/dev
+            git clean -fd -e .env -e venv -e '__pycache__' -e '*.pyc' -e 'data/storage'
+            /home/standup/vk-app/venv/bin/python -m pip install -r requirements.txt
+            /home/standup/vk-app/venv/bin/python -c "import vk_bot"
+            if sudo /usr/bin/systemctl list-unit-files standup-vk-bot.service --no-legend | grep -q standup-vk-bot.service; then
+              sudo /usr/bin/systemctl restart standup-vk-bot
+              sleep 2
+              sudo /usr/bin/systemctl is-active --quiet standup-vk-bot || (
+                sudo /usr/bin/journalctl -u standup-vk-bot -n 80 --no-pager
+                exit 1
+              )
+            else
+              echo "standup-vk-bot.service not found; skipping restart"
+            fi
+          else
+            echo "vk-app not found; skipping VK deploy"
           fi
           if sudo /usr/bin/systemctl list-unit-files standup-events-sync.service --no-legend | grep -q standup-events-sync.service; then
             sudo /usr/bin/systemctl disable --now standup-events-sync || echo "standup-events-sync stop/disable failed; continuing"
