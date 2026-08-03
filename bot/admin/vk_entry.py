@@ -148,8 +148,21 @@ def _gift_event_label(event: dict[str, Any]) -> str:
 
 async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int) -> None:
     """Сразу ветка бота — без сообщения «нажмите кнопку ниже»."""
+    from bot.db.analytics import EVENT_BOT_START, EVENT_BRANCH_PROVERKA, track_event
     from bot.handlers.formats import FORMATS_TEXT
     from bot.vk import raffle as vk_raffle
+
+    flow = FLOWS.get(flow_key) or {}
+    track_event(
+        EVENT_BOT_START,
+        vk_id=int(vk_id),
+        channel="vkontakte",
+        props={
+            "payload": str(flow.get("ref") or flow_key),
+            "via": "mini_app_flow",
+            "flow": flow_key,
+        },
+    )
 
     if flow_key == "raffle":
         ok, reason, booking_id = vk_raffle.can_enter_raffle(vk_id)
@@ -168,6 +181,12 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
         return
 
     if flow_key == "booking":
+        track_event(
+            EVENT_BRANCH_PROVERKA,
+            vk_id=int(vk_id),
+            channel="vkontakte",
+            props={"via": "mini_app_flow"},
+        )
         await client.send_message(vk_id, FORMATS_TEXT, keyboard=_formats_keyboard())
         return
 

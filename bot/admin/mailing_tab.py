@@ -62,7 +62,7 @@ def render_mailing_tab(
         eta = format_duration(estimate_duration_sec(left, interval)) if status == "running" else "—"
         actions = []
         actions.append(
-            f'<a class="pill" href="/admin?tab=mailing&campaign={cid}">Получатели</a>'
+            f'<a class="pill" href="/admin?tab=mailing&campaign={cid}">Текст и статистика</a>'
         )
         if status in ("queued", "running"):
             actions.append(
@@ -152,11 +152,33 @@ def render_mailing_tab(
                 f"<td class='muted'>{_h(r.get('error') or '')}</td>"
                 "</tr>"
             )
+        sent = int(detail.get("sent_count") or 0)
+        failed = int(detail.get("failed_count") or 0)
+        total_c = int(detail.get("total_count") or 0)
+        btn = (detail.get("button_text") or "").strip()
+        btn_url = (detail.get("button_url") or "").strip()
+        follow = (detail.get("followup_html") or "").strip()
+        body = detail.get("body_html") or ""
+        preview_off = bool(detail.get("disable_link_preview"))
+        msg_meta = (
+            f"<p class='muted'>Кнопка: {_h(btn) or '—'} · "
+            f"URL: {_h(btn_url) or 'нет'} · "
+            f"превью ссылок: {'выкл' if preview_off else 'вкл'}</p>"
+        )
+        follow_block = (
+            f"<p><b>После кнопки:</b></p><div class='mailing-msg-preview'>{follow}</div>"
+            if follow
+            else ""
+        )
         detail_html = (
             '<section class="card">'
             f"<h2>Кампания #{_h(cid)} · {_h(detail.get('title'))}</h2>"
             f"<p class='muted'>Статус: {_h(STATUS_LABELS.get(detail.get('status'), detail.get('status')))} · "
             f"канал {_h(detail.get('channel'))} · интервал {_h(detail.get('interval_sec'))} сек</p>"
+            f"<p><b>Статистика:</b> отправлено {sent} / {total_c} · ошибки {failed}</p>"
+            "<p><b>Текст сообщения:</b></p>"
+            f"<div class='mailing-msg-preview'>{body or '<span class=\"muted\">(пусто)</span>'}</div>"
+            f"{msg_meta}{follow_block}"
             f'<div class="counters">{"".join(status_pills)}</div>'
             f'<div class="users-pager">{prev}'
             f'<span class="muted">стр. {page}/{pages} · {total}</span>{next_}</div>'
@@ -199,6 +221,11 @@ def render_mailing_tab(
     <label>После нажатия кнопки (если нет URL) — доп. текст
       <textarea name="followup_html" rows="3" placeholder="Отлично! Вот детали..."></textarea>
     </label>
+    <fieldset class="mailing-row">
+      <legend>Превью ссылок в Telegram</legend>
+      <label><input type="checkbox" name="disable_link_preview" value="1"> Отключить превью ссылки в письме</label>
+      <p class="muted" style="margin:6px 0 0">Работает для TG. В VK превью управляет сам мессенджер.</p>
+    </fieldset>
     <div class="mailing-grid">
       <label>Интервал, сек
         <input type="number" name="interval_sec" value="0.1" min="0" max="60" step="0.05" id="mail-interval" lang="en">
@@ -224,15 +251,13 @@ def render_mailing_tab(
       <label><input type="checkbox" name="booking_statuses" value="annulled"> Аннулировано</label>
     </fieldset>
     <fieldset class="mailing-row">
-      <legend>Период дат для статуса выше</legend>
-      <p class="muted" style="margin:0 0 8px">С какого по какое — диапазон. Выберите, <b>какая</b> дата имеется в виду:</p>
-      <label><input type="radio" name="date_mode" value="event" checked> Дата шоу (день мероприятия в афише)</label>
-      <label><input type="radio" name="date_mode" value="status"> Дата статуса (когда стала бронь / билет / отмена)</label>
-      <div class="mailing-grid" style="margin-top:10px">
-        <label>С даты
+      <legend>Дата шоу для статуса выше</legend>
+      <p class="muted" style="margin:0 0 8px">Выберите дату или диапазон дат (день мероприятия в афише). Одна дата = только этот день.</p>
+      <div class="mailing-grid">
+        <label>Дата
           <input type="date" name="date_from">
         </label>
-        <label>По дату
+        <label>По дату (если диапазон)
           <input type="date" name="date_to">
         </label>
       </div>
@@ -269,8 +294,11 @@ def render_mailing_tab(
   var btn = document.getElementById('mail-preview-btn');
   var box = document.getElementById('mail-preview');
   if (!form || !btn || !box) return;
-  var STORAGE_KEY = 'admin-mailing-draft-v2';
-  try { sessionStorage.removeItem('admin-mailing-draft-v1'); } catch (e) {}
+  var STORAGE_KEY = 'admin-mailing-draft-v3';
+  try {
+    sessionStorage.removeItem('admin-mailing-draft-v1');
+    sessionStorage.removeItem('admin-mailing-draft-v2');
+  } catch (e) {}
 
   function saveDraft(){
     var data = {};
@@ -489,6 +517,10 @@ def render_mailing_tab(
     border:1px solid var(--line); border-radius:10px; background:#fff; cursor:pointer;
   }
   .mail-test-item input { margin-top:3px; }
+  .mailing-msg-preview {
+    margin:8px 0 14px; padding:12px 14px; background:#f8fafc; border:1px solid var(--line);
+    border-radius:12px; white-space:pre-wrap; word-break:break-word; font-size:14px;
+  }
   @media (max-width:900px){ .mailing-grid { grid-template-columns:1fr; } }
 </style>
 """

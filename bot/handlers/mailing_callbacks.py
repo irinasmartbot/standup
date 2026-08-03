@@ -21,11 +21,22 @@ async def mailing_followup(call: CallbackQuery) -> None:
         return
     text = get_campaign_followup(int(raw))
     if not text:
-        await call.answer("Сообщение недоступно", show_alert=True)
+        await call.answer(
+            "Текст после кнопки не найден. Переотправьте тест/рассылку.",
+            show_alert=True,
+        )
         return
     try:
-        await call.message.answer(text, parse_mode="HTML")
         await call.answer()
+        if call.message:
+            try:
+                await call.message.answer(text, parse_mode="HTML")
+            except Exception:
+                # Если HTML битый — шлём как обычный текст.
+                await call.message.answer(text)
     except Exception:
         logger.exception("mailing followup failed campaign=%s", raw)
-        await call.answer("Не удалось отправить", show_alert=True)
+        try:
+            await call.answer("Не удалось отправить", show_alert=True)
+        except Exception:
+            pass

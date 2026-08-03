@@ -5373,7 +5373,7 @@ def _mailing_filters_from_form(form) -> dict:
     date_to = (form.get("date_to") or form.get("booking_date_to") or "").strip()
     return {
         "booking_statuses": statuses,
-        "date_mode": (form.get("date_mode") or "event").strip(),
+        "date_mode": "event",
         "date_from": date_from,
         "date_to": date_to,
         "has_phone": (form.get("has_phone") or "") in {"1", "on", "true", "yes"},
@@ -5446,6 +5446,12 @@ async def mailing_test_page(request: web.Request) -> web.Response:
     button_text = (form.get("button_text") or "").strip()
     button_url = (form.get("button_url") or "").strip()
     followup_html = (form.get("followup_html") or "").strip()
+    disable_link_preview = (form.get("disable_link_preview") or "") in {
+        "1",
+        "on",
+        "true",
+        "yes",
+    }
 
     photo_path = None
     photo = form.get("photo")
@@ -5502,6 +5508,7 @@ async def mailing_test_page(request: web.Request) -> web.Response:
         )
 
     campaign_id = 0
+    # Кнопка без URL: всегда сохраняем follow-up в БД, иначе callback mail_fu:* пустой.
     if button_text and followup_html and not button_url:
         campaign_id = await asyncio.get_running_loop().run_in_executor(
             None,
@@ -5511,6 +5518,11 @@ async def mailing_test_page(request: web.Request) -> web.Response:
                 created_by=_admin_role(request, config) or "owner",
             ),
         )
+    elif button_text and not button_url and not followup_html:
+        return web.json_response(
+            {"error": "Для кнопки без URL нужен текст «после нажатия»"},
+            status=400,
+        )
 
     campaign = {
         "id": campaign_id,
@@ -5519,6 +5531,7 @@ async def mailing_test_page(request: web.Request) -> web.Response:
         "button_text": button_text,
         "button_url": button_url,
         "followup_html": followup_html,
+        "disable_link_preview": disable_link_preview,
     }
     recipient = {
         "channel": send_channel,
@@ -5553,6 +5566,12 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     button_text = (form.get("button_text") or "").strip()
     button_url = (form.get("button_url") or "").strip()
     followup_html = (form.get("followup_html") or "").strip()
+    disable_link_preview = (form.get("disable_link_preview") or "") in {
+        "1",
+        "on",
+        "true",
+        "yes",
+    }
     interval = _parse_interval_sec(form.get("interval_sec"))
 
     photo_path = None
@@ -5594,6 +5613,7 @@ async def mailing_create_page(request: web.Request) -> web.Response:
                 button_text=button_text,
                 button_url=button_url,
                 followup_html=followup_html,
+                disable_link_preview=disable_link_preview,
                 created_by=_admin_role(request, config) or "owner",
                 start=True,
             ),
