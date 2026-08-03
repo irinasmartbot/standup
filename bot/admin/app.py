@@ -704,7 +704,7 @@ def _user_from_directory_row(row: dict) -> dict:
     }
 
 
-def _users_directory_where(q: str, status: str) -> tuple[str, dict]:
+def _users_directory_where(q: str, status: str, channel: str = "") -> tuple[str, dict]:
     where = ["TRUE"]
     params: dict = {}
     q = (q or "").strip()
@@ -733,6 +733,19 @@ def _users_directory_where(q: str, status: str) -> tuple[str, dict]:
             "WHERE b2.user_id = u.id AND b2.status = %(status)s"
             ")"
         )
+    if channel in ("telegram", "vkontakte"):
+        params["channel"] = channel
+        # Как в карточке: source, иначе vk_id → vkontakte, иначе telegram.
+        where.append(
+            "("
+            "CASE "
+            "WHEN NULLIF(TRIM(COALESCE(u.source, '')), '') IS NOT NULL "
+            "THEN TRIM(u.source) "
+            "WHEN u.vk_id IS NOT NULL THEN 'vkontakte' "
+            "ELSE 'telegram' "
+            "END"
+            ") = %(channel)s"
+        )
     return " AND ".join(where), params
 
 
@@ -742,6 +755,7 @@ def fetch_users_page(
     q: str = "",
     page: int = 1,
     status: str = "",
+    channel: str = "",
 ) -> dict:
     """Paginated users directory with search — safe for 10k+ guests."""
     empty = {
@@ -755,7 +769,7 @@ def fetch_users_page(
     if not _use_postgres(config):
         return empty
     page = max(1, _parse_int(page, 1))
-    where_sql, base_params = _users_directory_where(q, status)
+    where_sql, base_params = _users_directory_where(q, status, channel)
     try:
         with psycopg.connect(config.database_url, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
@@ -1987,6 +2001,17 @@ def _status_filter(filters: dict) -> str:
     return "".join(links)
 
 
+def _users_channel_filter(filters: dict) -> str:
+    links = []
+    for key, label in (("", "Все каналы"), ("telegram", "Telegram"), ("vkontakte", "VK")):
+        active = "active" if (filters.get("channel") or "") == key else ""
+        links.append(
+            f'<a class="pill {active}" '
+            f'href="{_query_link(filters, tab="users", channel=key, page="", u="")}">{label}</a>'
+        )
+    return "".join(links)
+
+
 def _date_tab(dashboard: dict, filters: dict) -> str:
     date_value = filters.get("date", "")
     if not date_value:
@@ -2528,12 +2553,15 @@ def _users_tab(
         f"{next_link}"
         "</div>"
     )
+    channel = filters.get("channel") or ""
     search_bar = (
         '<div class="filters users-filters">'
+        f"<div>{_users_channel_filter(filters)}</div>"
         f"<div>{_status_filter(filters)}</div>"
         '<form method="get" action="/admin" class="users-search-form">'
         '<input type="hidden" name="tab" value="users">'
         f'<input type="hidden" name="status" value="{_h(status)}">'
+        f'<input type="hidden" name="channel" value="{_h(channel)}">'
         f'<input type="search" name="q" value="{_h(q_val)}" '
         'placeholder="Имя, @username или телефон" '
         'autocomplete="off">'
@@ -3481,6 +3509,7 @@ def render_admin_html(
     .tone-cmd-channel {{ background:#f0fdf4; border-color:#bbf7d0; }}
     .tone-cmd-channel .command-block-cmd {{ color:#15803d; }}
     .users-filters {{ margin:12px 0 14px; }}
+    .users-filters > div {{ margin-bottom:8px; }}
     .users-search-form {{
       display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px;
     }}
@@ -4526,6 +4555,7 @@ async def admin_page(request: web.Request) -> web.Response:
                 q=filters.get("q") or "",
                 page=filters.get("page") or 1,
                 status=filters.get("status") or "",
+                channel=filters.get("channel") or "",
             )
             users_map = {u["key"]: u for u in page_data["users"]}
             list_keys = [u["key"] for u in page_data["users"]]
