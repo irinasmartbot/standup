@@ -5,12 +5,13 @@ Rules:
 - do NOT merge TG/VK by phone;
 - phone/name/username are optional extras.
 
+Memory-safe: streams CSV files and upserts in batches (no full-file load).
+
 Default is dry-run (no DB writes). Pass --apply to upsert into Postgres.
 
 Examples:
-  python scripts/import_users_from_salebot.py
-  python scripts/import_users_from_salebot.py база/*.csv
-  python scripts/import_users_from_salebot.py --apply
+  python scripts/import_users_from_salebot.py /home/standup/import_salebot
+  python scripts/import_users_from_salebot.py /home/standup/import_salebot --apply
 """
 
 from __future__ import annotations
@@ -25,7 +26,6 @@ from pathlib import Path
 import psycopg
 
 ROOT = Path(__file__).resolve().parents[1]
-# Cyrillic folder name via escapes — safer on Windows source encodings.
 DEFAULT_DIR = ROOT / "\u0431\u0430\u0437\u0430"
 
 ID_KEY = "\u0418\u0434\u0435\u043d\u0442\u0438\u0444\u0438\u043a\u0430\u0442\u043e\u0440 \u0432\u043d\u0443\u0442\u0440\u0438 \u043c\u0435\u0441\u0441\u0435\u043d\u0434\u0436\u0435\u0440\u0430"
@@ -82,18 +82,23 @@ def load_env_file(path: str | Path = ".env") -> None:
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def open_csv(path: Path):
-    raw = path.read_bytes()
+def detect_encoding(path: Path) -> str:
+    sample = path.read_bytes()[:8192]
     for encoding in ("utf-8-sig", "cp1251", "utf-8"):
         try:
-            text = raw.decode(encoding)
-            break
+            sample.decode(encoding)
+            return encoding
         except UnicodeDecodeError:
             continue
-    else:
-        raise UnicodeDecodeError("utf-8", raw, 0, 1, f"Cannot decode {path}")
-    # csv needs an iterator of lines
-    return csv.DictReader(text.splitlines(), delimiter=";")
+    return "cp1251"
+
+
+def iter_csv_rows(path: Path):
+    encoding = detect_encoding(path)
+    with path.open("r", encoding=encoding, newline="") as fh:
+        reader = csv.DictReader(fh, delimiter=";")
+        for row in reader:
+            yield row
 
 
 def norm_phone(row: dict) -> str | None:
@@ -128,77 +133,83 @@ def norm_messenger(value: str | None) -> str | None:
     text = (value or "").strip().lower()
     if "telegram" in text or text == "tg":
         return "telegram"
-    # "вконтакте" / "контакт"
     if "\u043a\u043e\u043d\u0442\u0430\u043a\u0442" in text or text in {"vk", "vkontakte"}:
         return "vkontakte"
     return None
 
 
-def prefer(old: str | None, new: str | None) -> str | None:
-    return old or new
+def row_to_client(row: dict, stats: Counter) -> dict | None:
+    stats["rows"] += 1
+    raw_id = (row.get(ID_KEY) or "").strip()
+    messenger = norm_messenger(row.get(MSG_KEY))
+    if not raw_id:
+        stats["skip_empty_id"] += 1
+        return None
+    if not raw_id.isdigit():
+        stats["skip_bad_id"] += 1
+        return None
+    if messenger is None:
+        stats["skip_bad_messenger"] += 1
+        return None
+
+    mid = int(raw_id)
+    phone = norm_phone(row)
+    return {
+        "messenger": messenger,
+        "messenger_id": mid,
+        "telegram_id": mid if messenger == "telegram" else None,
+        "vk_id": mid if messenger == "vkontakte" else None,
+        "username": norm_username(row, messenger),
+        "name": norm_name(row),
+        "phone": phone,
+        "source": "import",
+    }
 
 
-def parse_files(paths: list[Path]) -> tuple[list[dict], Counter]:
-    """Parse CSVs into unique clients keyed by (messenger, id)."""
-    clients: dict[tuple[str, int], dict] = {}
+def process_files(
+    paths: list[Path],
+    *,
+    database_url: str | None = None,
+    apply: bool = False,
+    batch_size: int = 200,
+) -> tuple[Counter, Counter]:
     stats: Counter = Counter()
-
-    for path in paths:
-        stats["files"] += 1
-        reader = open_csv(path)
-        for row in reader:
-            stats["rows"] += 1
-            raw_id = (row.get(ID_KEY) or "").strip()
-            messenger = norm_messenger(row.get(MSG_KEY))
-            if not raw_id:
-                stats["skip_empty_id"] += 1
-                continue
-            if not raw_id.isdigit():
-                stats["skip_bad_id"] += 1
-                continue
-            if messenger is None:
-                stats["skip_bad_messenger"] += 1
-                continue
-
-            mid = int(raw_id)
-            key = (messenger, mid)
-            phone = norm_phone(row)
-            name = norm_name(row)
-            username = norm_username(row, messenger)
-
-            if key in clients:
-                stats["duplicate_rows_merged"] += 1
-                current = clients[key]
-                current["phone"] = prefer(current.get("phone"), phone)
-                current["name"] = prefer(current.get("name"), name)
-                current["username"] = prefer(current.get("username"), username)
-                continue
-
-            clients[key] = {
-                "messenger": messenger,
-                "messenger_id": mid,
-                "telegram_id": mid if messenger == "telegram" else None,
-                "vk_id": mid if messenger == "vkontakte" else None,
-                "username": username,
-                "name": name,
-                "phone": phone,
-                "source": "import",
-            }
-            stats[f"unique_{messenger}"] += 1
-            if phone:
-                stats[f"with_phone_{messenger}"] += 1
-            else:
-                stats[f"without_phone_{messenger}"] += 1
-
-    return list(clients.values()), stats
-
-
-def apply_users(database_url: str, clients: list[dict]) -> Counter:
-    result: Counter = Counter()
+    apply_stats: Counter = Counter()
+    seen: set[tuple[str, int]] = set()
     now = datetime.now()
-    with psycopg.connect(database_url) as conn:
-        with conn.cursor() as cur:
-            for client in clients:
+
+    conn = None
+    cur = None
+    if apply:
+        if not database_url:
+            raise SystemExit("DATABASE_URL is not set. Add it to .env or pass --database-url.")
+        conn = psycopg.connect(database_url)
+        cur = conn.cursor()
+
+    try:
+        for path in paths:
+            stats["files"] += 1
+            print(f"reading {path} ...", flush=True)
+            for row in iter_csv_rows(path):
+                client = row_to_client(row, stats)
+                if client is None:
+                    continue
+
+                key = (client["messenger"], client["messenger_id"])
+                if key in seen:
+                    stats["duplicate_rows_merged"] += 1
+                    continue
+                seen.add(key)
+
+                stats[f"unique_{client['messenger']}"] += 1
+                if client["phone"]:
+                    stats[f"with_phone_{client['messenger']}"] += 1
+                else:
+                    stats[f"without_phone_{client['messenger']}"] += 1
+
+                if not apply or cur is None:
+                    continue
+
                 params = {
                     "telegram_id": client["telegram_id"],
                     "vk_id": client["vk_id"],
@@ -214,17 +225,29 @@ def apply_users(database_url: str, clients: list[dict]) -> Counter:
                     cur.execute(UPSERT_VK_SQL, params)
                 inserted = bool(cur.fetchone()[0])
                 if inserted:
-                    result["inserted"] += 1
-                    result[f"inserted_{client['messenger']}"] += 1
+                    apply_stats["inserted"] += 1
+                    apply_stats[f"inserted_{client['messenger']}"] += 1
                 else:
-                    result["updated"] += 1
-                    result[f"updated_{client['messenger']}"] += 1
-        conn.commit()
-    return result
+                    apply_stats["updated"] += 1
+                    apply_stats[f"updated_{client['messenger']}"] += 1
+
+                done = apply_stats["inserted"] + apply_stats["updated"]
+                if done % batch_size == 0:
+                    conn.commit()
+                    print(f"  upserted {done} ...", flush=True)
+
+        if apply and conn is not None:
+            conn.commit()
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()
+
+    return stats, apply_stats
 
 
 def discover_default_csvs() -> list[Path]:
-    """Find Salebot CSVs even when Windows mangles Cyrillic folder names."""
     if DEFAULT_DIR.is_dir():
         paths = sorted(DEFAULT_DIR.glob("*.csv"))
         if paths:
@@ -303,21 +326,20 @@ def main() -> None:
         action="store_true",
         help="Write to Postgres. Without this flag only dry-run stats are printed.",
     )
+    parser.add_argument("--batch-size", type=int, default=200)
     args = parser.parse_args()
 
     paths = resolve_paths(args.paths)
-    clients, stats = parse_files(paths)
-    print_stats(stats)
+    stats, apply_stats = process_files(
+        paths,
+        database_url=args.database_url,
+        apply=args.apply,
+        batch_size=max(1, int(args.batch_size)),
+    )
+    print_stats(stats, apply_stats if args.apply else None)
 
     if not args.apply:
         print("dry-run only (pass --apply to write into DATABASE_URL)")
-        return
-
-    if not args.database_url:
-        raise SystemExit("DATABASE_URL is not set. Add it to .env or pass --database-url.")
-
-    apply_stats = apply_users(args.database_url, clients)
-    print_stats(stats, apply_stats)
 
 
 if __name__ == "__main__":
