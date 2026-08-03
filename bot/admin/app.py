@@ -3499,8 +3499,13 @@ def render_admin_html(
     </div>"""
     refresh_meta = (
         ""
-        if is_db or is_audit or is_analytics or is_events or tab == "users"
+        if is_db or is_audit or is_analytics or is_events or is_mailing or tab == "users"
         else '<meta http-equiv="refresh" content="30">'
+    )
+    header_note = (
+        "Без автообновления — форма рассылки не сбрасывается"
+        if is_mailing
+        else "Автообновление каждые 30 секунд"
     )
     return f"""<!doctype html>
 <html lang="ru">
@@ -4223,7 +4228,7 @@ def render_admin_html(
 <body class="tab-{_h(tab)} {_h(role_class)}">
   <header>
     <h1>Стендап бронирование</h1>
-    <p>Автообновление каждые 30 секунд · источник данных: {_h(source_label)} · <a href="/admin/logout">выйти</a></p>
+    <p>{_h(header_note)} · источник данных: {_h(source_label)} · <a href="/admin/logout">выйти</a></p>
   </header>
   <main>
     <nav class="tabs">{_tabs(filters, can_view_ops=can_view_ops, can_view_db=can_view_db, can_send_mailing=can_resend_tickets)}</nav>

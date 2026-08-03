@@ -245,6 +245,59 @@ def render_mailing_tab(
   var btn = document.getElementById('mail-preview-btn');
   var box = document.getElementById('mail-preview');
   if (!form || !btn || !box) return;
+  var STORAGE_KEY = 'admin-mailing-draft-v1';
+
+  function saveDraft(){
+    var data = {};
+    var els = form.querySelectorAll('input, textarea, select');
+    for (var i = 0; i < els.length; i++){
+      var el = els[i];
+      if (!el.name || el.type === 'file') continue;
+      if (el.type === 'radio') {
+        if (el.checked) data[el.name] = el.value;
+        continue;
+      }
+      if (el.type === 'checkbox') {
+        if (!data[el.name]) data[el.name] = [];
+        if (el.checked) data[el.name].push(el.value);
+        continue;
+      }
+      data[el.name] = el.value;
+    }
+    if (box && box.dataset.previewHtml) data.__preview = box.dataset.previewHtml;
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (e) {}
+  }
+
+  function restoreDraft(){
+    var raw;
+    try { raw = sessionStorage.getItem(STORAGE_KEY); } catch (e) { return; }
+    if (!raw) return;
+    var data;
+    try { data = JSON.parse(raw); } catch (e) { return; }
+    if (!data || typeof data !== 'object') return;
+    var els = form.querySelectorAll('input, textarea, select');
+    for (var i = 0; i < els.length; i++){
+      var el = els[i];
+      if (!el.name || el.type === 'file') continue;
+      if (el.type === 'radio') {
+        el.checked = data[el.name] === el.value;
+        continue;
+      }
+      if (el.type === 'checkbox') {
+        var list = data[el.name] || [];
+        el.checked = list.indexOf(el.value) !== -1;
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(data, el.name)) {
+        el.value = data[el.name];
+      }
+    }
+    if (data.__preview) {
+      box.innerHTML = data.__preview;
+      box.dataset.previewHtml = data.__preview;
+    }
+  }
+
   function fmt(sec){
     sec = Math.round(sec||0);
     if (sec < 60) return sec + ' сек';
@@ -253,6 +306,11 @@ def render_mailing_tab(
     var h = Math.floor(m/60); m = m % 60;
     return h + ' ч' + (m ? (' ' + m + ' мин') : '');
   }
+
+  restoreDraft();
+  form.addEventListener('input', saveDraft);
+  form.addEventListener('change', saveDraft);
+
   btn.addEventListener('click', function(){
     var fd = new FormData(form);
     box.innerHTML = '<span class="muted">Считаем…</span>';
@@ -263,13 +321,20 @@ def render_mailing_tab(
         var interval = parseFloat(fd.get('interval_sec')||'0.1')||0;
         var n = d.capped_total || 0;
         var eta = (n > 0) ? fmt((n-1)*interval) : '0 сек';
-        box.innerHTML =
+        var html =
           '<b>К отправке: ' + n + '</b>' +
           ' <span class="muted">(TG ' + (d.telegram||0) + ' · VK ' + (d.vkontakte||0) +
           (d.batch_limit ? (', лимит ' + d.batch_limit) : '') +
           ')</span><br>Примерное время: <b>' + eta + '</b> при интервале ' + interval + ' сек';
+        box.innerHTML = html;
+        box.dataset.previewHtml = html;
+        saveDraft();
       })
       .catch(function(){ box.innerHTML = '<span class="events-error">Не удалось посчитать</span>'; });
+  });
+
+  form.addEventListener('submit', function(){
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch (e) {}
   });
 })();
 </script>
