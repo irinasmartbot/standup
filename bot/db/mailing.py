@@ -126,15 +126,35 @@ def normalize_filters(raw: dict | None) -> dict[str, Any]:
         batch_limit = None
     if batch_limit is not None:
         batch_limit = max(1, min(batch_limit, 100_000))
+    date_mode = (data.get("date_mode") or "event").strip().lower()
+    if date_mode not in ("event", "status"):
+        date_mode = "event"
     return {
         "booking_statuses": statuses,
-        "booking_date_from": (data.get("booking_date_from") or "").strip() or None,
-        "booking_date_to": (data.get("booking_date_to") or "").strip() or None,
+        "date_mode": date_mode,
+        "date_from": (
+            (data.get("date_from") or data.get("booking_date_from") or "").strip() or None
+        ),
+        "date_to": (
+            (data.get("date_to") or data.get("booking_date_to") or "").strip() or None
+        ),
         "has_phone": bool(data.get("has_phone")),
         "exclude_blocked": bool(data.get("exclude_blocked", True)),
         "exclude_sent_days": exclude_days,
         "batch_limit": batch_limit,
     }
+
+
+def _status_ts_sql() -> str:
+    """Timestamp of the booking status change (fallback: created_at)."""
+    return """
+        CASE b.status
+            WHEN 'confirmed' THEN COALESCE(b.confirmed_at, b.created_at)
+            WHEN 'cancelled' THEN COALESCE(b.cancelled_at, b.updated_at, b.created_at)
+            WHEN 'annulled' THEN COALESCE(b.annulled_at, b.updated_at, b.created_at)
+            ELSE b.created_at
+        END
+    """
 
 
 def _audience_sql(channel: str, filters: dict) -> tuple[str, dict]:
@@ -153,22 +173,39 @@ def _audience_sql(channel: str, filters: dict) -> tuple[str, dict]:
     if filters.get("has_phone"):
         where.append("NULLIF(TRIM(COALESCE(u.phone, '')), '') IS NOT NULL")
 
-    statuses = filters.get("booking_statuses") or []
-    date_from = filters.get("booking_date_from")
-    date_to = filters.get("booking_date_to")
+    statuses = list(filters.get("booking_statuses") or [])
+    date_from = filters.get("date_from") or filters.get("booking_date_from")
+    date_to = filters.get("date_to") or filters.get("booking_date_to")
+    date_mode = (filters.get("date_mode") or "event").strip().lower()
     if statuses or date_from or date_to:
         booking_where = ["b.user_id = u.id"]
         if statuses:
             params["booking_statuses"] = list(statuses)
             booking_where.append("b.status = ANY(%(booking_statuses)s)")
-        if date_from:
-            params["booking_date_from"] = date_from
-            booking_where.append("b.created_at::date >= %(booking_date_from)s::date")
-        if date_to:
-            params["booking_date_to"] = date_to
-            booking_where.append("b.created_at::date <= %(booking_date_to)s::date")
+        use_event_dates = date_mode != "status" and (date_from or date_to)
+        if date_from or date_to:
+            if date_mode == "status":
+                ts = _status_ts_sql()
+                if date_from:
+                    params["date_from"] = date_from
+                    booking_where.append(f"({ts})::date >= %(date_from)s::date")
+                if date_to:
+                    params["date_to"] = date_to
+                    booking_where.append(f"({ts})::date <= %(date_to)s::date")
+            else:
+                if date_from:
+                    params["date_from"] = date_from
+                    booking_where.append("e.event_date >= %(date_from)s::date")
+                if date_to:
+                    params["date_to"] = date_to
+                    booking_where.append("e.event_date <= %(date_to)s::date")
+        from_sql = (
+            "bookings b JOIN events e ON e.id = b.event_id"
+            if use_event_dates
+            else "bookings b"
+        )
         where.append(
-            "EXISTS (SELECT 1 FROM bookings b WHERE " + " AND ".join(booking_where) + ")"
+            "EXISTS (SELECT 1 FROM " + from_sql + " WHERE " + " AND ".join(booking_where) + ")"
         )
 
     exclude_days = int(filters.get("exclude_sent_days") or 0)
@@ -645,3 +682,100 @@ def iso(dt: Any) -> str:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.isoformat()
     return str(dt)
+
+
+def search_users_for_test(q: str, *, channel: str = "", limit: int = 20) -> list[dict]:
+    """Find users by name / @username / phone for test mailing."""
+    ensure_mailing_tables()
+    if not _use_postgres():
+        return []
+    q = (q or "").strip()
+    if len(q) < 1:
+        return []
+    q_user = q[1:].strip() if q.startswith("@") else q
+    phone_digits = "".join(ch for ch in q if ch.isdigit())
+    where = [
+        "("
+        "COALESCE(u.name, '') ILIKE %(q_like)s"
+        " OR COALESCE(u.username, '') ILIKE %(q_user_like)s"
+        " OR COALESCE(u.phone, '') ILIKE %(q_like)s"
+        + (
+            " OR regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE %(q_phone_digits)s"
+            if len(phone_digits) >= 3
+            else ""
+        )
+        + ")"
+    ]
+    params: dict[str, Any] = {
+        "q_like": f"%{q}%",
+        "q_user_like": f"%{q_user}%",
+        "limit": max(1, min(int(limit), 50)),
+    }
+    if len(phone_digits) >= 3:
+        params["q_phone_digits"] = f"%{phone_digits}%"
+    if channel == "telegram":
+        where.append("u.telegram_id IS NOT NULL")
+    elif channel == "vkontakte":
+        where.append("u.vk_id IS NOT NULL")
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT u.id, u.name, u.username, u.phone, u.telegram_id, u.vk_id, u.source
+                FROM users u
+                WHERE {" AND ".join(where)}
+                ORDER BY u.id DESC
+                LIMIT %(limit)s
+                """,
+                params,
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def create_followup_stub(*, followup_html: str, body_html: str = "", created_by: str = "owner") -> int:
+    """Store follow-up text so test/callback buttons can resolve mail_fu:<id>."""
+    ensure_mailing_tables()
+    if not _use_postgres():
+        raise RuntimeError("PostgreSQL required")
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mailing_campaigns (
+                    title, channel, status, body_html, followup_html,
+                    interval_sec, filters, total_count, created_by,
+                    started_at, finished_at
+                )
+                VALUES (
+                    'test-followup', 'telegram', 'done', %(body)s, %(followup)s,
+                    0, '{}'::jsonb, 0, %(created_by)s, NOW(), NOW()
+                )
+                RETURNING id
+                """,
+                {
+                    "body": body_html or "",
+                    "followup": (followup_html or "").strip(),
+                    "created_by": created_by or "owner",
+                },
+            )
+            cid = int(cur.fetchone()["id"])
+        conn.commit()
+    return cid
+
+
+def get_user_for_mailing(user_id: int) -> dict | None:
+    ensure_mailing_tables()
+    if not _use_postgres():
+        return None
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, username, phone, telegram_id, vk_id, source
+                FROM users
+                WHERE id = %s
+                """,
+                (int(user_id),),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None

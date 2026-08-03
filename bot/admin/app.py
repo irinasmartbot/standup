@@ -5354,16 +5354,41 @@ async def events_hide_preview_page(request: web.Request) -> web.Response:
 
 
 def _mailing_filters_from_form(form) -> dict:
-    statuses = form.getall("booking_statuses") if hasattr(form, "getall") else []
+    statuses: list[str] = []
+    try:
+        if hasattr(form, "getall"):
+            raw_statuses = form.getall("booking_statuses")
+        else:
+            one = form.get("booking_statuses")
+            raw_statuses = [] if one is None else [one]
+        for item in raw_statuses or []:
+            if item is None or hasattr(item, "file"):
+                continue
+            text = str(item).strip()
+            if text:
+                statuses.append(text)
+    except Exception:
+        statuses = []
+    date_from = (form.get("date_from") or form.get("booking_date_from") or "").strip()
+    date_to = (form.get("date_to") or form.get("booking_date_to") or "").strip()
     return {
-        "booking_statuses": list(statuses or []),
-        "booking_date_from": (form.get("booking_date_from") or "").strip(),
-        "booking_date_to": (form.get("booking_date_to") or "").strip(),
+        "booking_statuses": statuses,
+        "date_mode": (form.get("date_mode") or "event").strip(),
+        "date_from": date_from,
+        "date_to": date_to,
         "has_phone": (form.get("has_phone") or "") in {"1", "on", "true", "yes"},
         "exclude_blocked": (form.get("exclude_blocked") or "") in {"1", "on", "true", "yes"},
         "exclude_sent_days": (form.get("exclude_sent_days") or "0").strip(),
         "batch_limit": (form.get("batch_limit") or "").strip(),
     }
+
+
+def _parse_interval_sec(raw) -> float:
+    text = str(raw or "0.1").strip().replace(",", ".") or "0.1"
+    try:
+        return max(0.0, min(float(text), 60.0))
+    except ValueError:
+        return 0.1
 
 
 async def mailing_preview_page(request: web.Request) -> web.Response:
@@ -5372,23 +5397,149 @@ async def mailing_preview_page(request: web.Request) -> web.Response:
         raise web.HTTPFound("/admin/login")
     form = await request.post()
     channel = (form.get("channel") or "telegram").strip()
-    try:
-        interval = float((form.get("interval_sec") or "0.1").strip() or "0.1")
-    except ValueError:
-        interval = 0.1
+    interval = _parse_interval_sec(form.get("interval_sec"))
     from bot.db.mailing import estimate_duration_sec, format_duration, preview_audience
 
     try:
+        filters = _mailing_filters_from_form(form)
         data = await asyncio.get_running_loop().run_in_executor(
             None,
-            lambda: preview_audience(channel, _mailing_filters_from_form(form)),
+            lambda: preview_audience(channel, filters),
         )
     except Exception as exc:
-        return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=400)
     capped = int(data.get("capped_total") or 0)
     data["eta"] = format_duration(estimate_duration_sec(capped, interval))
     data["interval_sec"] = interval
     return web.json_response(data)
+
+
+async def mailing_users_search_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        return web.json_response({"error": "Нет доступа"}, status=403)
+    q = (request.query.get("q") or "").strip()
+    channel = (request.query.get("channel") or "").strip()
+    if channel not in ("telegram", "vkontakte", ""):
+        channel = ""
+    from bot.db.mailing import search_users_for_test
+
+    try:
+        users = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: search_users_for_test(q, channel=channel, limit=20)
+        )
+    except Exception as exc:
+        return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=400)
+    return web.json_response({"users": users})
+
+
+async def mailing_test_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        return web.json_response({"error": "Нет доступа"}, status=403)
+    form = await request.post()
+    user_id_raw = (form.get("user_id") or "").strip()
+    if not user_id_raw.isdigit():
+        return web.json_response({"error": "Не выбран пользователь"}, status=400)
+    channel_pref = (form.get("channel") or "telegram").strip()
+    body_html = (form.get("body_html") or "").strip()
+    button_text = (form.get("button_text") or "").strip()
+    button_url = (form.get("button_url") or "").strip()
+    followup_html = (form.get("followup_html") or "").strip()
+
+    photo_path = None
+    photo = form.get("photo")
+    if photo is not None and getattr(photo, "file", None):
+        raw = photo.file.read()
+        if raw:
+            from pathlib import Path
+
+            root = Path(__file__).resolve().parents[2]
+            media_dir = root / "data" / "mailing"
+            media_dir.mkdir(parents=True, exist_ok=True)
+            filename = getattr(photo, "filename", "") or "photo.jpg"
+            ext = Path(filename).suffix.lower()
+            if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+                ext = ".jpg"
+            dest = media_dir / f"test_{user_id_raw}{ext}"
+            dest.write_bytes(raw)
+            photo_path = str(dest)
+
+    if not body_html and not photo_path:
+        return web.json_response({"error": "Нужен текст или картинка"}, status=400)
+
+    from bot.admin.mailing_worker import send_one
+    from bot.db.admin_audit import log_admin_action
+    from bot.db.mailing import create_followup_stub, get_user_for_mailing
+
+    user = await asyncio.get_running_loop().run_in_executor(
+        None, get_user_for_mailing, int(user_id_raw)
+    )
+    if not user:
+        return web.json_response({"error": "Пользователь не найден"}, status=404)
+
+    send_channel = None
+    peer_id = None
+    if channel_pref == "telegram" and user.get("telegram_id"):
+        send_channel, peer_id = "telegram", int(user["telegram_id"])
+    elif channel_pref == "vkontakte" and user.get("vk_id"):
+        send_channel, peer_id = "vkontakte", int(user["vk_id"])
+    elif channel_pref == "both":
+        if user.get("telegram_id"):
+            send_channel, peer_id = "telegram", int(user["telegram_id"])
+        elif user.get("vk_id"):
+            send_channel, peer_id = "vkontakte", int(user["vk_id"])
+    else:
+        if user.get("telegram_id"):
+            send_channel, peer_id = "telegram", int(user["telegram_id"])
+        elif user.get("vk_id"):
+            send_channel, peer_id = "vkontakte", int(user["vk_id"])
+
+    if not send_channel or not peer_id:
+        return web.json_response(
+            {"error": "У пользователя нет id выбранного канала"},
+            status=400,
+        )
+
+    campaign_id = 0
+    if button_text and followup_html and not button_url:
+        campaign_id = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: create_followup_stub(
+                followup_html=followup_html,
+                body_html=body_html,
+                created_by=_admin_role(request, config) or "owner",
+            ),
+        )
+
+    campaign = {
+        "id": campaign_id,
+        "body_html": body_html,
+        "photo_path": photo_path,
+        "button_text": button_text,
+        "button_url": button_url,
+        "followup_html": followup_html,
+    }
+    recipient = {
+        "channel": send_channel,
+        "peer_id": peer_id,
+        "user_id": int(user_id_raw),
+    }
+    try:
+        await send_one(campaign, recipient)
+    except Exception as exc:
+        return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=400)
+
+    log_admin_action(
+        actor_role=_admin_role(request, config) or "owner",
+        action="mailing_test",
+        entity_type="user",
+        entity_id=str(user_id_raw),
+        details={"channel": send_channel, "peer_id": peer_id},
+    )
+    return web.json_response(
+        {"ok": True, "user_id": int(user_id_raw), "channel": send_channel, "peer_id": peer_id}
+    )
 
 
 async def mailing_create_page(request: web.Request) -> web.Response:
@@ -5402,10 +5553,7 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     button_text = (form.get("button_text") or "").strip()
     button_url = (form.get("button_url") or "").strip()
     followup_html = (form.get("followup_html") or "").strip()
-    try:
-        interval = float((form.get("interval_sec") or "0.1").strip() or "0.1")
-    except ValueError:
-        interval = 0.1
+    interval = _parse_interval_sec(form.get("interval_sec"))
 
     photo_path = None
     photo = form.get("photo")
@@ -5433,6 +5581,7 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     from bot.db.mailing import create_campaign, set_campaign_photo
 
     try:
+        filters = _mailing_filters_from_form(form)
         campaign = await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: create_campaign(
@@ -5440,7 +5589,7 @@ async def mailing_create_page(request: web.Request) -> web.Response:
                 channel=channel,
                 body_html=body_html,
                 interval_sec=interval,
-                filters=_mailing_filters_from_form(form),
+                filters=filters,
                 photo_path=photo_path,
                 button_text=button_text,
                 button_url=button_url,
@@ -5455,7 +5604,9 @@ async def mailing_create_page(request: web.Request) -> web.Response:
                 Path(photo_path).unlink(missing_ok=True)
             except Exception:
                 pass
-        raise web.HTTPFound(f"/admin?tab=mailing&m_err={quote(str(exc)[:200])}")
+        raise web.HTTPFound(
+            f"/admin?tab=mailing&m_err={quote(f'{type(exc).__name__}: {exc}'[:200])}"
+        )
 
     if photo_path and campaign.get("id"):
         root = Path(__file__).resolve().parents[2]
@@ -5534,6 +5685,8 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_post("/admin/mailing/preview", mailing_preview_page)
     app.router.add_post("/admin/mailing/create", mailing_create_page)
     app.router.add_post("/admin/mailing/status", mailing_status_page)
+    app.router.add_get("/admin/mailing/users-search", mailing_users_search_page)
+    app.router.add_post("/admin/mailing/test", mailing_test_page)
     app.router.add_post("/admin/login", login_page)
     app.router.add_get("/admin/logout", logout_page)
     # Публичные VK-ленды (без admin auth); nginx не закрывает /vk/*

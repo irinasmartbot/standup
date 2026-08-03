@@ -201,13 +201,13 @@ def render_mailing_tab(
     </label>
     <div class="mailing-grid">
       <label>Интервал, сек
-        <input type="number" name="interval_sec" value="0.1" min="0" max="60" step="0.05" id="mail-interval">
+        <input type="number" name="interval_sec" value="0.1" min="0" max="60" step="0.05" id="mail-interval" lang="en">
       </label>
       <label>Лимит за запуск (напр. 5000)
-        <input type="number" name="batch_limit" min="1" max="100000" placeholder="все">
+        <input type="number" name="batch_limit" min="1" max="100000" placeholder="все" lang="en">
       </label>
       <label>Не слать, если уже слали за N дней
-        <input type="number" name="exclude_sent_days" value="1" min="0" max="3650">
+        <input type="number" name="exclude_sent_days" value="1" min="0" max="3650" lang="en">
       </label>
     </div>
     <fieldset class="mailing-row">
@@ -216,20 +216,27 @@ def render_mailing_tab(
       <label><input type="checkbox" name="has_phone" value="1"> Только с телефоном</label>
     </fieldset>
     <fieldset class="mailing-row">
-      <legend>Статус брони (если ничего не выбрано — вся база канала)</legend>
+      <legend>Статус брони</legend>
+      <p class="muted" style="margin:0 0 8px">Если ничего не выбрано — вся база канала (без фильтра по броням).</p>
       <label><input type="checkbox" name="booking_statuses" value="booked"> Активная бронь</label>
       <label><input type="checkbox" name="booking_statuses" value="confirmed"> Подтверждённый билет</label>
       <label><input type="checkbox" name="booking_statuses" value="cancelled"> Отмена</label>
       <label><input type="checkbox" name="booking_statuses" value="annulled"> Аннулировано</label>
     </fieldset>
-    <div class="mailing-grid">
-      <label>Дата бронирования с
-        <input type="date" name="booking_date_from">
-      </label>
-      <label>Дата бронирования по
-        <input type="date" name="booking_date_to">
-      </label>
-    </div>
+    <fieldset class="mailing-row">
+      <legend>Период дат для статуса выше</legend>
+      <p class="muted" style="margin:0 0 8px">С какого по какое — диапазон. Выберите, <b>какая</b> дата имеется в виду:</p>
+      <label><input type="radio" name="date_mode" value="event" checked> Дата шоу (день мероприятия в афише)</label>
+      <label><input type="radio" name="date_mode" value="status"> Дата статуса (когда стала бронь / билет / отмена)</label>
+      <div class="mailing-grid" style="margin-top:10px">
+        <label>С даты
+          <input type="date" name="date_from">
+        </label>
+        <label>По дату
+          <input type="date" name="date_to">
+        </label>
+      </div>
+    </fieldset>
     <div class="mailing-preview" id="mail-preview">
       <span class="muted">Нажмите «Посчитать аудиторию», чтобы увидеть число и примерное время.</span>
     </div>
@@ -239,13 +246,31 @@ def render_mailing_tab(
     </div>
   </form>
 </section>
+
+<section class="card mailing-test">
+  <h2>Протестировать</h2>
+  <p class="muted">Отправит <b>текущий текст/кнопку/картинку</b> из формы выше одному человеку — без запуска полной рассылки.</p>
+  <div class="mailing-grid">
+    <label style="grid-column:1/-1">Найти пользователя (имя, @username или телефон)
+      <input type="search" id="mail-test-q" placeholder="Например: Ира или @username или 8900…" autocomplete="off">
+    </label>
+  </div>
+  <div id="mail-test-results" class="mail-test-results muted">Введите запрос и нажмите «Найти».</div>
+  <input type="hidden" id="mail-test-user-id" value="">
+  <div class="mailing-actions" style="margin-top:12px">
+    <button type="button" id="mail-test-search-btn">Найти</button>
+    <button type="button" id="mail-test-send-btn">Отправить тест выбранному</button>
+  </div>
+  <div id="mail-test-status" class="mailing-preview" style="margin-top:12px"></div>
+</section>
 <script>
 (function(){
   var form = document.getElementById('mailing-form');
   var btn = document.getElementById('mail-preview-btn');
   var box = document.getElementById('mail-preview');
   if (!form || !btn || !box) return;
-  var STORAGE_KEY = 'admin-mailing-draft-v1';
+  var STORAGE_KEY = 'admin-mailing-draft-v2';
+  try { sessionStorage.removeItem('admin-mailing-draft-v1'); } catch (e) {}
 
   function saveDraft(){
     var data = {};
@@ -264,7 +289,9 @@ def render_mailing_tab(
       }
       data[el.name] = el.value;
     }
-    if (box && box.dataset.previewHtml) data.__preview = box.dataset.previewHtml;
+    if (box && box.dataset.previewHtml && box.dataset.previewHtml.indexOf('events-error') === -1) {
+      data.__preview = box.dataset.previewHtml;
+    }
     try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (e) {}
   }
 
@@ -284,15 +311,16 @@ def render_mailing_tab(
         continue;
       }
       if (el.type === 'checkbox') {
-        var list = data[el.name] || [];
+        var list = data[el.name];
+        if (!Array.isArray(list)) list = [];
         el.checked = list.indexOf(el.value) !== -1;
         continue;
       }
-      if (Object.prototype.hasOwnProperty.call(data, el.name)) {
+      if (Object.prototype.hasOwnProperty.call(data, el.name) && typeof data[el.name] === 'string') {
         el.value = data[el.name];
       }
     }
-    if (data.__preview) {
+    if (data.__preview && String(data.__preview).indexOf('events-error') === -1) {
       box.innerHTML = data.__preview;
       box.dataset.previewHtml = data.__preview;
     }
@@ -307,6 +335,12 @@ def render_mailing_tab(
     return h + ' ч' + (m ? (' ' + m + ' мин') : '');
   }
 
+  function parseInterval(raw){
+    var s = String(raw == null ? '0.1' : raw).trim().replace(',', '.');
+    var n = parseFloat(s);
+    return isFinite(n) ? n : 0.1;
+  }
+
   restoreDraft();
   form.addEventListener('input', saveDraft);
   form.addEventListener('change', saveDraft);
@@ -315,10 +349,15 @@ def render_mailing_tab(
     var fd = new FormData(form);
     box.innerHTML = '<span class="muted">Считаем…</span>';
     fetch('/admin/mailing/preview', {method:'POST', body: fd, credentials:'same-origin'})
-      .then(function(r){ return r.json(); })
-      .then(function(d){
-        if (d.error) { box.innerHTML = '<span class="events-error">' + d.error + '</span>'; return; }
-        var interval = parseFloat(fd.get('interval_sec')||'0.1')||0;
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        var d = res.d || {};
+        if (!res.ok || d.error) {
+          box.innerHTML = '<span class="events-error">' + (d.error || 'Ошибка расчёта') + '</span>';
+          delete box.dataset.previewHtml;
+          return;
+        }
+        var interval = parseInterval(fd.get('interval_sec'));
         var n = d.capped_total || 0;
         var eta = (n > 0) ? fmt((n-1)*interval) : '0 сек';
         var html =
@@ -335,6 +374,85 @@ def render_mailing_tab(
 
   form.addEventListener('submit', function(){
     try { sessionStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  });
+
+  var testQ = document.getElementById('mail-test-q');
+  var testResults = document.getElementById('mail-test-results');
+  var testUserId = document.getElementById('mail-test-user-id');
+  var testSearchBtn = document.getElementById('mail-test-search-btn');
+  var testSendBtn = document.getElementById('mail-test-send-btn');
+  var testStatus = document.getElementById('mail-test-status');
+
+  function selectedChannel(){
+    var el = form.querySelector('input[name="channel"]:checked');
+    return el ? el.value : 'telegram';
+  }
+
+  function renderTestUsers(rows){
+    if (!rows || !rows.length) {
+      testResults.innerHTML = '<span class="muted">Никого не найдено</span>';
+      return;
+    }
+    var html = '<div class="mail-test-list">';
+    for (var i = 0; i < rows.length; i++){
+      var u = rows[i];
+      var uname = u.username ? ('@' + u.username) : '';
+      var ch = [];
+      if (u.telegram_id) ch.push('TG');
+      if (u.vk_id) ch.push('VK');
+      html += '<label class="mail-test-item">' +
+        '<input type="radio" name="mail_test_pick" value="' + u.id + '">' +
+        '<span><b>' + (u.name || 'Без имени') + '</b> · id ' + u.id +
+        (uname ? (' · ' + uname) : '') +
+        (u.phone ? (' · ' + u.phone) : '') +
+        ' · ' + ch.join('/') +
+        '</span></label>';
+    }
+    html += '</div>';
+    testResults.innerHTML = html;
+    testResults.querySelectorAll('input[name="mail_test_pick"]').forEach(function(r){
+      r.addEventListener('change', function(){ testUserId.value = r.value; });
+    });
+  }
+
+  testSearchBtn.addEventListener('click', function(){
+    var q = (testQ.value || '').trim();
+    if (!q) { testResults.innerHTML = '<span class="events-error">Введите имя, @username или телефон</span>'; return; }
+    testResults.innerHTML = '<span class="muted">Ищем…</span>';
+    var ch = selectedChannel();
+    var url = '/admin/mailing/users-search?q=' + encodeURIComponent(q) +
+      (ch === 'both' ? '' : ('&channel=' + encodeURIComponent(ch)));
+    fetch(url, {credentials:'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d.error) { testResults.innerHTML = '<span class="events-error">' + d.error + '</span>'; return; }
+        renderTestUsers(d.users || []);
+      })
+      .catch(function(){ testResults.innerHTML = '<span class="events-error">Ошибка поиска</span>'; });
+  });
+
+  testQ.addEventListener('keydown', function(ev){
+    if (ev.key === 'Enter') { ev.preventDefault(); testSearchBtn.click(); }
+  });
+
+  testSendBtn.addEventListener('click', function(){
+    var uid = (testUserId.value || '').trim();
+    if (!uid) { testStatus.innerHTML = '<span class="events-error">Сначала выберите пользователя из списка</span>'; return; }
+    var fd = new FormData(form);
+    fd.set('user_id', uid);
+    testStatus.innerHTML = '<span class="muted">Отправляем тест…</span>';
+    fetch('/admin/mailing/test', {method:'POST', body: fd, credentials:'same-origin'})
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        var d = res.d || {};
+        if (!res.ok || d.error) {
+          testStatus.innerHTML = '<span class="events-error">' + (d.error || 'Не удалось отправить') + '</span>';
+          return;
+        }
+        testStatus.innerHTML = '<b>Тест отправлен</b> <span class="muted">· ' + (d.channel || '') +
+          ' · user_id ' + (d.user_id || uid) + '</span>';
+      })
+      .catch(function(){ testStatus.innerHTML = '<span class="events-error">Ошибка отправки теста</span>'; });
   });
 })();
 </script>
@@ -364,6 +482,13 @@ def render_mailing_tab(
   .inline-form { display:inline; margin:0; }
   .inline-form button { background:#fff; color:#111827; }
   .events-error { color:#b91c1c; }
+  .mail-test-results { margin-top:10px; }
+  .mail-test-list { display:flex; flex-direction:column; gap:6px; }
+  .mail-test-item {
+    display:flex; gap:10px; align-items:flex-start; margin:0; padding:8px 10px;
+    border:1px solid var(--line); border-radius:10px; background:#fff; cursor:pointer;
+  }
+  .mail-test-item input { margin-top:3px; }
   @media (max-width:900px){ .mailing-grid { grid-template-columns:1fr; } }
 </style>
 """
