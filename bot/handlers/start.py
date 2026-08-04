@@ -430,6 +430,11 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
         await send_manager_stata_start(message, state)
         return
 
+    if payload == "new_stata_rozygr":
+        from bot.handlers.manager_stata import send_manager_stata_rozygr_start
+        await send_manager_stata_rozygr_start(message, state)
+        return
+
     if payload == "quick_booking":
         from bot.handlers.formats import send_all_formats
         await send_all_formats(message, from_deep_link=True)

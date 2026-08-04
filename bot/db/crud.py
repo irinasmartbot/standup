@@ -2229,10 +2229,11 @@ def get_confirmed_raffle_past_for_cleanup():
             return [row[0] for row in cur.fetchall()]
 
 
-def get_manager_stata_dates(limit: int = 16) -> list[str]:
-    """Ближайшие даты с активными шоу «Проверка» (для кнопок менеджера)."""
+def get_manager_stata_dates(limit: int = 16, *, event_format: str = "proverka") -> list[str]:
+    """Ближайшие даты с активными шоу нужного формата (кнопки менеджера)."""
     if not _use_postgres():
         return []
+    fmt = (event_format or "proverka").strip().lower() or "proverka"
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -2240,25 +2241,32 @@ def get_manager_stata_dates(limit: int = 16) -> list[str]:
                 SELECT to_char(e.event_date, 'DD.MM.YYYY') AS event_date
                 FROM events e
                 WHERE e.status = 'active'
-                  AND e.format = 'proverka'
+                  AND e.format = %s
                   AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
                 GROUP BY e.event_date
                 ORDER BY e.event_date
                 LIMIT %s
                 """,
-                (int(limit),),
+                (fmt, int(limit)),
             )
             return [row[0] for row in cur.fetchall() if row and row[0]]
 
 
-def get_manager_stata_bookings_for_date(event_date: str) -> list[dict]:
-    """Подтверждённые брони проверки (билет забран) на дату, по шоу."""
+def get_manager_stata_bookings_for_date(
+    event_date: str,
+    *,
+    booking_format: str = "proverka",
+    event_format: str = "proverka",
+) -> list[dict]:
+    """Подтверждённые брони (билет забран) на дату, по шоу."""
     if not _use_postgres():
         return []
     try:
         parsed = _parse_event_date(event_date)
     except (TypeError, ValueError):
         return []
+    b_fmt = (booking_format or "proverka").strip().lower() or "proverka"
+    e_fmt = (event_format or "proverka").strip().lower() or "proverka"
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -2277,12 +2285,12 @@ def get_manager_stata_bookings_for_date(event_date: str) -> list[dict]:
                 JOIN users u ON u.id = b.user_id
                 JOIN events e ON e.id = b.event_id
                 WHERE e.event_date = %s
-                  AND e.format = 'proverka'
-                  AND b.format = 'proverka'
+                  AND e.format = %s
+                  AND b.format = %s
                   AND b.status = 'confirmed'
                 ORDER BY e.event_time, e.location, b.id
                 """,
-                (parsed,),
+                (parsed, e_fmt, b_fmt),
             )
             rows = cur.fetchall()
     return [
