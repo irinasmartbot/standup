@@ -727,6 +727,20 @@ def _user_from_directory_row(row: dict) -> dict:
 def _users_directory_where(q: str, status: str, channel: str = "") -> tuple[str, dict]:
     where = ["TRUE"]
     params: dict = {}
+    # Обезличенные «Удалён» без активных броней не висят в списке.
+    where.append(
+        "NOT ("
+        "u.name = 'Удалён' "
+        "AND COALESCE(u.phone, '') LIKE 'deleted-%' "
+        "AND u.telegram_id IS NULL "
+        "AND u.vk_id IS NULL "
+        "AND NOT EXISTS ("
+        "SELECT 1 FROM bookings b_active "
+        "WHERE b_active.user_id = u.id "
+        "AND b_active.status IN ('booked', 'confirmed')"
+        ")"
+        ")"
+    )
     q = (q or "").strip()
     if q:
         q_user = q[1:].strip() if q.startswith("@") else q
@@ -1877,11 +1891,15 @@ def _audit_section(rows: list[dict] | None) -> str:
         body.append('<tr><td colspan="5" class="muted">Пока пусто — действия появятся здесь.</td></tr>')
     return (
         '<section class="card audit-log">'
-        "<h2>Журнал действий (технический)</h2>"
+        '<details data-persist-key="db:audit-tech">'
+        "<summary><strong>Журнал действий (технический)</strong>"
+        '<span class="details-action"><span class="closed-label">Развернуть</span>'
+        '<span class="open-label">Свернуть</span></span></summary>'
         '<p class="muted">Сырые коды для отладки. Удобный вид — во вкладке «Журнал».</p>'
         '<div class="table-wrap"><table><thead><tr>'
         "<th>Когда</th><th>Роль</th><th>Действие</th><th>Объект</th><th>Детали</th>"
         f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+        "</details>"
         "</section>"
     )
 
