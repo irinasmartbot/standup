@@ -435,6 +435,12 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
         await send_all_formats(message, from_deep_link=True)
         return
 
+    if payload == "afisha_besplat":
+        # бесплатная бронь «Проверка материала» (дата / площадка)
+        from bot.handlers.booking import check_format_entry
+        await check_format_entry(message)
+        return
+
     if payload == PAID_BEST_START:
         # платная ветка BEST для друга (из розыгрыша)
         from bot.handlers.formats import best_format_entry
