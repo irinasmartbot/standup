@@ -1,6 +1,7 @@
 import asyncio
 import hmac
 import html
+import logging
 import os
 import sqlite3
 from collections import Counter, defaultdict
@@ -11,6 +12,8 @@ from urllib.parse import urlencode
 import psycopg
 from aiohttp import web
 from psycopg.rows import dict_row
+
+logger = logging.getLogger(__name__)
 
 
 MSK = timezone(timedelta(hours=3))
@@ -727,11 +730,11 @@ def _user_from_directory_row(row: dict) -> dict:
 def _users_directory_where(q: str, status: str, channel: str = "") -> tuple[str, dict]:
     where = ["TRUE"]
     params: dict = {}
-    # Обезличенные «Удалён» без активных броней не висят в списке.
+    # Обезличенные (phone=deleted-*, без tg/vk) без активных броней не висят в списке.
+    # В SQL только ASCII — кириллица в литералах ломала выборку на части окружений.
     where.append(
         "NOT ("
-        "u.name = 'Удалён' "
-        "AND COALESCE(u.phone, '') LIKE 'deleted-%' "
+        "COALESCE(u.phone, '') LIKE 'deleted-%' "
         "AND u.telegram_id IS NULL "
         "AND u.vk_id IS NULL "
         "AND NOT EXISTS ("
@@ -854,6 +857,7 @@ def fetch_users_page(
             "page_size": USERS_PAGE_SIZE,
         }
     except Exception:
+        logger.exception("fetch_users_page failed")
         return empty
 
 
