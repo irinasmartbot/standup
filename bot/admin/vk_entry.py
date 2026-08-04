@@ -498,8 +498,8 @@ def _mini_app_html(default_flow: str = "") -> str:
         app_js = ""
     else:
         body = """
-        <p id="lead" class="lead">Откройте корректную ссылку нужного сценария.</p>
-        <div class="actions" id="actions" hidden>
+        <p id="lead" class="lead">Выберите, что хотите сделать:</p>
+        <div class="actions" id="actions">
           <button type="button" class="cta" data-flow="booking">Забронировать места</button>
           <button type="button" class="cta" data-flow="raffle">Участвовать в розыгрыше</button>
           <button type="button" class="cta" data-flow="offline_gift">Подарок на шоу</button>
@@ -858,15 +858,35 @@ def _mini_app_html(default_flow: str = "") -> str:
     start(button.getAttribute("data-flow"));
   }});
 
+  function showAllFlows() {{
+    titleEl.textContent = "Быстрый вход в VK";
+    leadEl.textContent = "Выберите, что хотите сделать:";
+    actionsEl.hidden = false;
+    actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
+      var flow = button.getAttribute("data-flow");
+      button.hidden = false;
+      button.style.display = "";
+      if (flowLabels[flow]) button.textContent = flowLabels[flow].button;
+    }});
+  }}
+
   var initialFlow = flowFromLocation() || parseFlowValue(serverFlow);
   if (initialFlow) {{
     setFlow(initialFlow, true);
     autoStart(initialFlow);
+  }} else {{
+    showAllFlows();
   }}
   bridge.send("VKWebAppGetLaunchParams").then(function (data) {{
     var flow = flowFromLaunchParams(data);
-    if (flow) autoStart(flow);
-  }}).catch(function () {{}});
+    if (flow) {{
+      autoStart(flow);
+    }} else if (!currentFlow) {{
+      showAllFlows();
+    }}
+  }}).catch(function () {{
+    if (!currentFlow) showAllFlows();
+  }});
 }})();
 </script>
 """
