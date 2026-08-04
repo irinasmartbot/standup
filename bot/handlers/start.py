@@ -114,6 +114,7 @@ async def submit_help_question(message: Message, *, thank_you: bool = True) -> b
             phone=phone,
         ),
         parse_mode="HTML",
+        disable_web_page_preview=True,
     )
     create_help_request(
         user.id,
@@ -769,6 +770,17 @@ async def help_chat_reply(message: Message):
         )
     except Exception:
         pass
+    # Ответ уже на карточке и у клиента — ответку менеджера убираем из хелп-чата.
+    try:
+        await message.delete()
+    except Exception:
+        try:
+            await message.bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            logger.warning(
+                "help chat: could not delete manager reply mid=%s",
+                message.message_id,
+            )
 
 
 async def _send_vk_support_answer(vk_id: int, answer_text: str, message: Message) -> bool:
@@ -826,6 +838,16 @@ async def bot_block_status(event: ChatMemberUpdated):
         ChatMemberStatus.ADMINISTRATOR,
         ChatMemberStatus.CREATOR,
     }
+    from bot.db.crud import touch_user_profile
+
+    touch_user_profile(
+        telegram_id=user.id,
+        username=user.username,
+        name=" ".join(
+            p for p in (user.first_name or "", user.last_name or "") if p
+        ).strip(),
+        source="telegram",
+    )
     if new_status in blocked_statuses and old_status not in blocked_statuses:
         set_user_blocked(user.id, True)
         track_event(EVENT_BOT_BLOCKED, telegram_id=user.id)

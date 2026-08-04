@@ -439,9 +439,9 @@ async def _ask_booking_name(call: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     name = (data.get("name") or "").strip()
     if not name:
-        name = call.from_user.first_name or ""
-        if call.from_user.last_name:
-            name += f" {call.from_user.last_name}"
+        name = " ".join(
+            p for p in (call.from_user.first_name or "", call.from_user.last_name or "") if p
+        ).strip()
         await state.update_data(name=name)
     kb = InlineKeyboardBuilder()
     kb.button(text="Все верно 👌", callback_data="name_confirm")
@@ -496,9 +496,9 @@ async def start_booking(call: CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(event_date=event_date, event_time=event_time)
-    name = call.from_user.first_name or ""
-    if call.from_user.last_name:
-        name += f" {call.from_user.last_name}"
+    name = " ".join(
+        p for p in (call.from_user.first_name or "", call.from_user.last_name or "") if p
+    ).strip()
     await state.update_data(name=name)
 
     same_day_alert = same_day_booking_warning(

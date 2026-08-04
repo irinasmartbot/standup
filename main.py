@@ -12,7 +12,7 @@ from bot.handlers import mailing_callbacks, fallback
 from bot.db.mailing import ensure_mailing_tables
 from bot.handlers.reminders import reminder_loop
 from bot.handlers.rozygrysh_reminders import raffle_reminder_loop
-from bot.middlewares import ModerationChatSilenceMiddleware
+from bot.middlewares import ModerationChatSilenceMiddleware, TouchUserProfileMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,7 +36,11 @@ async def main():
         logger.error(
             "MODERATION_CHAT_ID is NOT set — raffle screenshots will not reach moderation chat"
         )
+    touch_profile = TouchUserProfileMiddleware()
     silence = ModerationChatSilenceMiddleware()
+    # Сначала профиль (имя/@username), потом тишина модерации.
+    dp.message.middleware(touch_profile)
+    dp.callback_query.middleware(touch_profile)
     dp.message.middleware(silence)
     dp.callback_query.middleware(silence)
     dp.include_router(start.router)

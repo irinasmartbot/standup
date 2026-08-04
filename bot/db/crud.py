@@ -766,6 +766,26 @@ def ensure_user(telegram_id=None, username=None, name=None, phone=None, *, vk_id
     return user_id
 
 
+def touch_user_profile(
+    *,
+    telegram_id=None,
+    vk_id=None,
+    username=None,
+    name=None,
+    source=None,
+):
+    """Обновить имя/ник с профиля мессенджера (пустое не затирает уже сохранённое)."""
+    clean_name = (name or "").strip() or None
+    clean_username = (username or "").strip().lstrip("@") or None
+    return ensure_user(
+        telegram_id=telegram_id,
+        vk_id=vk_id,
+        username=clean_username,
+        name=clean_name,
+        source=source,
+    )
+
+
 def get_rozygrysh_used(telegram_id=None, *, vk_id=None) -> bool:
     if not _use_postgres():
         return False
