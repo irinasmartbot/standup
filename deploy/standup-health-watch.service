@@ -1,0 +1,11 @@
+[Unit]
+Description=Moscow StandUp health check → Telegram tech chat
+After=network.target
+
+[Service]
+Type=oneshot
+User=standup
+Group=standup
+WorkingDirectory=/home/standup/app
+EnvironmentFile=-/home/standup/app/.env
+ExecStart=/home/standup/app/venv/bin/python /home/standup/app/scripts/standup_health_watch.py

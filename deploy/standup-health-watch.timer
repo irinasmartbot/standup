@@ -1,0 +1,11 @@
+[Unit]
+Description=Run StandUp health check every 3 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+AccuracySec=30s
+Unit=standup-health-watch.service
+
+[Install]
+WantedBy=timers.target

@@ -412,6 +412,21 @@ async def private_sticker_file_id(message: Message, state: FSMContext):
     )
 
 
+@router.message(Command("techid"))
+async def tech_chat_id_command(message: Message):
+    """Показать chat_id текущего чата — для TECH_CHAT_ID (только TEST_ADMIN_IDS)."""
+    if not message.from_user or message.from_user.id not in TEST_ADMIN_IDS:
+        return
+    chat = message.chat
+    await message.answer(
+        f"chat_id этого чата:\n<code>{chat.id}</code>\n"
+        f"тип: <code>{chat.type}</code>\n\n"
+        f"Скопируй в .env:\n<code>TECH_CHAT_ID={chat.id}</code>\n"
+        f"(в /home/standup/app/.env и при необходимости в vk-app/.env)",
+        parse_mode="HTML",
+    )
+
+
 @router.message(CommandStart(), F.chat.type == "private")
 async def start(message: Message, state: FSMContext, command: CommandObject):
     await state.clear()
