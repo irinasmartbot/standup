@@ -719,6 +719,7 @@ def _user_from_directory_row(row: dict) -> dict:
         "source": source,
         "consent_accepted_at": row.get("consent_accepted_at"),
         "consent_version": row.get("consent_version") or "",
+        "created_at": row.get("created_at"),
         "bookings": [],
         "status_counts": counts,
         "guests_confirmed": 0,
@@ -821,6 +822,7 @@ def fetch_users_page(
                         u.username,
                         u.phone,
                         u.source,
+                        u.created_at,
                         COUNT(b.id) AS bookings_total,
                         COUNT(b.id) FILTER (WHERE b.status = 'booked') AS cnt_booked,
                         COUNT(b.id) FILTER (WHERE b.status = 'confirmed') AS cnt_confirmed,
@@ -870,6 +872,7 @@ def fetch_one_directory_user(config: AdminConfig, user_id: int) -> dict | None:
                         u.username,
                         u.phone,
                         u.source,
+                        u.created_at,
                         u.consent_accepted_at,
                         u.consent_version,
                         COUNT(b.id) AS bookings_total,
@@ -2590,6 +2593,7 @@ def _users_tab(
             if contact_sub
             else contact_main
         )
+        created_label = _fmt_msk(user.get("created_at"))
         rows.append(
             "<tr>"
             f"<td>{_h(user.get('user_id') or '—')}</td>"
@@ -2597,6 +2601,7 @@ def _users_tab(
             f"<br>{_channel_badge_html(channel)}"
             f"<span class='muted'>{source_note}</span></td>"
             f"<td>{contact_cell}</td>"
+            f"<td class='muted'>{_h(created_label)}</td>"
             f"<td>{int(total_bookings)}</td>"
             f"<td>{user['status_counts'].get('booked', 0)}</td>"
             f"<td>{user['status_counts'].get('confirmed', 0)}</td>"
@@ -2644,9 +2649,9 @@ def _users_tab(
     )
     table = (
         '<div class="table-wrap"><table class="users">'
-        "<thead><tr><th>user_id</th><th>Клиент</th><th>Контакт</th><th>Всего</th><th>Активные</th>"
-        "<th>Билеты</th><th>Отмены</th><th>Этап</th></tr></thead>"
-        f"<tbody>{''.join(rows) or '<tr><td colspan=\"8\" class=\"muted\">Никого не найдено — измените поиск или фильтр</td></tr>'}</tbody>"
+        "<thead><tr><th>user_id</th><th>Клиент</th><th>Контакт</th><th>В базе</th><th>Всего</th>"
+        "<th>Активные</th><th>Билеты</th><th>Отмены</th><th>Этап</th></tr></thead>"
+        f"<tbody>{''.join(rows) or '<tr><td colspan=\"9\" class=\"muted\">Никого не найдено — измените поиск или фильтр</td></tr>'}</tbody>"
         "</table></div>"
     )
     flash_html = f'<p class="events-flash">{_h(flash)}</p>' if flash else ""
@@ -2718,11 +2723,13 @@ def _users_tab(
         detail_username = (user.get("username") or "").strip()
         detail_phone = (user.get("phone") or "").strip() or "—"
         detail_user_bit = f" · @{_h(detail_username)}" if detail_username else ""
+        detail_created = _fmt_msk(user.get("created_at"))
         detail = (
             '<section class="card user-detail">'
             f'<h2>{_h(user["name"] or "Без имени")} {_channel_badge_html(detail_channel)}</h2>'
             f'<p class="muted">user_id: {_h(user.get("user_id") or "—")} · {_h(detail_phone)}'
-            f'{detail_user_bit} · источник: {_h(user["source"])}</p>'
+            f'{detail_user_bit} · источник: {_h(user["source"])}'
+            f' · в базе: {_h(detail_created)}</p>'
             f"{consent_box}"
             '<div class="mini-metrics">'
             f'<span>Всего броней: <b>{len(user["bookings"])}</b></span>'
