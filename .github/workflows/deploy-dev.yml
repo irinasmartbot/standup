@@ -35,9 +35,8 @@ jobs:
           /home/standup/app/venv/bin/python -m pip install -r requirements.txt
           /home/standup/app/venv/bin/python -c "from bot.db.crud import ensure_help_tables, ensure_raffle_tables, ensure_pdn_consent_columns; from bot.db.analytics import ensure_analytics_tables; from bot.db.mailing import ensure_mailing_tables; ensure_raffle_tables(); ensure_help_tables(); ensure_analytics_tables(); ensure_pdn_consent_columns(); ensure_mailing_tables()"
           /home/standup/app/venv/bin/python -c "import main"
-          /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format proverka --source-sheet "Проверка материала"
-          /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format best --source-sheet "StandUp BEST"
-          /home/standup/app/venv/bin/python scripts/import_events_from_sheets.py --format hitloto --source-sheet "Hit Lotto"
+          # Афиша ведётся в админке (Postgres). Импорт из Google Sheets на деплое отключён,
+          # чтобы CI не затирал правки. Ручной прогон: scripts/import_events_from_sheets.py
           sudo /usr/bin/systemctl restart standup-bot
           sleep 2
           sudo /usr/bin/systemctl is-active --quiet standup-bot || (
