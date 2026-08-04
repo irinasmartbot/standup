@@ -2757,7 +2757,10 @@ def _users_tab(
 
 def _metric_pair(metric: dict | None) -> str:
     metric = metric or {"events": 0, "uniques": 0}
-    return f'<b>{metric.get("events", 0)}</b><span class="muted"> · {metric.get("uniques", 0)} чел.</span>'
+    return (
+        f'<b>{metric.get("uniques", 0)}</b>'
+        f'<span class="muted"> · всего {metric.get("events", 0)}</span>'
+    )
 
 
 def _analytics_metric_card(title: str, metric: dict | None, note: str = "", css_class: str = "") -> str:
@@ -2767,8 +2770,8 @@ def _analytics_metric_card(title: str, metric: dict | None, note: str = "", css_
     return (
         f'<div class="{cls}">'
         f"<span>{_h(title)}</span>"
-        f'<b>{metric.get("events", 0)}</b>'
-        f'<small class="muted">{metric.get("uniques", 0)} уникальных</small>'
+        f'<b>{metric.get("uniques", 0)}</b>'
+        f'<small class="muted">всего {metric.get("events", 0)}</small>'
         f"{note_html}"
         "</div>"
     )
@@ -3310,8 +3313,8 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         metric = metric or {"events": 0, "uniques": 0}
         return (
             '<div class="metric branch-metric">'
-            f'<span>{_h(title)}</span><b>{metric.get("events", 0)}</b>'
-            f'<small class="muted">{metric.get("uniques", 0)} уникальных</small>'
+            f'<span>{_h(title)}</span><b>{metric.get("uniques", 0)}</b>'
+            f'<small class="muted">всего {metric.get("events", 0)}</small>'
             "</div>"
         )
 
@@ -3379,7 +3382,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
       </form>
     </div>
     <p class="muted">Период: <b>{_h(report.get("period_label") or "весь период")}</b>.
-    В карточках: число = заходы, ниже — уникальные люди.</p>
+    В карточках: крупно — уникальные люди, мелко — всего заходов.</p>
     """
 
     return (

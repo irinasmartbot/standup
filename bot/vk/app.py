@@ -444,6 +444,7 @@ class VKBotApp:
         self.peer_dates_attachments: dict[int, str] = {}
         self.peer_venues_message_ids: dict[int, int] = {}
         self.peer_offline_gift_message_ids: dict[int, int] = {}
+        self._vk_name_cache: dict[int, str] = {}
         # cmid кнопки из текущего message_event — переживает рестарт бота.
         self._peer_event_cmid: dict[int, int] = {}
         self._seen_event_ids: dict[str, float] = {}
@@ -461,8 +462,22 @@ class VKBotApp:
     def _track(self, vk_id: int, name: str, **kwargs) -> None:
         track_event(name, vk_id=vk_id, channel=VK_CHANNEL, **kwargs)
 
-    def _ensure_user(self, vk_id: int) -> None:
-        ensure_user(vk_id=vk_id, source=VK_CHANNEL)
+    async def _ensure_user(self, vk_id: int) -> None:
+        """Создаёт/обновляет users и подтягивает имя из VK (с кэшем на процесс)."""
+        vid = int(vk_id)
+        name = self._vk_name_cache.get(vid)
+        if name is None:
+            try:
+                name = (await self.client.get_user_display_name(vid)) or ""
+            except Exception:
+                logger.exception("VK users.get for profile sync failed vk_id=%s", vid)
+                name = ""
+            self._vk_name_cache[vid] = name
+        ensure_user(
+            vk_id=vid,
+            name=name or None,
+            source=VK_CHANNEL,
+        )
 
     def _main_menu_kb(self, vk_id: int | None = None) -> str:
         show_my_bookings = False
@@ -801,7 +816,7 @@ class VKBotApp:
 
     async def send_menu(self, peer_id: int, *, vk_id: int | None = None, is_start: bool = False) -> None:
         user_id = vk_id or peer_id
-        self._ensure_user(user_id)
+        await self._ensure_user(user_id)
         vk_booking.clear_session(self.booking_sessions, user_id)
         vk_mb.clear_manage_session(self.manage_sessions, user_id)
         self._clear_raffle_screenshot_wait(int(user_id))
@@ -2433,7 +2448,7 @@ class VKBotApp:
         }:
             return False
 
-        self._ensure_user(vk_id)
+        await self._ensure_user(vk_id)
 
         if cmd == "raffle":
             await self._send_raffle_start(peer_id, vk_id)
@@ -3037,6 +3052,7 @@ class VKBotApp:
                         "chat_id": help_chat_id,
                         "text": body,
                         "parse_mode": "HTML",
+                        "disable_web_page_preview": True,
                     },
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
