@@ -178,7 +178,7 @@ REVIEW_TEXT = (
     "🎫 За 1 отзыв полагается 1 билет"
 )
 
-PAID_BOOKING_LINK = "https://t.me/ira_test_stend_bot?start=afisha_plat"
+PAID_BOOKING_LINK = "https://telegram.me/StandUp_Show_bot?start=afisha_plat"
 
 RULES_TEXT = (
     "<b>Порядок посещения шоу:</b>\n\n"
@@ -420,9 +420,7 @@ async def reset_rozygrysh_cmd(message: Message, state: FSMContext):
         f"• отменено броней: {stats['bookings_cancelled']}\n"
         f"• снято заявок на модерации: {stats['submissions_cancelled']}\n\n"
         "Можно снова открыть:\n"
-        "https://t.me/StandUp_Show_bot?start=standup_rozygr\n\n"
-        "Временная тест-ссылка:\n"
-        "https://t.me/ira_test_stend_bot?start=standup_rozygr"
+        "https://t.me/StandUp_Show_bot?start=standup_rozygr"
     )
 
 
