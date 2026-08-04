@@ -53,12 +53,13 @@ SUB_MISSING_TEXT = (
 
 
 def start_text(community_link: str) -> str:
-    # Временно нейтральный текст для модерации VK mini app.
-    # В боевом режиме вернуть подписку + формулировки «билет за пост/отзыв».
-    _ = community_link
+    link = (community_link or "").strip() or "https://vk.com/"
     return (
-        "<b>Привет-привет</b> 🥳 😊\n\n"
-        "Выберите удобный способ участия 👇"
+        "Привет-привет 🥳 😊\n\n"
+        "<b>Что нужно сделать, чтобы получить билетик?</b>\n\n"
+        f'1. Быть подписанным на наше <a href="{link}">сообщество ВКонтакте</a>\n'
+        "2. Выложить в соцсети <b>пост со ссылкой на наш сайт</b> или <b>оставить отзыв</b> 😊\n\n"
+        "Выбирай, какой вариант тебе ближе 👇"
     )
 
 
@@ -101,9 +102,8 @@ def _payload(value: str, **extra) -> dict[str, Any]:
 
 def start_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
-    # Временно нейтральные названия (модерация). Боевые: «Билет за пост/отзыв».
-    kb.button("Пост в соцсетях", _payload("rz_post"), color="primary")
-    kb.button("Отзыв на Афише", _payload("rz_review"), color="primary")
+    kb.button("Билет за пост", _payload("rz_post"), color="primary")
+    kb.button("Билет за отзыв", _payload("rz_review"), color="primary")
     kb.adjust(1)
     return kb.as_json()
 
