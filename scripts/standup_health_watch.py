@@ -49,18 +49,26 @@ UNITS = (
 DISK_WARN_PERCENT = int(os.getenv("TECH_DISK_WARN_PERCENT", "90"))
 
 
-def _systemctl_is_active(unit: str) -> str:
+def _run(cmd: list[str]) -> str:
     try:
         proc = subprocess.run(
-            ["systemctl", "is-active", unit],
+            cmd,
             check=False,
             capture_output=True,
             text=True,
             timeout=15,
         )
-        return (proc.stdout or proc.stderr or "").strip() or "unknown"
+        return (proc.stdout or "").strip()
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"check-failed:{exc}"
+
+
+def _unit_load_state(unit: str) -> str:
+    return _run(["systemctl", "show", unit, "-p", "LoadState", "--value"]) or "unknown"
+
+
+def _systemctl_is_active(unit: str) -> str:
+    return _run(["systemctl", "is-active", unit]) or "unknown"
 
 
 def _disk_usage_percent(path: str = "/") -> int | None:
@@ -89,34 +97,33 @@ def _save_problems(problems: list[str]) -> None:
             json.dumps(problems, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-    except OSError:
-        pass
+    except OSError as exc:
+        print(f"warn: cannot save state: {exc}", flush=True)
 
 
-def _collect_problems() -> list[str]:
+def _collect_problems() -> tuple[list[str], list[str]]:
     problems: list[str] = []
+    notes: list[str] = []
     for unit in UNITS:
-        listed = subprocess.run(
-            ["systemctl", "list-unit-files", unit, "--no-legend"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if unit not in (listed.stdout or ""):
+        load_state = _unit_load_state(unit)
+        if load_state == "not-found":
+            notes.append(f"{unit}: not-found (skip)")
             continue
         status = _systemctl_is_active(unit)
+        notes.append(f"{unit}: load={load_state} active={status}")
         if status != "active":
             problems.append(f"{unit}: {status}")
 
     disk_pct = _disk_usage_percent("/")
-    if disk_pct is not None and disk_pct >= DISK_WARN_PERCENT:
-        problems.append(f"disk / used {disk_pct}% (limit {DISK_WARN_PERCENT}%)")
-    return problems
+    if disk_pct is not None:
+        notes.append(f"disk / used {disk_pct}%")
+        if disk_pct >= DISK_WARN_PERCENT:
+            problems.append(f"disk / used {disk_pct}% (limit {DISK_WARN_PERCENT}%)")
+    return problems, notes
 
 
 def main() -> int:
-    problems = _collect_problems()
+    problems, notes = _collect_problems()
     prev = _load_prev_problems()
     prev_set = set(prev)
     now_set = set(problems)
@@ -124,29 +131,34 @@ def main() -> int:
     new_problems = sorted(now_set - prev_set)
     resolved = sorted(prev_set - now_set)
 
+    print("status:", flush=True)
+    for line in notes:
+        print(f"  {line}", flush=True)
+    print(f"prev={prev}", flush=True)
+    print(f"now={problems}", flush=True)
+    print(f"new={new_problems}", flush=True)
+    print(f"resolved={resolved}", flush=True)
+
     if new_problems:
         body = "\n".join(new_problems)
-        print("NEW:", body)
-        notify_tech_sync(
+        sent = notify_tech_sync(
             format_alert("Сервер: проблема", body, source="health-watch"),
             key="health_new:" + "|".join(new_problems),
             throttle_sec=120,
         )
+        print(f"alert_problem_sent={sent}", flush=True)
 
     if resolved:
         body = "\n".join(resolved)
-        print("RESOLVED:", body)
-        notify_tech_sync(
+        sent = notify_tech_sync(
             format_alert("Сервер: проблема устранена", body, source="health-watch"),
             key="health_ok:" + "|".join(resolved),
             throttle_sec=60,
         )
+        print(f"alert_resolved_sent={sent}", flush=True)
 
-    if not problems and not resolved:
-        print("ok")
-    elif problems and not new_problems:
-        # Still failing, already alerted earlier — keep quiet (throttle on new_*).
-        print("still:", "\n".join(problems))
+    if not new_problems and not resolved:
+        print("no state change", flush=True)
 
     _save_problems(problems)
     return 1 if problems else 0
