@@ -81,6 +81,14 @@ TEST_ADMIN_IDS = {
     for part in _TEST_ADMIN_RAW.split(",")
     if part.strip().isdigit()
 }
+# Юзернеймы (без @), для которых пропускаем проверку подписки на канал.
+# Временно: theastarta — тест выдачи билета по розыгрышу.
+_SKIP_SUB_USERS_RAW = os.getenv("ROZYGRYSH_SKIP_SUB_USERNAMES", "theastarta")
+ROZYGRYSH_SKIP_SUB_USERNAMES = {
+    part.strip().lstrip("@").lower()
+    for part in _SKIP_SUB_USERS_RAW.split(",")
+    if part.strip()
+}
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set. Create .env from .env.example and fill in the token.")
