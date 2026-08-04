@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check systemd units + disk; alert TECH_CHAT_ID on problems.
+"""Check systemd units + disk; alert TECH_CHAT_ID on problems and recoveries.
 
 Intended to run every few minutes via systemd timer on the VPS.
 Reads BOT_TOKEN / TECH_CHAT_ID from /home/standup/app/.env (or cwd .env).
@@ -7,6 +7,7 @@ Reads BOT_TOKEN / TECH_CHAT_ID from /home/standup/app/.env (or cwd .env).
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -19,6 +20,9 @@ sys.path.insert(0, str(ROOT))
 # Load app .env before importing tech_alerts helpers that read os.environ.
 APP_ENV = Path("/home/standup/app/.env")
 LOCAL_ENV = ROOT / ".env"
+PROBLEMS_STATE = Path(
+    os.getenv("TECH_HEALTH_STATE_PATH", "/tmp/standup_health_problems.json")
+)
 
 
 def _load_env(path: Path) -> None:
@@ -69,10 +73,29 @@ def _disk_usage_percent(path: str = "/") -> int | None:
         return None
 
 
-def main() -> int:
+def _load_prev_problems() -> list[str]:
+    try:
+        data = json.loads(PROBLEMS_STATE.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return [str(x) for x in data]
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    return []
+
+
+def _save_problems(problems: list[str]) -> None:
+    try:
+        PROBLEMS_STATE.write_text(
+            json.dumps(problems, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _collect_problems() -> list[str]:
     problems: list[str] = []
     for unit in UNITS:
-        # Skip missing units (e.g. admin not installed on a host).
         listed = subprocess.run(
             ["systemctl", "list-unit-files", unit, "--no-legend"],
             check=False,
@@ -89,19 +112,44 @@ def main() -> int:
     disk_pct = _disk_usage_percent("/")
     if disk_pct is not None and disk_pct >= DISK_WARN_PERCENT:
         problems.append(f"disk / used {disk_pct}% (limit {DISK_WARN_PERCENT}%)")
+    return problems
 
-    if not problems:
+
+def main() -> int:
+    problems = _collect_problems()
+    prev = _load_prev_problems()
+    prev_set = set(prev)
+    now_set = set(problems)
+
+    new_problems = sorted(now_set - prev_set)
+    resolved = sorted(prev_set - now_set)
+
+    if new_problems:
+        body = "\n".join(new_problems)
+        print("NEW:", body)
+        notify_tech_sync(
+            format_alert("Сервер: проблема", body, source="health-watch"),
+            key="health_new:" + "|".join(new_problems),
+            throttle_sec=120,
+        )
+
+    if resolved:
+        body = "\n".join(resolved)
+        print("RESOLVED:", body)
+        notify_tech_sync(
+            format_alert("Сервер: проблема устранена", body, source="health-watch"),
+            key="health_ok:" + "|".join(resolved),
+            throttle_sec=60,
+        )
+
+    if not problems and not resolved:
         print("ok")
-        return 0
+    elif problems and not new_problems:
+        # Still failing, already alerted earlier — keep quiet (throttle on new_*).
+        print("still:", "\n".join(problems))
 
-    body = "\n".join(problems)
-    print(body)
-    notify_tech_sync(
-        format_alert("Сервер: проблема со здоровьем", body, source="health-watch"),
-        key="health:" + "|".join(problems),
-        throttle_sec=600,
-    )
-    return 1
+    _save_problems(problems)
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":
