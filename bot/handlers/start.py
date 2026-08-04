@@ -9,7 +9,13 @@ from aiogram.enums import ChatMemberStatus
 from aiogram.types import BufferedInputFile, ChatMemberUpdated, Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from bot.config import MANAGER_LINK, CHANNEL_LINK, PAID_BEST_START, HELP_CHAT_ID
+from bot.config import (
+    CHANNEL_LINK,
+    HELP_CHAT_ID,
+    MANAGER_LINK,
+    PAID_BEST_START,
+    TEST_ADMIN_IDS,
+)
 from bot.db.analytics import (
     EVENT_BOT_BLOCKED,
     EVENT_BOT_START,
@@ -391,8 +397,10 @@ async def _delete_previous_menu_message(call: CallbackQuery):
 
 @router.message(F.sticker, F.chat.type == "private")
 async def private_sticker_file_id(message: Message, state: FSMContext):
-    """Временно: отвечает file_id стикера — удобно прописать ROZYGRYSH_STICKER_FILE_ID."""
+    """file_id стикера — только для TEST_ADMIN_IDS (чтобы гости не ловили служебный ответ)."""
     if await state.get_state() is not None:
+        return
+    if not message.from_user or message.from_user.id not in TEST_ADMIN_IDS:
         return
     file_id = message.sticker.file_id if message.sticker else ""
     if not file_id:
