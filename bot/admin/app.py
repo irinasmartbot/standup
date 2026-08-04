@@ -730,20 +730,6 @@ def _user_from_directory_row(row: dict) -> dict:
 def _users_directory_where(q: str, status: str, channel: str = "") -> tuple[str, dict]:
     where = ["TRUE"]
     params: dict = {}
-    # Обезличенные (phone=deleted-*, без tg/vk) без активных броней не висят в списке.
-    # В SQL только ASCII — кириллица в литералах ломала выборку на части окружений.
-    where.append(
-        "NOT ("
-        "COALESCE(u.phone, '') LIKE 'deleted-%' "
-        "AND u.telegram_id IS NULL "
-        "AND u.vk_id IS NULL "
-        "AND NOT EXISTS ("
-        "SELECT 1 FROM bookings b_active "
-        "WHERE b_active.user_id = u.id "
-        "AND b_active.status IN ('booked', 'confirmed')"
-        ")"
-        ")"
-    )
     q = (q or "").strip()
     if q:
         q_user = q[1:].strip() if q.startswith("@") else q
@@ -803,8 +789,10 @@ def fetch_users_page(
         "pages": 1,
         "q": (q or "").strip(),
         "page_size": USERS_PAGE_SIZE,
+        "error": "",
     }
     if not _use_postgres(config):
+        empty["error"] = "Postgres выключен (BOOKINGS_SOURCE/DATABASE_URL)"
         return empty
     page = max(1, _parse_int(page, 1))
     where_sql, base_params = _users_directory_where(q, status, channel)
@@ -855,9 +843,11 @@ def fetch_users_page(
             "pages": pages,
             "q": (q or "").strip(),
             "page_size": USERS_PAGE_SIZE,
+            "error": "",
         }
-    except Exception:
+    except Exception as exc:
         logger.exception("fetch_users_page failed")
+        empty["error"] = f"{type(exc).__name__}: {exc}"
         return empty
 
 
@@ -4700,6 +4690,7 @@ async def admin_page(request: web.Request) -> web.Response:
                     "pages": page_data["pages"],
                     "q": page_data["q"],
                     "list_keys": list_keys,
+                    "error": page_data.get("error") or "",
                 },
             }
 
@@ -4729,6 +4720,9 @@ async def admin_page(request: web.Request) -> web.Response:
                 events_flash = (
                     f"Не удалось обезличить гостя{': ' + err[:200] if err else '.'}"
                 )
+        users_err = ((dashboard.get("users_meta") or {}).get("error") or "").strip()
+        if users_err and not events_flash:
+            events_flash = f"Не удалось загрузить пользователей: {users_err[:300]}"
     else:
         # With a date selected, load all shows that day (even empty) so the show picker is complete.
         include_empty_events = bool(filters.get("date")) and filters.get("tab") in {"date", "bookings"}
