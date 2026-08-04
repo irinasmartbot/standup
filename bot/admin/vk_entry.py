@@ -37,7 +37,7 @@ FLOWS: dict[str, dict[str, Any]] = {
         "title": "Бронирование",
         "headline": "Забронировать места",
         "button": "Забронировать места",
-        "lead": "Разрешите сообщения — пришлём выбор формата в личку VK.",
+        "lead": "Разрешите сообщения — пришлём информацию о бронировании в личку VK.",
         "ref": "standup_book",
     },
     "raffle": {
@@ -55,6 +55,21 @@ FLOWS: dict[str, dict[str, Any]] = {
         "ref": "offline_gift",
     },
 }
+
+# Временно для модерации mini app: только бронь (розыгрыш/подарок вернём в боевом режиме).
+MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking",)
+
+# Временно без cmd-клавиатуры форматов (Salebot ещё на линии; для модерации чище).
+# Боевой режим: FORMATS_TEXT + _formats_keyboard().
+BOOKING_ENTRY_TEXT = (
+    "Привет! 😊\n\n"
+    "Мы поможем забронировать места на шоу <b>Moscow StandUp Show</b>.\n\n"
+    "Доступные форматы:\n"
+    "• StandUp BEST\n"
+    "• Хитлото\n"
+    "• StandUp Проверка материала\n\n"
+    "Напишите, какой формат вам интересен — менеджер пришлёт варианты."
+)
 
 _ENTRY_COOLDOWN_SEC = 20.0
 _MINI_FLOW_HANDOFF_TTL_SEC = 300.0
@@ -149,7 +164,6 @@ def _gift_event_label(event: dict[str, Any]) -> str:
 async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int) -> None:
     """Сразу ветка бота — без сообщения «нажмите кнопку ниже»."""
     from bot.db.analytics import EVENT_BOT_START, EVENT_BRANCH_PROVERKA, track_event
-    from bot.handlers.formats import FORMATS_TEXT
     from bot.vk import raffle as vk_raffle
 
     flow = FLOWS.get(flow_key) or {}
@@ -187,7 +201,9 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
             channel="vkontakte",
             props={"via": "mini_app_flow"},
         )
-        await client.send_message(vk_id, FORMATS_TEXT, keyboard=_formats_keyboard())
+        # Временно нейтральный текст без кнопок форматов (модерация / Salebot).
+        # Боевой режим: FORMATS_TEXT + _formats_keyboard().
+        await client.send_message(vk_id, BOOKING_ENTRY_TEXT)
         return
 
     from bot.db.crud import get_offline_gift_today_events
@@ -482,6 +498,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     settings = load_vk_settings()
     group_id = int(settings.group_id or 0)
     ready = bool(group_id and settings.group_token)
+    visible = [key for key in MINI_APP_VISIBLE_FLOWS if key in FLOWS]
     flow_labels = {
         key: {
             "headline": value["headline"],
@@ -489,7 +506,10 @@ def _mini_app_html(default_flow: str = "") -> str:
             "lead": value["lead"],
         }
         for key, value in FLOWS.items()
+        if key in visible
     }
+    if default_flow and default_flow not in visible:
+        default_flow = visible[0] if visible else ""
 
     if not ready:
         body = """
@@ -497,12 +517,17 @@ def _mini_app_html(default_flow: str = "") -> str:
         """
         app_js = ""
     else:
-        body = """
-        <p id="lead" class="lead">Выберите, что хотите сделать:</p>
+        buttons_html = "\n".join(
+            (
+                f'          <button type="button" class="cta" data-flow="{escape(key)}">'
+                f'{escape(FLOWS[key]["button"])}</button>'
+            )
+            for key in visible
+        )
+        body = f"""
+        <p id="lead" class="lead">Забронируйте места на шоу — продолжение в личке VK.</p>
         <div class="actions" id="actions">
-          <button type="button" class="cta" data-flow="booking">Забронировать места</button>
-          <button type="button" class="cta" data-flow="raffle">Участвовать в розыгрыше</button>
-          <button type="button" class="cta" data-flow="offline_gift">Подарок на шоу</button>
+{buttons_html}
         </div>
         <p id="status" class="status" hidden></p>
         """
@@ -893,14 +918,19 @@ def _mini_app_html(default_flow: str = "") -> str:
   }});
 
   function showAllFlows() {{
-    titleEl.textContent = "Быстрый вход в VK";
-    leadEl.textContent = "Выберите, что хотите сделать:";
+    titleEl.textContent = "Бронирование";
+    leadEl.textContent = "Забронируйте места на шоу — продолжение в личке VK.";
     actionsEl.hidden = false;
     actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
       var flow = button.getAttribute("data-flow");
+      if (!flowLabels[flow]) {{
+        button.hidden = true;
+        button.style.display = "none";
+        return;
+      }}
       button.hidden = false;
       button.style.display = "";
-      if (flowLabels[flow]) button.textContent = flowLabels[flow].button;
+      button.textContent = flowLabels[flow].button;
     }});
   }}
 
@@ -992,7 +1022,7 @@ def _mini_app_html(default_flow: str = "") -> str:
 <body>
   <main>
     <p class="brand">Moscow StandUp Show</p>
-    <h1 id="title">Быстрый вход в VK</h1>
+    <h1 id="title">Бронирование</h1>
     {body}
   </main>
   {app_js}
@@ -1151,6 +1181,11 @@ async def mini_entry_post(request: web.Request) -> web.Response:
     flow_key = str((data or {}).get("flow") or "").strip()
     if flow_key not in FLOWS:
         return web.json_response({"ok": False, "error": "Неизвестный сценарий."}, status=400)
+    if flow_key not in MINI_APP_VISIBLE_FLOWS:
+        return web.json_response(
+            {"ok": False, "error": "Сейчас доступно только бронирование."},
+            status=400,
+        )
 
     ok, params, error = _verify_mini_launch_params(str((data or {}).get("launch_params") or ""))
     if not ok:
