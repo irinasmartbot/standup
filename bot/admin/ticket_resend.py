@@ -11,7 +11,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from bot.config import BOOKINGS_SOURCE, DATABASE_URL
-from bot.utils.ticket import generate_ticket, guests_word
+from bot.utils.ticket import format_ticket_place, generate_ticket, guests_word
 
 logger = logging.getLogger(__name__)
 
@@ -137,13 +137,12 @@ def _serialize(row: dict) -> dict:
 def _ticket_bytes(row: dict) -> bytes:
     address = row.get("address") or ""
     location = row.get("location") or ""
-    address_part = address.split(",", 1)[1].strip() if "," in address else address
-    short_address = f"{location}, {address_part}".strip(", ")
+    place = format_ticket_place(location, address)
     buf = generate_ticket(
         row.get("name") or "",
         row.get("event_date") or "",
         row.get("event_time") or "",
-        short_address,
+        place,
         int(row.get("guests") or 1),
     )
     return buf.getvalue()

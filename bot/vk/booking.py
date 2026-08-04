@@ -18,7 +18,7 @@ from bot.db.crud import (
 )
 from bot.services.sheets import load_events
 from bot.utils.phone import normalize_phone
-from bot.utils.ticket import format_date, generate_ticket, guests_word, now_msk
+from bot.utils.ticket import format_date, format_ticket_place, generate_ticket, guests_word, now_msk
 from bot.vk.keyboards import VKKeyboardBuilder
 
 logger = logging.getLogger(__name__)
@@ -487,32 +487,27 @@ async def issue_ticket(
             )
             return
 
-    short_address = (
-        f"{event_location}, {event_address.split(',', 1)[1].strip()}"
-        if event_location and "," in event_address
-        else f"{event_location}, {event_address}".strip(", ")
-    )
     place = f"{event_location}, {event_address}".strip(", ") if event_location else event_address
-    ticket_buf = generate_ticket(name or "", event_date, event_time, short_address, guests)
-    update_booking_status(booking_id, "confirmed")
+    is_raffle = False
     try:
-        from bot.db.crud import get_active_raffle_booking, set_rozygrysh_used
+        from bot.db.crud import get_active_raffle_booking, get_booking_format, set_rozygrysh_used
 
-        if get_active_raffle_booking(vk_id=int(peer_id)):
+        fmt = (get_booking_format(booking_id) or "").strip().lower()
+        raffle_row = get_active_raffle_booking(vk_id=int(peer_id))
+        is_raffle = fmt == "rozygrysh" or bool(
+            raffle_row and int(raffle_row[0]) == int(booking_id)
+        )
+        if is_raffle:
             set_rozygrysh_used(vk_id=int(peer_id), used=True)
     except Exception:
         pass
 
+    place_on_ticket = format_ticket_place(event_location, event_address)
+    ticket_buf = generate_ticket(name or "", event_date, event_time, place_on_ticket, guests)
+    update_booking_status(booking_id, "confirmed")
+
     vk_manager = (manager_link or "").strip() or MANAGER_LINK
     vk_community = (community_link or "").strip() or CHANNEL_LINK
-    is_raffle = False
-    try:
-        from bot.db.crud import get_active_raffle_booking
-
-        raffle_row = get_active_raffle_booking(vk_id=int(peer_id))
-        is_raffle = bool(raffle_row and int(raffle_row[0]) == int(booking_id))
-    except Exception:
-        pass
 
     if is_raffle:
         caption = (

@@ -38,7 +38,7 @@ from bot.utils.nav_messages import (
     forget_my_bookings_message,
     remember_my_bookings_message,
 )
-from bot.utils.ticket import generate_ticket
+from bot.utils.ticket import format_ticket_place, generate_ticket
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -210,10 +210,9 @@ def _ticket_command_caption(row) -> str:
 
 
 def _ticket_command_photo(row):
-    booking_id, _, _, event_date, event_time, address, location, guests, _, _, name = row
-    address_part = address.split(",", 1)[1].strip() if address and "," in address else (address or "")
-    short_address = f"{location or ''}, {address_part}".strip(", ")
-    ticket_buf = generate_ticket(name or "", event_date, event_time, short_address, guests)
+    booking_id, format_name, _, event_date, event_time, address, location, guests, _, _, name = row
+    place = format_ticket_place(location or "", address or "")
+    ticket_buf = generate_ticket(name or "", event_date, event_time, place, guests)
     return BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg")
 
 
