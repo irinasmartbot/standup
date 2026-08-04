@@ -24,9 +24,33 @@ _STATE_PATH = Path(
     os.getenv("TECH_ALERTS_STATE_PATH", "/tmp/standup_tech_alerts_state.json")
 )
 _SENDING = False
+_ENV_LOADED = False
+
+
+def _ensure_env() -> None:
+    """Load .env so one-liners/scripts see BOT_TOKEN / TECH_CHAT_ID."""
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+    _ENV_LOADED = True
+    try:
+        # Prefer project config loader (dotenv / manual .env).
+        import bot.config  # noqa: F401
+    except Exception:
+        root = Path(__file__).resolve().parents[2]
+        env_path = root / ".env"
+        if not env_path.is_file():
+            return
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def tech_chat_id() -> int | None:
+    _ensure_env()
     raw = (os.getenv("TECH_CHAT_ID") or "").strip()
     if not raw:
         return None
@@ -38,6 +62,7 @@ def tech_chat_id() -> int | None:
 
 
 def bot_token() -> str:
+    _ensure_env()
     return (os.getenv("BOT_TOKEN") or "").strip()
 
 
@@ -96,7 +121,11 @@ def notify_tech_sync(
     global _SENDING
     chat_id = tech_chat_id()
     token = bot_token()
-    if not chat_id or not token:
+    if not chat_id:
+        logger.warning("tech alert skipped: TECH_CHAT_ID is empty")
+        return False
+    if not token:
+        logger.warning("tech alert skipped: BOT_TOKEN is empty")
         return False
     if _throttled(key, throttle_sec):
         return False
@@ -120,8 +149,18 @@ def notify_tech_sync(
         with urllib.request.urlopen(req, timeout=15) as resp:
             resp.read()
         return True
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = str(exc)
+        logger.warning("tech alert send failed HTTP %s: %s", exc.code, detail)
+        print(f"tech alert HTTP {exc.code}: {detail}", flush=True)
+        return False
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         logger.warning("tech alert send failed: %s", exc)
+        print(f"tech alert error: {exc}", flush=True)
         return False
     finally:
         _SENDING = False
