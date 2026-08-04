@@ -594,10 +594,34 @@ def _mini_app_html(default_flow: str = "") -> str:
   var autoStarted = false;
   var permissionRequested = false;
   var dialogReady = false;
+  var launchParamsQuery = window.location.search || "";
   var statusEl = document.getElementById("status");
   var leadEl = document.getElementById("lead");
   var actionsEl = document.getElementById("actions");
   var titleEl = document.getElementById("title");
+
+  function rememberLaunchParams(raw) {{
+    if (!raw) return;
+    if (typeof raw === "string") {{
+      var s = raw.trim();
+      if (!s) return;
+      launchParamsQuery = s.charAt(0) === "?" ? s : ("?" + s);
+      return;
+    }}
+    if (typeof raw !== "object") return;
+    var parts = [];
+    Object.keys(raw).forEach(function (key) {{
+      var value = raw[key];
+      if (value == null) return;
+      if (!(key === "sign" || key.indexOf("vk_") === 0)) return;
+      parts.push(encodeURIComponent(key) + "=" + encodeURIComponent(String(value)));
+    }});
+    if (parts.length) {{
+      launchParamsQuery = "?" + parts.join("&");
+    }}
+  }}
+
+  rememberLaunchParams(window.location.search);
 
   function setStatus(text, ok) {{
     statusEl.hidden = !text;
@@ -747,12 +771,22 @@ def _mini_app_html(default_flow: str = "") -> str:
     if (!currentFlow || sending) return;
     sending = true;
     setStatus("Отправляем сообщение в VK. Обычно оно приходит в течение пары секунд…", true);
+    if (!launchParamsQuery || launchParamsQuery.indexOf("vk_") === -1) {{
+      sending = false;
+      setStatus(
+        "Нет параметров запуска VK. Откройте приложение внутри VK (не в обычном браузере): vk.com/app" +
+          "{_env_mini_app_id() or '54704296'}" +
+          (groupId ? ("_-" + groupId) : ""),
+        false
+      );
+      return;
+    }}
     fetch("/vk-mini/entry", {{
       method: "POST",
       headers: {{ "Content-Type": "application/json" }},
       body: JSON.stringify({{
         flow: currentFlow,
-        launch_params: window.location.search || ""
+        launch_params: launchParamsQuery
       }})
     }})
       .then(function (r) {{
@@ -878,6 +912,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     showAllFlows();
   }}
   bridge.send("VKWebAppGetLaunchParams").then(function (data) {{
+    rememberLaunchParams(data);
     var flow = flowFromLaunchParams(data);
     if (flow) {{
       autoStart(flow);
@@ -992,7 +1027,10 @@ def _verify_mini_launch_params(raw_query: str) -> tuple[bool, dict[str, str], st
     sign = params.get("sign") or ""
     vk_params = sorted((k, v) for k, v in params.items() if k.startswith("vk_"))
     if not sign or not vk_params:
-        return False, params, "Нет подписанных параметров запуска VK."
+        return False, params, (
+            "Нет подписанных параметров запуска VK. "
+            "Откройте приложение из VK (vk.com/app…), не через обычный браузер."
+        )
 
     expected_bytes = hmac.new(
         secret.encode("utf-8"),
