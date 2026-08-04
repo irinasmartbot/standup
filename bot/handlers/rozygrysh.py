@@ -34,6 +34,7 @@ from bot.config import (
     MANAGER_PHONE,
     MODERATION_CHAT_ID,
     ROZYGRYSH_SKIP_SUB_CHECK,
+    ROZYGRYSH_SKIP_SUB_USERNAMES,
     ROZYGRYSH_STICKER_FILE_ID,
     SITE_URL,
     TEST_ADMIN_IDS,
@@ -1135,10 +1136,24 @@ async def rz_mod_reject_reason(message: Message, state: FSMContext):
 # ─── подписка ─────────────────────────────────────────────────────────────────
 
 
-async def _is_subscribed(telegram_id: int) -> bool:
+async def _is_subscribed(telegram_id: int, username: str | None = None) -> bool:
     # Временная заглушка для теста, пока бот не админ канала
     if ROZYGRYSH_SKIP_SUB_CHECK:
         logger.info("ROZYGRYSH_SKIP_SUB_CHECK=1 — skip channel check for %s", telegram_id)
+        return True
+    uname = (username or "").lstrip("@").lower()
+    if not uname:
+        try:
+            chat = await bot.get_chat(telegram_id)
+            uname = (getattr(chat, "username", None) or "").lower()
+        except Exception:
+            uname = ""
+    if uname and uname in ROZYGRYSH_SKIP_SUB_USERNAMES:
+        logger.info(
+            "ROZYGRYSH_SKIP_SUB_USERNAMES — skip channel check for @%s (%s)",
+            uname,
+            telegram_id,
+        )
         return True
     try:
         member = await bot.get_chat_member(f"@{CHANNEL_USERNAME}", telegram_id)
@@ -1162,8 +1177,12 @@ async def _send_happy_sticker(telegram_id: int):
             logger.exception("Failed to send raffle sticker to %s", telegram_id)
 
 
-async def _continue_after_subscribe_check(telegram_id: int, manual_attempts: int = 0):
-    if await _is_subscribed(telegram_id):
+async def _continue_after_subscribe_check(
+    telegram_id: int,
+    manual_attempts: int = 0,
+    username: str | None = None,
+):
+    if await _is_subscribed(telegram_id, username=username):
         track_event(
             EVENT_RAFFLE_SUBSCRIBED,
             telegram_id=telegram_id,
@@ -1232,7 +1251,8 @@ async def _send_subscribed_and_dates(telegram_id: int):
 @router.callback_query(F.data.startswith("rz_sub_check_"))
 async def rz_sub_check(call: CallbackQuery):
     attempts = int(call.data.replace("rz_sub_check_", "") or "0")
-    if await _is_subscribed(call.from_user.id):
+    username = call.from_user.username or ""
+    if await _is_subscribed(call.from_user.id, username=username):
         track_event(
             EVENT_RAFFLE_SUBSCRIBED,
             telegram_id=call.from_user.id,
@@ -1256,7 +1276,11 @@ async def rz_sub_check(call: CallbackQuery):
     except Exception:
         pass
 
-    await _continue_after_subscribe_check(call.from_user.id, manual_attempts=next_attempts)
+    await _continue_after_subscribe_check(
+        call.from_user.id,
+        manual_attempts=next_attempts,
+        username=username,
+    )
 
 
 @router.chat_member()
