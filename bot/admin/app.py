@@ -1041,6 +1041,14 @@ def _sort_bookings(bookings: list[dict], filters: dict) -> list[dict]:
     return sorted(bookings, key=key_fn, reverse=reverse)
 
 
+def _user_card_href(user_id) -> str:
+    """Link to admin Users tab card; empty if no numeric user id."""
+    uid = str(user_id or "").strip()
+    if not uid.isdigit():
+        return ""
+    return f"/admin?tab=users&u={uid}"
+
+
 def _booking_table(
     bookings: list[dict],
     compact=False,
@@ -1065,12 +1073,27 @@ def _booking_table(
         status_cell = _status_badge(booking["status"])
         if show_format and booking.get("format"):
             status_cell += f'<br><span class="format-tag">{_h(_format_label(booking["format"]))}</span>'
-        user_id = booking.get("user_id") or "—"
+        raw_uid = booking.get("user_id") or ""
+        user_href = _user_card_href(raw_uid)
+        uid_label = _h(raw_uid or "—")
+        name_label = _h(booking.get("name") or "Без имени")
+        if user_href:
+            uid_cell = f'<a href="{user_href}">{uid_label}</a>'
+            client_cell = (
+                f'<a href="{user_href}"><b>{name_label}</b></a>'
+                f"<br><span class='muted'>{_h(booking['source'])}</span>"
+            )
+        else:
+            uid_cell = uid_label
+            client_cell = (
+                f"<b>{name_label}</b>"
+                f"<br><span class='muted'>{_h(booking['source'])}</span>"
+            )
         rows.append(
             "<tr>"
-            f"<td>{_h(user_id)}</td>"
+            f"<td>{uid_cell}</td>"
             f"<td>{status_cell}</td>"
-            f"<td><b>{_h(booking['name'])}</b><br><span class='muted'>{_h(booking['source'])}</span></td>"
+            f"<td>{client_cell}</td>"
             f"<td>{contact}</td>"
             f"<td>{_h(booking['guests'])}</td>"
             f"{event_cols}"
