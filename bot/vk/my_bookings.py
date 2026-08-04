@@ -15,7 +15,7 @@ from bot.db.crud import (
 )
 from bot.handlers.start import MY_BOOKINGS_INTRO
 from bot.services.sheets import load_events
-from bot.utils.ticket import format_date, generate_ticket, now_msk, parse_event_datetime
+from bot.utils.ticket import format_date, format_ticket_place, generate_ticket, now_msk, parse_event_datetime
 from bot.vk.keyboards import VKKeyboardBuilder
 
 STEP_NEW_GUESTS = "waiting_new_guests"
@@ -81,10 +81,9 @@ def ticket_caption(row) -> str:
 
 
 def ticket_bytes(row) -> bytes:
-    booking_id, _, _, event_date, event_time, address, location, guests, _, _, name = row
-    address_part = address.split(",", 1)[1].strip() if address and "," in address else (address or "")
-    short_address = f"{location or ''}, {address_part}".strip(", ")
-    buf = generate_ticket(name or "", event_date, event_time, short_address, guests)
+    booking_id, format_name, _, event_date, event_time, address, location, guests, _, _, name = row
+    place = format_ticket_place(location or "", address or "")
+    buf = generate_ticket(name or "", event_date, event_time, place, guests)
     return buf.getvalue()
 
 

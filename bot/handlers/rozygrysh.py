@@ -92,7 +92,15 @@ from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warni
 from bot.utils.bot_commands import refresh_user_commands
 from bot.utils.nav_messages import delete_my_bookings_messages
 from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
-from bot.utils.ticket import MONTHS, format_date, generate_ticket, guests_word, now_msk, parse_event_datetime
+from bot.utils.ticket import (
+    MONTHS,
+    format_date,
+    format_ticket_place,
+    generate_ticket,
+    guests_word,
+    now_msk,
+    parse_event_datetime,
+)
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -1891,8 +1899,8 @@ async def rz_ticket(call: CallbackQuery):
                 await call.answer()
                 return
 
-        short_address = f"{event_location}, {event_address.split(',')[1] if ',' in event_address else event_address}"
-        ticket_buf = generate_ticket(name, event_date, event_time, short_address, guests)
+        place_on_ticket = format_ticket_place(event_location, event_address)
+        ticket_buf = generate_ticket(name, event_date, event_time, place_on_ticket, guests)
         update_booking_status(booking_id, "confirmed")
         set_rozygrysh_used(call.from_user.id, True)
 
@@ -1900,7 +1908,7 @@ async def rz_ticket(call: CallbackQuery):
             name=escape(name),
             date=escape(str(event_date)),
             time=escape(str(event_time)),
-            place=escape(str(event_address)),
+            place=escape(place_on_ticket),
             manager=_manager_username(),
         )
         ticket_msg = await call.message.answer_photo(

@@ -30,7 +30,15 @@ from bot.services.sheets import load_events, get_event
 from bot.utils.bot_commands import refresh_user_commands
 from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
 from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
-from bot.utils.ticket import format_date, guests_word, generate_ticket, MONTHS, now_msk, parse_event_datetime
+from bot.utils.ticket import (
+    MONTHS,
+    format_date,
+    format_ticket_place,
+    generate_ticket,
+    guests_word,
+    now_msk,
+    parse_event_datetime,
+)
 from bot.utils.nav_messages import (
     remember_booking_nav,
     forget_booking_nav,
@@ -857,9 +865,8 @@ async def get_ticket(call: CallbackQuery):
                 await call.answer()
                 return
 
-        short_address = f"{event_location}, {event_address.split(',')[1] if ',' in event_address else event_address}"
-        place = f"{event_location}, {event_address}".strip(", ") if event_location else (event_address or "")
-        ticket_buf = generate_ticket(name, event_date, event_time, short_address, guests)
+        place = format_ticket_place(event_location, event_address)
+        ticket_buf = generate_ticket(name, event_date, event_time, place, guests)
         update_booking_status(booking_id, "confirmed")
 
         caption = (

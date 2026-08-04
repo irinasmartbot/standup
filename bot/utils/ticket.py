@@ -62,6 +62,15 @@ def guests_word(n):
         return f"{n} гостей"
 
 
+def format_ticket_place(location: str = "", address: str = "", *, full: bool = True) -> str:
+    """Полный адрес на картинке билета (как в подписи). full оставлен для совместимости."""
+    location = (location or "").strip()
+    address = (address or "").strip()
+    if address and location and not address.lower().startswith(location.lower()):
+        return f"{location}, {address}"
+    return address or location
+
+
 def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
     bbox = draw.textbbox((0, 0), text, font=font)
     return max(0, bbox[2] - bbox[0])
@@ -158,18 +167,19 @@ def generate_ticket(name, date_str, time_str, location, guests):
     guests_line = guests_word(guests)
     font_guests = _fit_font(draw, guests_line, load_font, max_text_w, max(9, int(H * 0.060)))
 
-    # Адрес крупнее: держим кегль ближе к дате, переносим на 2–3 строки.
+    # Адрес: для полного (розыгрыш) до 4 строк, кегль чуть ближе к дате.
     loc = (location or "").strip()
+    loc_max_lines = 4 if len(loc) > 40 else 3
     loc_size = max(11, int(H * 0.055))
-    min_loc = max(10, int(H * 0.042))
+    min_loc = max(9, int(H * 0.038))
     font_small = load_font(loc_size)
-    loc_lines = _wrap_text(draw, loc, font_small, max_text_w, max_lines=3)
+    loc_lines = _wrap_text(draw, loc, font_small, max_text_w, max_lines=loc_max_lines)
     while loc_size > min_loc and any(
         _text_width(draw, line, font_small) > max_text_w for line in loc_lines
     ):
         loc_size -= 1
         font_small = load_font(loc_size)
-        loc_lines = _wrap_text(draw, loc, font_small, max_text_w, max_lines=3)
+        loc_lines = _wrap_text(draw, loc, font_small, max_text_w, max_lines=loc_max_lines)
 
     x = rect_x1 + int(W * 0.02)
     # 4–6 строк с равными промежутками внутри тёмного блока
