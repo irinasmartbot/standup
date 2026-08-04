@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from html import escape
 
 from aiogram import F, Router
@@ -16,11 +17,14 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.crud import get_manager_stata_bookings_for_date, get_manager_stata_dates
+from bot.utils.ticket import now_msk
 
 router = Router()
 
 DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
 TG_TEXT_LIMIT = 3500
+# Для розыгрыша: сегодня + следующие дни (не вся афиша BEST).
+ROZYGR_DATE_BUTTONS = 3
 
 CHOOSE_DATE_TEXT_PROVERKA = (
     "Выбери дату, на которую нужно получить список гостей "
@@ -56,6 +60,20 @@ def _mode_cfg(mode: str):
 
 def _state_for_mode(mode: str):
     return ManagerStataRozygr.choosing_date if mode == "rozygr" else ManagerStata.choosing_date
+
+
+def _rolling_calendar_dates(count: int = ROZYGR_DATE_BUTTONS) -> list[str]:
+    """Ближайшие календарные даты по МСК: сегодня, завтра, …"""
+    today = now_msk().date()
+    n = max(1, int(count))
+    return [(today + timedelta(days=i)).strftime("%d.%m.%Y") for i in range(n)]
+
+
+def _dates_for_mode(mode: str) -> list[str]:
+    if mode == "rozygr":
+        return _rolling_calendar_dates()
+    _, event_format, *_ = _mode_cfg(mode)
+    return get_manager_stata_dates(event_format=event_format)
 
 
 def _back_keyboard(mode: str):
@@ -192,8 +210,8 @@ async def _edit_html(message: Message, text: str, reply_markup=None):
 async def _start_for_mode(message: Message, state: FSMContext, mode: str):
     await state.set_state(_state_for_mode(mode))
     await state.update_data(stata_mode=mode)
-    _, event_format, _, choose_text, _ = _mode_cfg(mode)
-    dates = get_manager_stata_dates(event_format=event_format)
+    _, _, _, choose_text, _ = _mode_cfg(mode)
+    dates = _dates_for_mode(mode)
     if not dates:
         await message.answer(
             choose_text + "\n\n(В афише пока нет ближайших дат — напиши дату вручную.)",
@@ -213,8 +231,8 @@ async def send_manager_stata_rozygr_start(message: Message, state: FSMContext):
 async def _show_dates(target: Message, state: FSMContext, mode: str, *, edit: bool = False):
     await state.set_state(_state_for_mode(mode))
     await state.update_data(stata_mode=mode)
-    _, event_format, _, choose_text, _ = _mode_cfg(mode)
-    dates = get_manager_stata_dates(event_format=event_format)
+    _, _, _, choose_text, _ = _mode_cfg(mode)
+    dates = _dates_for_mode(mode)
     markup = _dates_keyboard(dates, mode) if dates else None
     text = choose_text
     if not dates:
