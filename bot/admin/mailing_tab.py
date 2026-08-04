@@ -100,12 +100,16 @@ def render_mailing_tab(
 
     history = (
         '<section class="card">'
-        "<h2>История рассылок</h2>"
+        '<details data-persist-key="mailing:history">'
+        "<summary><strong>История рассылок</strong>"
+        '<span class="details-action"><span class="closed-label">Развернуть</span>'
+        '<span class="open-label">Свернуть</span></span></summary>'
         '<div class="table-wrap"><table class="users">'
         "<thead><tr><th>id</th><th>Название</th><th>Статус</th>"
         "<th>Прогресс</th><th>Осталось ≈</th><th></th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"muted\">Пока пусто</td></tr>'}</tbody>"
         "</table></div>"
+        "</details>"
         "</section>"
     )
 

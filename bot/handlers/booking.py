@@ -1309,5 +1309,5 @@ async def unknown_message(message: Message, state: FSMContext):
     if not _is_meaningful_free_text(text):
         return
 
-    # Осмысленный текст (≥10 символов) — в тот же чат, что и вопросы из /help
-    await submit_help_question(message, thank_you=True)
+    # Осмысленный текст (≥10 символов) — в хелп-чат без отбивки клиенту.
+    await submit_help_question(message, thank_you=False)

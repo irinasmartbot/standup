@@ -746,9 +746,11 @@ async def _send_to_moderation(
             f"Заявка #{submission_id}"
         )
     else:
-        uname = f"@{username}" if username else f"id {telegram_id}"
+        uname = f"@{username}" if username else "без username"
+        tg_id = int(telegram_id) if telegram_id is not None else 0
         caption = (
-            f"{escape(full_name or 'Гость')} {escape(uname)} прислал СКРИН {kind_label}\n"
+            f"{escape(full_name or 'Гость')} {escape(uname)} "
+            f"(id {tg_id}) прислал СКРИН {kind_label}\n"
             f"Заявка #{submission_id}"
         )
     kb = InlineKeyboardBuilder()
@@ -825,8 +827,9 @@ def _client_label(row) -> str:
             f'{escape(name)} · <a href="https://vk.com/id{vk_id}">профиль VK</a> '
             f"(id {vk_id})"
         )
-    uname = f"@{row[2]}" if row[2] else f"tg_id:{row[1]}"
-    return f"{escape(name)} {escape(uname)}".strip()
+    uname = f"@{row[2]}" if row[2] else "без username"
+    tg_id = row[1] if row[1] is not None else "—"
+    return f"{escape(name)} {escape(uname)} (id {tg_id})".strip()
 
 
 async def _mod_caption_fallback(row) -> str:
@@ -1121,6 +1124,7 @@ async def rz_mod_reject_reason(message: Message, state: FSMContext):
     _PENDING_REJECT_BY_MSG.pop(card_msg_id, None)
     mod_chat_id = row[7] or message.chat.id
     mod_msg_id = row[8] or card_msg_id
+    # Удаляем подсказку бота и ответку менеджера с причиной — в чате остаётся карточка.
     await _reject_submission(
         row,
         reason,
@@ -1128,6 +1132,10 @@ async def rz_mod_reject_reason(message: Message, state: FSMContext):
         message.chat.id,
         prompt_message_id,
         message.message_id,
+    )
+    # Повторно на случай гонки/задержки Telegram (ответка иногда остаётся).
+    await _delete_mod_chat_messages(
+        message.chat.id, prompt_message_id, message.message_id
     )
 
 
