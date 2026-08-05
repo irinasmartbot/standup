@@ -538,7 +538,17 @@ def fetch_analytics_report(
                         f"""
                         SELECT
                             COUNT(*)::int AS events,
-                            {_UNIQUE_PERSON_SQL} AS uniques
+                            {_UNIQUE_PERSON_SQL} AS uniques,
+                            COUNT(DISTINCT booking_id)::int AS bookings,
+                            COUNT(DISTINCT booking_id) FILTER (
+                                WHERE booking_id IS NOT NULL
+                                  AND EXISTS (
+                                      SELECT 1
+                                      FROM bookings b
+                                      WHERE b.id = analytics_events.booking_id
+                                        AND b.status IN ('booked', 'confirmed')
+                                  )
+                            )::int AS active_bookings
                         FROM analytics_events
                         WHERE {where_sql}
                           AND name = %(event_name)s
@@ -551,9 +561,15 @@ def fetch_analytics_report(
                         },
                     )
                     row = cur.fetchone() or {}
+                    bookings = int(row.get("bookings") or 0)
+                    active = int(row.get("active_bookings") or 0)
                     return {
                         "events": int(row.get("events") or 0),
                         "uniques": int(row.get("uniques") or 0),
+                        "bookings": bookings,
+                        "active_bookings": active,
+                        # Для карточек/воронки бронирований показываем разные booking_id, не «клики».
+                        "display": active if event_name == "booking_confirmed" else bookings,
                     }
 
                 def _show_card_format_metric(booking_format: str) -> dict:
@@ -997,6 +1013,7 @@ def fetch_analytics_event_people(
                         ) AS username,
                         MAX(ae.channel) AS channel,
                         COUNT(*)::int AS events,
+                        COUNT(DISTINCT ae.booking_id)::int AS bookings,
                         MIN(ae.created_at) AS first_at,
                         MAX(ae.created_at) AS last_at
                     FROM analytics_events ae
