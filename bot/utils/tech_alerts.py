@@ -116,6 +116,7 @@ def notify_tech_sync(
     *,
     key: str | None = None,
     throttle_sec: int = _DEFAULT_THROTTLE_SEC,
+    reply_markup: str | None = None,
 ) -> bool:
     """Send HTML text to TECH_CHAT_ID via Bot API. Returns True if sent."""
     global _SENDING
@@ -133,14 +134,15 @@ def notify_tech_sync(
         return False
     _SENDING = True
     try:
-        payload = urllib.parse.urlencode(
-            {
-                "chat_id": str(chat_id),
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": "true",
-            }
-        ).encode("utf-8")
+        fields: dict[str, str] = {
+            "chat_id": str(chat_id),
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
+        }
+        if reply_markup:
+            fields["reply_markup"] = reply_markup
+        payload = urllib.parse.urlencode(fields).encode("utf-8")
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data=payload,
