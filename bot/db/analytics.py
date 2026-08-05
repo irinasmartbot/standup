@@ -531,6 +531,103 @@ def fetch_analytics_report(
                     proverka_bookings["imported"] = {"events": 0, "uniques": 0}
                     raffle_bookings["imported"] = {"events": 0, "uniques": 0}
 
+                # Воронка бота: только analytics_events (импорт/заливка сюда не пишет).
+                # Импорт часто ставит source=telegram/vkontakte — таблица bookings врёт.
+                def _analytics_format_metric(event_name: str, booking_format: str) -> dict:
+                    cur.execute(
+                        f"""
+                        SELECT
+                            COUNT(*)::int AS events,
+                            {_UNIQUE_PERSON_SQL} AS uniques
+                        FROM analytics_events
+                        WHERE {where_sql}
+                          AND name = %(event_name)s
+                          AND props->>'format' = %(booking_format)s
+                        """,
+                        {
+                            **params,
+                            "event_name": event_name,
+                            "booking_format": booking_format,
+                        },
+                    )
+                    row = cur.fetchone() or {}
+                    return {
+                        "events": int(row.get("events") or 0),
+                        "uniques": int(row.get("uniques") or 0),
+                    }
+
+                def _show_card_format_metric(booking_format: str) -> dict:
+                    cur.execute(
+                        f"""
+                        SELECT
+                            COUNT(*)::int AS events,
+                            {_UNIQUE_PERSON_SQL} AS uniques
+                        FROM analytics_events
+                        WHERE {where_sql}
+                          AND name = 'show_card'
+                          AND props->>'format' = %(booking_format)s
+                        """,
+                        {**params, "booking_format": booking_format},
+                    )
+                    row = cur.fetchone() or {}
+                    return {
+                        "events": int(row.get("events") or 0),
+                        "uniques": int(row.get("uniques") or 0),
+                    }
+
+                def _bookings_without_bot_event(booking_format: str) -> dict:
+                    """Брони в БД за период без analytics booking_created (заливка и т.п.)."""
+                    time_filter = ""
+                    bp = dict(booking_params)
+                    bp["booking_format"] = booking_format
+                    if "start" in bp and "end" in bp:
+                        time_filter = " AND b.created_at >= %(start)s AND b.created_at < %(end)s"
+                    channel_filter = ""
+                    if "channel" in bp:
+                        channel_filter = " AND b.source = %(channel)s"
+                    cur.execute(
+                        f"""
+                        SELECT
+                            COUNT(*)::int AS events,
+                            COUNT(DISTINCT b.user_id)::int AS uniques
+                        FROM bookings b
+                        WHERE b.format = %(booking_format)s
+                          AND b.created_at IS NOT NULL
+                          {time_filter}
+                          {channel_filter}
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM analytics_events ae
+                              WHERE ae.booking_id = b.id
+                                AND ae.name = 'booking_created'
+                          )
+                        """,
+                        bp,
+                    )
+                    row = cur.fetchone() or {}
+                    return {
+                        "events": int(row.get("events") or 0),
+                        "uniques": int(row.get("uniques") or 0),
+                    }
+
+                proverka_bookings["from_bot"] = {
+                    "entered": by_name.get("branch_proverka")
+                    or {"events": 0, "uniques": 0},
+                    "browsed": _show_card_format_metric("proverka"),
+                    "created": _analytics_format_metric("booking_created", "proverka"),
+                    "confirmed": _analytics_format_metric("booking_confirmed", "proverka"),
+                    "cancelled": _analytics_format_metric("booking_cancelled", "proverka"),
+                    "annulled": _analytics_format_metric("booking_annulled", "proverka"),
+                }
+                proverka_bookings["off_bot"] = _bookings_without_bot_event("proverka")
+                raffle_bookings["from_bot"] = {
+                    "created": _analytics_format_metric("booking_created", "rozygrysh"),
+                    "confirmed": _analytics_format_metric("booking_confirmed", "rozygrysh"),
+                    "cancelled": _analytics_format_metric("booking_cancelled", "rozygrysh"),
+                    "annulled": _analytics_format_metric("booking_annulled", "rozygrysh"),
+                }
+                raffle_bookings["off_bot"] = _bookings_without_bot_event("rozygrysh")
+
                 # Visited raffle: got a ticket and still have it (not cancelled/annulled).
                 visited_time_filter = ""
                 if "start" in booking_params and "end" in booking_params:
