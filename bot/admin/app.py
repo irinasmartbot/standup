@@ -2851,9 +2851,10 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         f'{_analytics_metric_card("Зашли · BEST", by_name.get("branch_best"), css_class="tone-best", href=_ae_link("branch_best"))}'
         f'{_analytics_metric_card("Зашли · Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto", href=_ae_link("branch_hitloto"))}'
         f'{_analytics_metric_card("Help / FAQ · обращение", by_name.get("cmd_help") or by_name.get("help_open"), href=_ae_link("cmd_help" if by_name.get("cmd_help") else "help_open"))}'
-        f'{_analytics_metric_card("Брони созданы · проверка", proverka_overview.get("created"))}'
+        f'{_analytics_metric_card("Брони созданы · проверка (бот)", proverka_overview.get("created"))}'
         f'{_analytics_metric_card("Билет получен · проверка", proverka_overview.get("confirmed"))}'
         f'{_analytics_metric_card("Отмены брони · проверка", proverka_overview.get("cancelled"))}'
+        f'{_analytics_metric_card("Импорт броней · проверка", proverka_overview.get("imported"), note="не из бота")}'
         f'{_analytics_metric_card("Отправили скрин · розыгрыш", by_name.get("raffle_screenshot"), href=_ae_link("raffle_screenshot"))}'
         f'{_analytics_metric_card("Посетили розыгрыш", raffle_overview.get("visited"), href=_ae_link("raffle_enter"))}'
         "</div>"
@@ -3293,23 +3294,34 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         proverka_card_uniques += int(row.get("uniques") or 0)
     proverka_browse = {"events": proverka_card_events, "uniques": proverka_card_uniques}
     proverka_bookings = report.get("proverka_bookings") or {}
+    proverka_imported = proverka_bookings.get("imported") or {"events": 0, "uniques": 0}
+    imported_note = ""
+    if int(proverka_imported.get("events") or 0) > 0:
+        imported_note = (
+            '<p class="muted analytics-import-note">'
+            f'Импорт (не из бота): <b>{int(proverka_imported.get("events") or 0)}</b> броней · '
+            f'{int(proverka_imported.get("uniques") or 0)} чел. '
+            "В шаги 3–6 воронки не входят — только telegram/vkontakte."
+            "</p>"
+        )
     proverka_funnel = (
         '<section class="card details-card analytics-section">'
         '<details data-persist-key="analytics:proverka-funnel">'
         '<summary class="details-summary">'
         "<div>"
         "<strong>Воронка · Проверка</strong>"
-        '<span class="muted">Бесплатное бронирование · от входа до билета</span>'
+        '<span class="muted">Бесплатное бронирование · от входа до билета · без импорта</span>'
         "</div>"
         '<span class="details-action"><span class="closed-label">Развернуть</span>'
         '<span class="open-label">Свернуть</span></span>'
         "</summary>"
         '<div class="details-body">'
+        + imported_note
         + _bar_funnel_html(
             [
                 ("1. Зашли в бесплатное бронирование (по дате / локации)", proverka_browse),
                 ("2. Выбрали дату / начали бронирование", by_name.get("branch_proverka")),
-                ("3. Бронь есть", proverka_bookings.get("created")),
+                ("3. Бронь есть (из бота)", proverka_bookings.get("created")),
                 ("4. Получили билет / подтвердили бронь", proverka_bookings.get("confirmed")),
             ],
             drops=[
@@ -3369,12 +3381,20 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         '<summary class="details-summary">'
         "<div>"
         "<strong>Розыгрыш</strong>"
-        '<span class="muted">Воронка от входа до билета</span>'
+        '<span class="muted">Воронка от входа до билета · без импорта</span>'
         "</div>"
         '<span class="details-action"><span class="closed-label">Развернуть</span><span class="open-label">Свернуть</span></span>'
         "</summary>"
         '<div class="details-body">'
-        f"{raffle_body}"
+        + (
+            f'<p class="muted analytics-import-note">Импорт броней розыгрыша: '
+            f'<b>{int((raffle_bookings.get("imported") or {}).get("events") or 0)}</b> · '
+            f'{int((raffle_bookings.get("imported") or {}).get("uniques") or 0)} чел. '
+            "(не в шагах воронки)</p>"
+            if int((raffle_bookings.get("imported") or {}).get("events") or 0) > 0
+            else ""
+        )
+        + f"{raffle_body}"
         f'<div class="branch-grid">{"".join(branch_cards)}</div>'
         "</div>"
         "</details>"
