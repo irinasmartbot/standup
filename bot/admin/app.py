@@ -2776,7 +2776,12 @@ def _analytics_metric_card(
     note: str = "",
     css_class: str = "",
     href: str = "",
+    *,
+    mode: str = "people",
 ) -> str:
+    """mode=people: крупно уники, мелко всего событий.
+    mode=bookings: крупно разные брони (display/bookings), мелко N чел — без «всего событий».
+    """
     metric = metric or {"events": 0, "uniques": 0}
     note_html = f'<span class="muted">{_h(note)}</span>' if note else ""
     cls = f"metric {css_class}".strip()
@@ -2789,11 +2794,22 @@ def _analytics_metric_card(
         tag_open = f'<div class="{cls}">'
         tag_close = "</div>"
         hint = ""
+    if mode == "bookings":
+        primary = metric.get("display")
+        if primary is None:
+            primary = metric.get("bookings")
+        if primary is None:
+            primary = metric.get("events", 0)
+        people = int(metric.get("uniques") or 0)
+        secondary = f'<small class="muted">{people} чел</small>' if people else ""
+    else:
+        primary = metric.get("uniques", 0)
+        secondary = f'<small class="muted">всего {metric.get("events", 0)}</small>'
     return (
         f"{tag_open}"
         f"<span>{_h(title)}</span>"
-        f'<b>{metric.get("uniques", 0)}</b>'
-        f'<small class="muted">всего {metric.get("events", 0)}</small>'
+        f"<b>{primary}</b>"
+        f"{secondary}"
         f"{hint}"
         f"{note_html}"
         f"{tag_close}"
@@ -2851,10 +2867,10 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         f'{_analytics_metric_card("Зашли · BEST", by_name.get("branch_best"), css_class="tone-best", href=_ae_link("branch_best"))}'
         f'{_analytics_metric_card("Зашли · Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto", href=_ae_link("branch_hitloto"))}'
         f'{_analytics_metric_card("Help / FAQ · обращение", by_name.get("cmd_help") or by_name.get("help_open"), href=_ae_link("cmd_help" if by_name.get("cmd_help") else "help_open"))}'
-        f'{_analytics_metric_card("Брони созданы · проверка (бот)", (proverka_overview.get("from_bot") or {}).get("created") or proverka_overview.get("created"), href=_ae_link("booking_created"))}'
-        f'{_analytics_metric_card("Билет получен · проверка", (proverka_overview.get("from_bot") or {}).get("confirmed") or proverka_overview.get("confirmed"))}'
-        f'{_analytics_metric_card("Отмены брони · проверка", (proverka_overview.get("from_bot") or {}).get("cancelled") or proverka_overview.get("cancelled"))}'
-        f'{_analytics_metric_card("Брони без следа в боте", proverka_overview.get("off_bot"), note="импорт / заливка")}'
+        f'{_analytics_metric_card("Брони созданы · проверка (бот)", (proverka_overview.get("from_bot") or {}).get("created") or proverka_overview.get("created"), href=_ae_link("booking_created"), mode="bookings")}'
+        f'{_analytics_metric_card("Билет получен · проверка", (proverka_overview.get("from_bot") or {}).get("confirmed") or proverka_overview.get("confirmed"), mode="bookings")}'
+        f'{_analytics_metric_card("Отмены брони · проверка", (proverka_overview.get("from_bot") or {}).get("cancelled") or proverka_overview.get("cancelled"), mode="bookings")}'
+        f'{_analytics_metric_card("Брони без следа в боте", proverka_overview.get("off_bot"), note="импорт / заливка", mode="bookings")}'
         f'{_analytics_metric_card("Отправили скрин · розыгрыш", by_name.get("raffle_screenshot"), href=_ae_link("raffle_screenshot"))}'
         f'{_analytics_metric_card("Посетили розыгрыш", raffle_overview.get("visited"), href=_ae_link("raffle_enter"))}'
         "</div>"
@@ -3229,7 +3245,13 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     kind_cancelled = kind_bookings.get("cancelled") or {}
 
     def _metric_events(metric: dict | None) -> int:
-        return int((metric or {}).get("events") or 0)
+        m = metric or {}
+        # Для шагов брони — разные booking_id, не число срабатываний трекера.
+        if m.get("display") is not None:
+            return int(m.get("display") or 0)
+        if m.get("bookings") is not None:
+            return int(m.get("bookings") or 0)
+        return int(m.get("events") or 0)
 
     def _metric_uniques(metric: dict | None) -> int:
         return int((metric or {}).get("uniques") or 0)
@@ -3497,13 +3519,20 @@ def _analytics_tab(report: dict, filters: dict) -> str:
                 chips.append(f'<span class="drill-chip muted">@{_h(uname.lstrip("@"))}</span>')
             first_s = _fmt_msk(row.get("first_at"))
             last_s = _fmt_msk(row.get("last_at"))
+            is_booking_ae = ae_selected.startswith("booking_")
+            if is_booking_ae:
+                count_n = int(row.get("bookings") or row.get("events") or 0)
+                count_label = "брони"
+            else:
+                count_n = int(row.get("events") or 0)
+                count_label = "событ."
             person_cards.append(
                 '<article class="drill-person">'
                 '<div class="drill-person-top">'
                 f"<div>{who}"
                 f'<div class="drill-chips">{"".join(chips)}</div></div>'
-                f'<div class="drill-person-count"><b>{int(row.get("events") or 0)}</b>'
-                f'<span class="muted">событ.</span></div>'
+                f'<div class="drill-person-count"><b>{count_n}</b>'
+                f'<span class="muted">{count_label}</span></div>'
                 "</div>"
                 f'<div class="drill-person-times muted">'
                 f"первый {_h(first_s)} · последний {_h(last_s)}"
