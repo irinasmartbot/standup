@@ -56,20 +56,8 @@ FLOWS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Временно для модерации mini app: только бронь (розыгрыш/подарок вернём в боевом режиме).
-MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking",)
-
-# Временно без cmd-клавиатуры форматов (Salebot ещё на линии; для модерации чище).
-# Боевой режим: FORMATS_TEXT + _formats_keyboard().
-BOOKING_ENTRY_TEXT = (
-    "Привет! 😊\n\n"
-    "Мы поможем забронировать места на шоу <b>Moscow StandUp Show</b>.\n\n"
-    "Доступные форматы:\n"
-    "• StandUp BEST\n"
-    "• Хитлото\n"
-    "• StandUp Проверка материала\n\n"
-    "Напишите, какой формат вам интересен — менеджер пришлёт варианты."
-)
+# После модерации снова показываем все входные сценарии mini app.
+MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking", "raffle", "offline_gift")
 
 _ENTRY_COOLDOWN_SEC = 20.0
 _MINI_FLOW_HANDOFF_TTL_SEC = 300.0
@@ -201,9 +189,9 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
             channel="vkontakte",
             props={"via": "mini_app_flow"},
         )
-        # Временно нейтральный текст без кнопок форматов (модерация / Salebot).
-        # Боевой режим: FORMATS_TEXT + _formats_keyboard().
-        await client.send_message(vk_id, BOOKING_ENTRY_TEXT)
+        from bot.handlers.formats import FORMATS_TEXT
+
+        await client.send_message(vk_id, FORMATS_TEXT, keyboard=_formats_keyboard())
         return
 
     from bot.db.crud import get_offline_gift_today_events
@@ -494,9 +482,23 @@ async def landing_offline_gift(_: web.Request) -> web.Response:
     return _html_response(_landing_html("offline_gift"))
 
 
+def _vk_me_path(community_link: str, group_id: int) -> str:
+    """Путь для vk.me / write: screen_name или club{{id}}."""
+    link = (community_link or "").strip().rstrip("/")
+    for host in ("vk.com/", "vk.ru/", "m.vk.com/", "m.vk.ru/"):
+        if host in link:
+            name = link.split(host, 1)[-1].split("?")[0].split("/")[0].strip()
+            if name and name not in {"club", "public", "write"}:
+                if name.startswith("write-"):
+                    break
+                return name
+    return f"club{int(group_id)}" if group_id else ""
+
+
 def _mini_app_html(default_flow: str = "") -> str:
     settings = load_vk_settings()
     group_id = int(settings.group_id or 0)
+    vk_me = _vk_me_path(settings.community_link, group_id)
     ready = bool(group_id and settings.group_token)
     visible = [key for key in MINI_APP_VISIBLE_FLOWS if key in FLOWS]
     flow_labels = {
@@ -612,6 +614,7 @@ def _mini_app_html(default_flow: str = "") -> str:
 
   var bridge = window.vkBridge || createFallbackBridge();
   var groupId = {group_id};
+  var vkMePath = {json.dumps(vk_me)};
   var serverFlow = {json.dumps(default_flow if default_flow in FLOWS else "")};
   var flowLabels = {json.dumps(flow_labels, ensure_ascii=False)};
   var currentFlow = null;
@@ -619,6 +622,7 @@ def _mini_app_html(default_flow: str = "") -> str:
   var autoStarted = false;
   var permissionRequested = false;
   var dialogReady = false;
+  var dialogOpened = false;
   var launchParamsQuery = window.location.search || "";
   var statusEl = document.getElementById("status");
   var leadEl = document.getElementById("lead");
@@ -658,6 +662,12 @@ def _mini_app_html(default_flow: str = "") -> str:
     var platform = new URLSearchParams(window.location.search || "").get("vk_platform") || "";
     var ua = navigator.userAgent || "";
     return /mobile_android|mobile_iphone|mobile_ipad|android|iphone|ipad/i.test(platform + " " + ua);
+  }}
+
+  function isAndroidPlatform() {{
+    var platform = new URLSearchParams(window.location.search || "").get("vk_platform") || "";
+    var ua = navigator.userAgent || "";
+    return /mobile_android|android/i.test(platform + " " + ua);
   }}
 
   function parseFlowValue(value) {{
@@ -744,20 +754,75 @@ def _mini_app_html(default_flow: str = "") -> str:
       "Не удалось выполнить действие. Попробуйте ещё раз.";
   }}
 
-  function openDialog() {{
-    var webUrl = "https://vk.com/im?sel=-" + groupId;
-    var appUrl = "vk://vk.com/write-" + groupId;
-    if (isMobilePlatform()) {{
-      window.location.href = appUrl;
+  function openDialog(opts) {{
+    opts = opts || {{}};
+    var fromUserTap = !!opts.fromUserTap;
+    var writeUrl = "https://vk.com/write-" + groupId;
+    var vkMeUrl = vkMePath ? ("https://vk.me/" + vkMePath) : writeUrl;
+    var imUrl = "https://vk.com/im?sel=-" + groupId;
+    var mobile = isMobilePlatform();
+    var android = isAndroidPlatform();
+
+    function viaBridge(url) {{
+      return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), 2500);
+    }}
+
+    function closeMiniAppSoon() {{
       setTimeout(function () {{
         bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
       }}, 1200);
-    }} else {{
-      var opened = window.open(webUrl, "_blank");
-      if (!opened) {{
-        withTimeout(bridge.send("VKWebAppOpenURL", {{ url: webUrl }}), 1200).catch(function () {{}});
-      }}
     }}
+
+    dialogOpened = true;
+
+    if (mobile) {{
+      // Возвращаем рабочую схему mini app: после отправки сообщения сразу
+      // пытаемся открыть диалог VK и затем закрываем mini app.
+      if (fromUserTap && android) {{
+        window.location.href =
+          "intent://vk.com/write-" + groupId +
+          "#Intent;scheme=https;package=com.vkontakte.android;S.browser_fallback_url=" +
+          encodeURIComponent(writeUrl) + ";end";
+      }} else {{
+        window.location.href = "vk://vk.com/write-" + groupId;
+      }}
+      viaBridge(writeUrl)
+        .catch(function () {{ return viaBridge(vkMeUrl); }})
+        .catch(function () {{ return viaBridge(imUrl); }})
+        .then(function () {{
+          closeMiniAppSoon();
+        }})
+        .catch(function () {{
+          setTimeout(function () {{
+            bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
+          }}, 1200);
+        }});
+      return;
+    }}
+
+    viaBridge(writeUrl)
+      .catch(function () {{ return viaBridge(vkMeUrl); }})
+      .catch(function () {{ return viaBridge(imUrl); }})
+      .catch(function () {{
+        try {{
+          var opened = window.open(writeUrl, "_blank");
+          if (!opened && window.top) {{
+            window.top.location.href = writeUrl;
+          }}
+        }} catch (_) {{
+          window.location.href = writeUrl;
+        }}
+      }});
+  }}
+
+  function markDialogReady(statusText) {{
+    dialogReady = true;
+    setVisibleButtonText("Открыть диалог VK");
+    setStatus(
+      statusText ||
+        "Готово! Сообщение уже в личке. Если чат не открылся — нажмите кнопку выше.",
+      true
+    );
   }}
 
   function requestPermissionAndSend(flow) {{
@@ -820,13 +885,11 @@ def _mini_app_html(default_flow: str = "") -> str:
       .then(function (res) {{
         sending = false;
         if (res.ok && res.j && res.j.ok) {{
+          markDialogReady("Готово! Сообщение в личке. Открываем диалог… Если не открылся — нажмите кнопку выше.");
           if (isMobilePlatform()) {{
-            setStatus("Готово! Сообщение уже отправлено в личку VK.", true);
-            setTimeout(openDialog, 150);
+            setTimeout(function () {{ openDialog({{ fromUserTap: false }}); }}, 150);
           }} else {{
-            dialogReady = true;
-            setStatus("Готово! Сообщение отправлено. Нажмите кнопку выше, чтобы открыть диалог VK.", true);
-            setVisibleButtonText("Открыть диалог VK");
+            setTimeout(function () {{ openDialog({{ fromUserTap: false }}); }}, 350);
           }}
           return;
         }}
@@ -868,11 +931,8 @@ def _mini_app_html(default_flow: str = "") -> str:
     }});
   }}
 
-  function messagesAlreadyAllowed() {{
-    return new URLSearchParams(window.location.search || "").get("vk_are_notifications_enabled") === "1";
-  }}
-
-  function start(flow) {{
+  function start(flow, opts) {{
+    opts = opts || {{}};
     if (!setFlow(flow, true)) {{
       setStatus("Неизвестный сценарий.", false);
       return;
@@ -885,7 +945,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     autoStarted = true;
     setFlow(flow, true);
     setTimeout(function () {{
-      start(flow);
+      start(flow, {{ fromUserTap: false }});
     }}, 250);
   }}
 
@@ -911,10 +971,10 @@ def _mini_app_html(default_flow: str = "") -> str:
     var button = event.target.closest("[data-flow]");
     if (!button) return;
     if (dialogReady) {{
-      openDialog();
+      openDialog({{ fromUserTap: true }});
       return;
     }}
-    start(button.getAttribute("data-flow"));
+    start(button.getAttribute("data-flow"), {{ fromUserTap: true }});
   }});
 
   function showAllFlows() {{
@@ -1183,7 +1243,7 @@ async def mini_entry_post(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "Неизвестный сценарий."}, status=400)
     if flow_key not in MINI_APP_VISIBLE_FLOWS:
         return web.json_response(
-            {"ok": False, "error": "Сейчас доступно только бронирование."},
+            {"ok": False, "error": "Этот сценарий сейчас недоступен."},
             status=400,
         )
 

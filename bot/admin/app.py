@@ -2476,6 +2476,16 @@ def _user_tickets_html(
             facts.append(
                 f"<div><dt>Выдан</dt><dd>{_h(_fmt_msk(row.get('confirmed_at_raw')))}</dd></div>"
             )
+        bid = row.get("id")
+        preview_html = ""
+        if bid:
+            preview_url = f"/admin/ticket-preview/{int(bid)}"
+            preview_html = (
+                f'<div class="screen-preview">'
+                f'<a class="pill" href="{_h(preview_url)}" target="_blank" rel="noopener">Открыть билет</a>'
+                f'<img src="{_h(preview_url)}" alt="Билет #{_h(str(bid))}" loading="lazy" />'
+                f"</div>"
+            )
         note = ""
         resend = ""
         if status == "cancelled":
@@ -2510,6 +2520,7 @@ def _user_tickets_html(
             f'<span class="badge screen-status screen-status--{status_mod}">{_h(status_l)}</span>'
             f"</div>"
             f'<dl class="screen-card-facts">{"".join(facts)}</dl>'
+            f"{preview_html}"
             f"{note}"
             f"{resend}"
             f'<div class="screen-card-nav muted">{idx + 1} / {total}</div>'
@@ -5576,6 +5587,33 @@ async def raffle_screen_page(request: web.Request) -> web.Response:
         await bot.session.close()
 
 
+async def ticket_preview_page(request: web.Request) -> web.Response:
+    """Картинка билета как у гостя (пересобирается из текущих данных брони)."""
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        raise web.HTTPFound("/admin")
+    if not _can_view_ops(request, config):
+        raise web.HTTPForbidden(text="Недостаточно прав")
+
+    try:
+        booking_id = int(request.match_info["booking_id"])
+    except (TypeError, ValueError, KeyError):
+        raise web.HTTPBadRequest(text="Некорректный id брони") from None
+
+    from bot.admin.ticket_resend import ticket_image_bytes
+
+    data = await asyncio.get_running_loop().run_in_executor(
+        None, ticket_image_bytes, booking_id
+    )
+    if not data:
+        raise web.HTTPNotFound(text="Билет не найден или ещё не выдавался")
+    return web.Response(
+        body=data,
+        content_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=120"},
+    )
+
+
 async def login_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     data = await request.post()
@@ -6010,6 +6048,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_get("/", index_page)
     app.router.add_get("/admin", admin_page)
     app.router.add_get("/admin/raffle-screen/{submission_id}", raffle_screen_page)
+    app.router.add_get("/admin/ticket-preview/{booking_id}", ticket_preview_page)
     app.router.add_get("/admin/events/hide-preview", events_hide_preview_page)
     app.router.add_post("/admin/events/save", events_save_page)
     app.router.add_post("/admin/events/restore", events_restore_page)
