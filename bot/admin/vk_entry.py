@@ -123,8 +123,9 @@ def _mini_app_vk_url(settings, flow_key: str = "") -> str:
 def _mini_start_bridge_html(flow_key: str, target_url: str) -> str:
     """Промежуточная страница для /vk-mini/start/{{flow}}.
 
-    HTTP-редирект с телефона часто даёт белый экран и срезает #flow=.
-    Здесь сразу виден UI + JS/deeplink в приложение VK.
+    На телефоне не делаем intent/vk:// + запасные таймеры — из‑за них
+    клиент «болтает» между браузером и VK и не доходит до диалога.
+    Мобилка: одна кнопка с обычной https-ссылкой. Десктоп: один replace.
     """
     flow = FLOWS.get(flow_key) or {}
     headline = escape(str(flow.get("headline") or "Moscow StandUp Show"))
@@ -181,54 +182,24 @@ def _mini_start_bridge_html(flow_key: str, target_url: str) -> str:
   <main>
     <p class="brand">Moscow StandUp Show</p>
     <h1>{headline}</h1>
-    <p class="lead">Открываем мини-приложение в VK…</p>
+    <p class="lead" id="lead">Нажмите кнопку — откроется мини-приложение в VK.</p>
     <a class="cta" id="open" href="{target}">Открыть в VK</a>
-    <p class="status" id="status">Если VK не открылся сам — нажмите кнопку выше.</p>
+    <p class="status" id="status">Дальше продолжение будет в личке сообщества.</p>
   </main>
   <script>
   (function () {{
     var url = {target_js};
     var openBtn = document.getElementById("open");
-    var statusEl = document.getElementById("status");
+    var leadEl = document.getElementById("lead");
     var ua = navigator.userAgent || "";
-    var android = /Android/i.test(ua);
-    var ios = /iPhone|iPad|iPod/i.test(ua);
+    var mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
     openBtn.href = url;
-
-    function openVk() {{
-      if (android) {{
-        // Intent без # — hash мобильные WebView часто теряют; flow уже в IP-handoff.
-        var path = url.replace(/^https?:\\/\\//i, "").split("#")[0];
-        window.location.href =
-          "intent://" + path +
-          "#Intent;scheme=https;package=com.vkontakte.android;S.browser_fallback_url=" +
-          encodeURIComponent(url) + ";end";
-        setTimeout(function () {{ window.location.href = url; }}, 700);
-        return;
-      }}
-      if (ios) {{
-        window.location.href = "vk://" + url.replace(/^https?:\\/\\//i, "");
-        setTimeout(function () {{ window.location.href = url; }}, 500);
-        return;
-      }}
-      window.location.href = url;
+    // Никаких intent/vk:// и повторных location через setTimeout —
+    // они как раз дают «болтанку» и не доводят до диалога.
+    if (!mobile) {{
+      if (leadEl) leadEl.textContent = "Открываем мини-приложение в VK…";
+      window.location.replace(url);
     }}
-
-    openBtn.addEventListener("click", function (event) {{
-      // Даем нативную навигацию по href; на Android дополнительно пробуем intent.
-      if (android) {{
-        event.preventDefault();
-        openVk();
-      }}
-    }});
-
-    // Автооткрытие сразу — без пустого HTTP-редиректа.
-    setTimeout(openVk, 50);
-    setTimeout(function () {{
-      if (statusEl) {{
-        statusEl.textContent = "Если экран пустой — нажмите «Открыть в VK».";
-      }}
-    }}, 1800);
   }})();
   </script>
 </body>
