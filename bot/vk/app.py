@@ -1430,6 +1430,14 @@ class VKBotApp:
             cmd=cmd,
             payload=payload,
         ):
+            # «Мои брони» не должны оставлять зависший ввод имени/телефона.
+            if session and session.get("step") in {
+                vk_booking.STEP_NAME,
+                vk_booking.STEP_PHONE,
+                vk_booking.STEP_GUESTS,
+                "waiting_pdn_consent",
+            }:
+                vk_booking.clear_session(self.booking_sessions, vk_id)
             return True
         if cmd == "check_booking_start":
             await self._start_check_booking(peer_id, vk_id, payload.get("event_id"))
@@ -1437,8 +1445,8 @@ class VKBotApp:
         if not session:
             return False
 
-        # Выход из ввода имени/телефона/гостей: «Назад к датам», меню, другой формат…
-        if cmd and cmd in vk_booking.ESCAPE_CMDS:
+        # Любая кнопка вне формы брони — выход из ввода имени/телефона.
+        if cmd and cmd not in vk_booking.FORM_CMDS and cmd != VK_CMD_CONSENT:
             vk_booking.clear_session(self.booking_sessions, vk_id)
             return False
 
@@ -1479,6 +1487,9 @@ class VKBotApp:
 
         step = session.get("step")
         if step == "waiting_pdn_consent":
+            if text:
+                vk_booking.clear_session(self.booking_sessions, vk_id)
+                return False
             await self._send_text(
                 peer_id,
                 CONSENT_TEXT,
