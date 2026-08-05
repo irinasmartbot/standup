@@ -149,7 +149,8 @@ def main() -> int:
         print(f"alert_problem_sent={sent}", flush=True)
 
     if resolved:
-        body = "\n".join(resolved)
+        # Body = what recovered (previous problem lines), not the current status.
+        body = "Снова в норме:\n" + "\n".join(f"• {item}" for item in resolved)
         sent = notify_tech_sync(
             format_alert("Сервер: проблема устранена", body, source="health-watch"),
             key="health_ok:" + "|".join(resolved),
