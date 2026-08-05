@@ -39,6 +39,7 @@ def _load_env(path: Path) -> None:
 _load_env(APP_ENV)
 _load_env(LOCAL_ENV)
 
+from bot.utils.systemd_ops import aliases_from_problem_lines, restart_keyboard_json  # noqa: E402
 from bot.utils.tech_alerts import format_alert, notify_tech_sync  # noqa: E402
 
 UNITS = (
@@ -141,10 +142,16 @@ def main() -> int:
 
     if new_problems:
         body = "\n".join(new_problems)
+        body += (
+            "\n\nМожно нажать Restart ниже или в чате:\n"
+            "/tech_status\n/tech_restart vk|bot|admin"
+        )
+        kb = restart_keyboard_json(aliases_from_problem_lines(new_problems))
         sent = notify_tech_sync(
             format_alert("Сервер: проблема", body, source="health-watch"),
             key="health_new:" + "|".join(new_problems),
             throttle_sec=120,
+            reply_markup=kb,
         )
         print(f"alert_problem_sent={sent}", flush=True)
 

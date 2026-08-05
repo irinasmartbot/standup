@@ -1,0 +1,23 @@
+# Install on VPS (as root):
+#   sudo cp /home/standup/app/deploy/sudoers-standup-tech /etc/sudoers.d/standup-tech
+#   sudo chmod 440 /etc/sudoers.d/standup-tech
+#   sudo visudo -cf /etc/sudoers.d/standup-tech
+#
+# Allows the standup user (TG bot / health scripts) to restart whitelisted units
+# without an interactive password — for /tech_restart and alert buttons.
+
+Cmnd_Alias STANDUP_TECH_SYSTEMCTL = \
+    /bin/systemctl restart standup-bot.service, \
+    /bin/systemctl restart standup-vk-bot.service, \
+    /bin/systemctl restart standup-admin.service, \
+    /usr/bin/systemctl restart standup-bot.service, \
+    /usr/bin/systemctl restart standup-vk-bot.service, \
+    /usr/bin/systemctl restart standup-admin.service, \
+    /bin/systemctl start standup-bot.service, \
+    /bin/systemctl start standup-vk-bot.service, \
+    /bin/systemctl start standup-admin.service, \
+    /usr/bin/systemctl start standup-bot.service, \
+    /usr/bin/systemctl start standup-vk-bot.service, \
+    /usr/bin/systemctl start standup-admin.service
+
+standup ALL=(root) NOPASSWD: STANDUP_TECH_SYSTEMCTL
