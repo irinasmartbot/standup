@@ -120,6 +120,121 @@ def _mini_app_vk_url(settings, flow_key: str = "") -> str:
     return url
 
 
+def _mini_start_bridge_html(flow_key: str, target_url: str) -> str:
+    """Промежуточная страница для /vk-mini/start/{{flow}}.
+
+    HTTP-редирект с телефона часто даёт белый экран и срезает #flow=.
+    Здесь сразу виден UI + JS/deeplink в приложение VK.
+    """
+    flow = FLOWS.get(flow_key) or {}
+    headline = escape(str(flow.get("headline") or "Moscow StandUp Show"))
+    target = escape(target_url, quote=True)
+    target_js = json.dumps(target_url)
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+  <title>VK · Moscow StandUp Show</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700&family=Pacifico&display=swap" rel="stylesheet">
+  <style>
+    :root {{
+      --bg0: #070708; --gold: #e8c56a; --gold-deep: #c9a227;
+      --text: #f7f3ea; --muted: #d2c4b0;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0; min-height: 100vh; color: var(--text);
+      font-family: Manrope, sans-serif;
+      background:
+        radial-gradient(ellipse 90% 55% at 50% 100%, rgba(180, 30, 45, .45) 0%, transparent 55%),
+        linear-gradient(180deg, #12080c 0%, var(--bg0) 45%, #14060a 100%);
+    }}
+    main {{ width: min(440px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 72px; }}
+    .brand {{
+      margin: 0 0 18px; font-family: Pacifico, cursive; font-size: 22px;
+      color: var(--gold); line-height: 1.2;
+    }}
+    h1 {{
+      margin: 0 0 14px; font-size: clamp(28px, 7vw, 38px); font-weight: 700;
+      line-height: 1.15; letter-spacing: -0.02em;
+    }}
+    .lead {{ margin: 0 0 22px; font-size: 16px; line-height: 1.45; color: var(--muted); }}
+    .cta {{
+      display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
+      padding: 14px 16px; cursor: pointer; text-align: center; text-decoration: none;
+      background: linear-gradient(180deg, #f0d48a 0%, var(--gold-deep) 100%);
+      color: #1a1208; font: 700 16px Manrope, sans-serif;
+      box-shadow: 0 8px 28px rgba(201, 162, 39, .28);
+    }}
+    .status {{
+      font-size: 14px; margin: 14px 0 0; padding: 12px 14px; border-radius: 12px;
+      background: rgba(255,255,255,.06); border: 1px solid rgba(232, 197, 106, .18);
+      color: #d8f5d0;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand">Moscow StandUp Show</p>
+    <h1>{headline}</h1>
+    <p class="lead">Открываем мини-приложение в VK…</p>
+    <a class="cta" id="open" href="{target}">Открыть в VK</a>
+    <p class="status" id="status">Если VK не открылся сам — нажмите кнопку выше.</p>
+  </main>
+  <script>
+  (function () {{
+    var url = {target_js};
+    var openBtn = document.getElementById("open");
+    var statusEl = document.getElementById("status");
+    var ua = navigator.userAgent || "";
+    var android = /Android/i.test(ua);
+    var ios = /iPhone|iPad|iPod/i.test(ua);
+    openBtn.href = url;
+
+    function openVk() {{
+      if (android) {{
+        // Intent без # — hash мобильные WebView часто теряют; flow уже в IP-handoff.
+        var path = url.replace(/^https?:\\/\\//i, "").split("#")[0];
+        window.location.href =
+          "intent://" + path +
+          "#Intent;scheme=https;package=com.vkontakte.android;S.browser_fallback_url=" +
+          encodeURIComponent(url) + ";end";
+        setTimeout(function () {{ window.location.href = url; }}, 700);
+        return;
+      }}
+      if (ios) {{
+        window.location.href = "vk://" + url.replace(/^https?:\\/\\//i, "");
+        setTimeout(function () {{ window.location.href = url; }}, 500);
+        return;
+      }}
+      window.location.href = url;
+    }}
+
+    openBtn.addEventListener("click", function (event) {{
+      // Даем нативную навигацию по href; на Android дополнительно пробуем intent.
+      if (android) {{
+        event.preventDefault();
+        openVk();
+      }}
+    }});
+
+    // Автооткрытие сразу — без пустого HTTP-редиректа.
+    setTimeout(openVk, 50);
+    setTimeout(function () {{
+      if (statusEl) {{
+        statusEl.textContent = "Если экран пустой — нажмите «Открыть в VK».";
+      }}
+    }}, 1800);
+  }})();
+  </script>
+</body>
+</html>"""
+
+
 def _formats_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("STANDUP BEST", {"cmd": "best"}, color="primary")
@@ -1283,11 +1398,12 @@ async def mini_app_start(request: web.Request) -> web.Response:
     flow_key = str(request.match_info.get("flow") or "").strip()
     if flow_key not in FLOWS:
         raise web.HTTPNotFound(text="Unknown VK Mini App flow")
-    # Запасной handoff по IP, если клиент срежет #flow= при редиректе.
+    # Запасной handoff по IP, если клиент срежет #flow=.
     _remember_mini_flow(request, flow_key)
     settings = load_vk_settings()
-    # Канонический вход — сразу в VK mini app с hash сценария.
-    raise web.HTTPFound(_mini_app_vk_url(settings, flow_key))
+    target = _mini_app_vk_url(settings, flow_key)
+    # Не HTTP-редирект: на телефоне он часто даёт белый экран.
+    return _html_response(_mini_start_bridge_html(flow_key, target))
 
 
 def _verify_mini_launch_params(raw_query: str) -> tuple[bool, dict[str, str], str]:
