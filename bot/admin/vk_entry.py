@@ -616,7 +616,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     }};
   }}
 
-  var bridge = window.vkBridge || createFallbackBridge();
+  var bridge = (window.vkBridge && (window.vkBridge.send ? window.vkBridge : window.vkBridge.default)) || createFallbackBridge();
   var groupId = {group_id};
   var vkMePath = {json.dumps(vk_me)};
   var serverFlow = {json.dumps(default_flow if default_flow in FLOWS else "")};
@@ -633,6 +633,60 @@ def _mini_app_html(default_flow: str = "") -> str:
   var leadEl = document.getElementById("lead");
   var actionsEl = document.getElementById("actions");
   var titleEl = document.getElementById("title");
+
+  function dialogUrl() {{
+    if (vkMePath) return "https://vk.me/" + vkMePath;
+    return "https://vk.com/im?sel=-" + groupId;
+  }}
+
+  function openViaWindow(url) {{
+    try {{
+      var w = window.open(url, "_blank", "noopener,noreferrer");
+      if (w) return true;
+    }} catch (_) {{}}
+    try {{
+      var a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return true;
+    }} catch (_) {{}}
+    try {{
+      if (window.top && window.top !== window) {{
+        window.top.location.href = url;
+        return true;
+      }}
+      window.location.href = url;
+      return true;
+    }} catch (_) {{}}
+    return false;
+  }}
+
+  function setDialogLinkButton() {{
+    var url = dialogUrl();
+    actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
+      if (button.hidden || button.style.display === "none") return;
+      if (button.tagName === "A") {{
+        button.href = url;
+        button.target = "_blank";
+        button.rel = "noopener noreferrer";
+        button.textContent = "Открыть диалог VK";
+        return;
+      }}
+      var a = document.createElement("a");
+      a.className = button.className || "cta";
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.setAttribute("data-flow", button.getAttribute("data-flow") || "");
+      a.textContent = "Открыть диалог VK";
+      button.replaceWith(a);
+    }});
+  }}
 
   function rememberLaunchParams(raw) {{
     if (!raw) return;
@@ -781,33 +835,37 @@ def _mini_app_html(default_flow: str = "") -> str:
   function openDialog(opts) {{
     opts = opts || {{}};
     var fromUserTap = !!opts.fromUserTap;
-    // Важно: НЕ использовать vk:// / intent:// / window.location внутри mini app —
-    // на Android это часто выкидывает в общий раздел VK, а не в диалог сообщества.
-    // Только VKWebAppOpenURL с https-ссылками на конкретный чат.
     if (!groupId) {{
       setStatus("Не задан id сообщества. Откройте диалог вручную.", false);
       return;
     }}
-    // Сначала прямой peer чата (im?sel=-), потом vk.me / write-.
-    var urls = [
-      "https://vk.com/im?sel=-" + groupId,
-      "https://vk.ru/im?sel=-" + groupId
-    ];
-    if (vkMePath) {{
-      urls.push("https://vk.me/" + vkMePath);
-    }}
+    var urls = [];
+    if (vkMePath) urls.push("https://vk.me/" + vkMePath);
+    urls.push("https://vk.com/im?sel=-" + groupId);
+    urls.push("https://vk.ru/im?sel=-" + groupId);
     urls.push("https://vk.com/write-" + groupId);
-    urls.push("https://m.vk.com/write-" + groupId);
+
+    var syncOk = false;
+    var skipSync = !!opts.skipSync;
+    // На десктопе жест клика надёжнее отрабатывает через window.open / <a>,
+    // чем только через bridge (часто молчит или таймаутится).
+    if (fromUserTap && !skipSync && !isMobilePlatform()) {{
+      syncOk = openViaWindow(urls[0]);
+      if (syncOk) {{
+        dialogOpened = true;
+        setStatus("Открыли диалог. Если вкладка не появилась — разрешите всплывающие окна браузера.", true);
+      }}
+    }}
 
     function viaBridge(url) {{
-      return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), 2500);
+      return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), 4000);
     }}
 
     function tryUrl(index) {{
       if (index >= urls.length) {{
-        if (fromUserTap) {{
+        if (fromUserTap && !syncOk && !dialogOpened) {{
           setStatus(
-            "Не удалось открыть диалог автоматически. Откройте сообщения сообщества вручную — текст уже там.",
+            "Не удалось открыть диалог автоматически. Нажмите кнопку ещё раз или откройте сообщения сообщества вручную — текст уже там.",
             false
           );
         }}
@@ -816,10 +874,11 @@ def _mini_app_html(default_flow: str = "") -> str:
       viaBridge(urls[index])
         .then(function () {{
           dialogOpened = true;
-          // Закрываем mini app только после успешного OpenURL.
-          setTimeout(function () {{
-            bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-          }}, 350);
+          if (isMobilePlatform()) {{
+            setTimeout(function () {{
+              bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
+            }}, 350);
+          }}
         }})
         .catch(function () {{
           tryUrl(index + 1);
@@ -831,7 +890,7 @@ def _mini_app_html(default_flow: str = "") -> str:
 
   function markDialogReady(statusText) {{
     dialogReady = true;
-    setVisibleButtonText("Открыть диалог VK");
+    setDialogLinkButton();
     setStatus(
       statusText ||
         "Готово! Сообщение уже в личке. Если чат не открылся — нажмите кнопку выше.",
@@ -1015,9 +1074,16 @@ def _mini_app_html(default_flow: str = "") -> str:
     var button = event.target.closest("[data-flow]");
     if (!button) return;
     if (dialogReady) {{
+      // Реальная <a target=_blank> сама открывает чат; bridge — доп. попытка.
+      if (button.tagName === "A") {{
+        openDialog({{ fromUserTap: true, skipSync: true }});
+        return;
+      }}
+      event.preventDefault();
       openDialog({{ fromUserTap: true }});
       return;
     }}
+    event.preventDefault();
     start(button.getAttribute("data-flow"), {{ fromUserTap: true }});
   }});
 
@@ -1109,7 +1175,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     [hidden] {{ display: none !important; }}
     .cta {{
       display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
-      padding: 14px 16px; cursor: pointer;
+      padding: 14px 16px; cursor: pointer; text-align: center; text-decoration: none;
       background: linear-gradient(180deg, #f0d48a 0%, var(--gold-deep) 100%);
       color: #1a1208; font: 700 16px Manrope, sans-serif;
       box-shadow: 0 8px 28px rgba(201, 162, 39, .28);
@@ -1132,6 +1198,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     <h1 id="title">Бронирование</h1>
     {body}
   </main>
+  <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
   {app_js}
 </body>
 </html>"""
