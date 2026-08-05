@@ -670,12 +670,18 @@ def _mini_app_html(default_flow: str = "") -> str:
   function setDialogLinkButton() {{
     var url = dialogUrl();
     uiBusy = false;
+    var mobile = isMobilePlatform();
     actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
       if (button.hidden || button.style.display === "none") return;
       if (button.tagName === "A") {{
         button.href = url;
-        button.target = "_blank";
-        button.rel = "noopener noreferrer";
+        // На мобилке внутри VK надёжнее тот же webview, не _blank.
+        if (mobile) {{
+          button.removeAttribute("target");
+        }} else {{
+          button.target = "_blank";
+          button.rel = "noopener noreferrer";
+        }}
         button.textContent = "Открыть диалог VK";
         button.style.pointerEvents = "";
         button.style.opacity = "";
@@ -685,8 +691,10 @@ def _mini_app_html(default_flow: str = "") -> str:
       var a = document.createElement("a");
       a.className = button.className || "cta";
       a.href = url;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
+      if (!mobile) {{
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+      }}
       a.setAttribute("data-flow", button.getAttribute("data-flow") || "");
       a.textContent = "Открыть диалог VK";
       a.style.pointerEvents = "";
@@ -865,17 +873,11 @@ def _mini_app_html(default_flow: str = "") -> str:
       setStatus("Не задан id сообщества. Откройте диалог вручную.", false);
       return;
     }}
-    // Только прямой peer чата — без vk.me / write- / intent / vk://
-    // (они дают промежуточный экран или «общий раздел» VK).
+    // Только прямой peer чата — без vk.me / write- / intent / vk:// / VKWebAppClose.
+    // Close без реального перехода возвращает к источнику ссылки (файл/пост).
     var chatUrl = "https://vk.com/im?sel=-" + groupId;
     var chatUrlRu = "https://vk.ru/im?sel=-" + groupId;
     var urls = [chatUrl, chatUrlRu];
-
-    function closeMiniAppSoon(ms) {{
-      setTimeout(function () {{
-        bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-      }}, ms || 250);
-    }}
 
     function viaBridge(url, ms) {{
       return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), ms || 2500);
@@ -892,18 +894,25 @@ def _mini_app_html(default_flow: str = "") -> str:
       }}
     }}
 
-    // Мобилка: короткий OpenURL + быстрый Close.
-    // Не ждём 3+ сек таймаута — из‑за этого «зависание» и ложные тапы по кнопке.
+    // Мобилка: только OpenURL. Без Close — иначе выкидывает туда, откуда открыли ссылку.
     if (isMobilePlatform()) {{
-      var waitMs = fromUserTap ? 1800 : 650;
+      var waitMs = fromUserTap ? 1600 : 500;
       viaBridge(chatUrl, waitMs)
         .catch(function () {{ return viaBridge(chatUrlRu, waitMs); }})
         .then(function () {{
           dialogOpened = true;
-          closeMiniAppSoon(200);
         }})
         .catch(function () {{
-          closeMiniAppSoon(150);
+          if (fromUserTap) {{
+            try {{
+              window.location.replace(chatUrl);
+            }} catch (_) {{}}
+          }}
+          setDialogLinkButton();
+          setStatus(
+            "Сообщение уже в личке. Нажмите «Открыть диалог VK».",
+            true
+          );
         }});
       return;
     }}
@@ -912,7 +921,7 @@ def _mini_app_html(default_flow: str = "") -> str:
       if (index >= urls.length) {{
         if (fromUserTap && !syncOk && !dialogOpened) {{
           setStatus(
-            "Не удалось открыть диалог автоматически. Нажмите кнопку ещё раз или откройте сообщения сообщества вручную — текст уже там.",
+            "Не удалось открыть диалог автоматически. Нажмите «Открыть диалог VK» — текст уже в личке.",
             false
           );
         }}
@@ -935,7 +944,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     setDialogLinkButton();
     setStatus(
       statusText ||
-        "Готово! Сообщение уже в личке. Если чат не открылся — нажмите кнопку выше.",
+        "Готово! Сообщение уже в личке. Если диалог не открылся — нажмите «Открыть диалог VK».",
       true
     );
   }}
@@ -1009,7 +1018,10 @@ def _mini_app_html(default_flow: str = "") -> str:
           entrySent = true;
           var fromTap = openAfterSendFromTap;
           openAfterSendFromTap = false;
-          markDialogReady("Готово! Открываем диалог…");
+          markDialogReady(
+            "Готово! Сообщение в личке. Открываем диалог… Если не открылся — нажмите кнопку ниже."
+          );
+          // Сразу пробуем OpenURL; Close больше не зовём (возвращал к файлу/посту).
           if (!dialogOpened) {{
             openDialog({{ fromUserTap: !!fromTap }});
           }}
