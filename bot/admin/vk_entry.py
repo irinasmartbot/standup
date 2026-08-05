@@ -790,35 +790,36 @@ def _mini_app_html(default_flow: str = "") -> str:
       return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), 2500);
     }}
 
-    function closeMiniAppSoon() {{
+    function closeMiniAppSoon(ms) {{
       setTimeout(function () {{
         bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-      }}, 1200);
+      }}, ms || 700);
     }}
 
     dialogOpened = true;
 
     if (mobile) {{
-      // Возвращаем рабочую схему mini app: после отправки сообщения сразу
-      // пытаемся открыть диалог VK и затем закрываем mini app.
-      if (fromUserTap && android) {{
+      // Android пускает deeplink надёжнее из жеста (тап / «Разрешить»).
+      // Без жеста всё равно пробуем vk:// и закрываем mini app — пользователь
+      // возвращается в VK, где уже лежит сообщение сообщества.
+      if (android && fromUserTap) {{
         window.location.href =
           "intent://vk.com/write-" + groupId +
           "#Intent;scheme=https;package=com.vkontakte.android;S.browser_fallback_url=" +
           encodeURIComponent(writeUrl) + ";end";
       }} else {{
-        window.location.href = "vk://vk.com/write-" + groupId;
+        try {{
+          window.location.href = "vk://vk.com/write-" + groupId;
+        }} catch (_) {{}}
       }}
       viaBridge(writeUrl)
         .catch(function () {{ return viaBridge(vkMeUrl); }})
         .catch(function () {{ return viaBridge(imUrl); }})
         .then(function () {{
-          closeMiniAppSoon();
+          closeMiniAppSoon(fromUserTap ? 900 : 500);
         }})
         .catch(function () {{
-          setTimeout(function () {{
-            bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-          }}, 1200);
+          closeMiniAppSoon(fromUserTap ? 900 : 400);
         }});
       return;
     }}
@@ -862,11 +863,14 @@ def _mini_app_html(default_flow: str = "") -> str:
     }}), 8000)
       .then(function (data) {{
         clearTimeout(slowTimer);
+        // Ответ «Разрешить» — жест пользователя: сразу уходим в диалог.
         if (data && data.result) {{
+          openDialog({{ fromUserTap: true }});
           sendEntry(false);
           return;
         }}
         setStatus("Проверяем разрешение и отправляем сообщение…", true);
+        openDialog({{ fromUserTap: true }});
         sendEntry(false);
       }})
       .catch(function (error) {{
@@ -876,6 +880,7 @@ def _mini_app_html(default_flow: str = "") -> str:
           return;
         }}
         setStatus("VK не вернул ответ на разрешение. Проверяем и отправляем сообщение…", true);
+        openDialog({{ fromUserTap: true }});
         sendEntry(false);
       }});
   }}
@@ -910,10 +915,15 @@ def _mini_app_html(default_flow: str = "") -> str:
         if (res.ok && res.j && res.j.ok) {{
           entrySent = true;
           markDialogReady("Готово! Сообщение в личке. Открываем диалог… Если не открылся — нажмите кнопку выше.");
-          if (isMobilePlatform()) {{
-            setTimeout(function () {{ openDialog({{ fromUserTap: false }}); }}, 150);
-          }} else {{
-            setTimeout(function () {{ openDialog({{ fromUserTap: false }}); }}, 350);
+          // Если диалог ещё не открывали (автостарт без тапа) — best-effort уход.
+          if (!dialogOpened) {{
+            setTimeout(function () {{
+              openDialog({{ fromUserTap: false }});
+            }}, isMobilePlatform() ? 120 : 300);
+          }} else if (isMobilePlatform()) {{
+            setTimeout(function () {{
+              bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
+            }}, 500);
           }}
           return;
         }}
@@ -963,6 +973,10 @@ def _mini_app_html(default_flow: str = "") -> str:
     if (!setFlow(flow, true)) {{
       setStatus("Неизвестный сценарий.", false);
       return;
+    }}
+    // Один тап: сразу в диалог + параллельно шлём сценарий в личку.
+    if (opts.fromUserTap) {{
+      openDialog({{ fromUserTap: true }});
     }}
     sendEntry(true);
   }}
