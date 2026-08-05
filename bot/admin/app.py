@@ -3460,66 +3460,75 @@ def _analytics_tab(report: dict, filters: dict) -> str:
                 all="",
             )
             day_rows.append(
-                "<tr>"
-                f'<td><a href="{_h(day_link)}">{_h(day_s)}</a></td>'
-                f"<td>{int(row.get('uniques') or 0)}</td>"
-                f"<td>{int(row.get('events') or 0)}</td>"
-                "</tr>"
+                f'<a class="drill-day" href="{_h(day_link)}">'
+                f'<span class="drill-day-date">{_h(day_s)}</span>'
+                f'<span class="drill-day-meta">'
+                f'<b>{int(row.get("uniques") or 0)}</b> чел.'
+                f'<span class="muted"> · {int(row.get("events") or 0)}</span>'
+                f"</span></a>"
             )
-        person_rows = []
+        person_cards = []
         for row in people:
             uid = row.get("user_id")
-            name = (row.get("name") or "").strip() or "—"
+            name = (row.get("name") or "").strip() or "Без имени"
             tg = row.get("telegram_id")
             vk = row.get("vk_id")
             uname = (row.get("username") or "").strip()
-            channel_s = row.get("channel") or ""
+            channel_s = (row.get("channel") or "").strip()
             if uid:
-                who = f'<a href="/admin?tab=users&u={int(uid)}">{_h(name)}</a>'
+                who = f'<a class="drill-person-name" href="/admin?tab=users&u={int(uid)}">{_h(name)}</a>'
             else:
-                who = _h(name)
-            ids = []
+                who = f'<span class="drill-person-name">{_h(name)}</span>'
+            chips = []
+            if channel_s == "telegram":
+                chips.append('<span class="drill-chip drill-chip-tg">Telegram</span>')
+            elif channel_s == "vkontakte":
+                chips.append('<span class="drill-chip drill-chip-vk">VK</span>')
+            elif channel_s:
+                chips.append(f'<span class="drill-chip">{_h(channel_s)}</span>')
             if tg:
-                ids.append(f"TG {_h(str(tg))}")
+                chips.append(f'<span class="drill-chip muted">TG {_h(str(tg))}</span>')
             if vk:
-                ids.append(f'VK <a href="https://vk.com/id{int(vk)}" target="_blank" rel="noopener">{_h(str(vk))}</a>')
+                chips.append(
+                    f'<a class="drill-chip" href="https://vk.com/id{int(vk)}" '
+                    f'target="_blank" rel="noopener">VK {_h(str(vk))}</a>'
+                )
             if uname:
-                ids.append("@" + _h(uname.lstrip("@")))
-            person_rows.append(
-                "<tr>"
-                f"<td>{who}</td>"
-                f'<td class="muted">{", ".join(ids) or "—"}</td>'
-                f"<td>{_h(channel_s)}</td>"
-                f"<td>{int(row.get('events') or 0)}</td>"
-                f"<td>{_h(_fmt_msk(row.get('first_at')))}</td>"
-                f"<td>{_h(_fmt_msk(row.get('last_at')))}</td>"
-                "</tr>"
+                chips.append(f'<span class="drill-chip muted">@{_h(uname.lstrip("@"))}</span>')
+            first_s = _fmt_msk(row.get("first_at"))
+            last_s = _fmt_msk(row.get("last_at"))
+            person_cards.append(
+                '<article class="drill-person">'
+                '<div class="drill-person-top">'
+                f"<div>{who}"
+                f'<div class="drill-chips">{"".join(chips)}</div></div>'
+                f'<div class="drill-person-count"><b>{int(row.get("events") or 0)}</b>'
+                f'<span class="muted">событ.</span></div>'
+                "</div>"
+                f'<div class="drill-person-times muted">'
+                f"первый {_h(first_s)} · последний {_h(last_s)}"
+                "</div></article>"
             )
-        days_table = (
-            '<div class="table-wrap"><table class="analytics-events">'
-            "<thead><tr><th>День</th><th>Уник.</th><th>Всего</th></tr></thead>"
-            f"<tbody>{''.join(day_rows) or '<tr><td colspan=\"3\">Нет данных</td></tr>'}</tbody>"
-            "</table></div>"
-            if by_day is not None
-            else ""
+        days_inner = "".join(day_rows) or '<p class="muted">Нет данных</p>'
+        people_inner = "".join(person_cards) or '<p class="muted">Никого за период</p>'
+        days_block = (
+            f'<div class="drill-days">{days_inner}</div>'
+            '<p class="muted drill-hint">Клик по дню — только этот день</p>'
         )
-        people_table = (
-            '<div class="table-wrap"><table class="analytics-events">'
-            "<thead><tr><th>Клиент</th><th>ID</th><th>Канал</th><th>Событий</th>"
-            "<th>Первый</th><th>Последний</th></tr></thead>"
-            f"<tbody>{''.join(person_rows) or '<tr><td colspan=\"6\">Никого за период</td></tr>'}</tbody>"
-            "</table></div>"
-        )
+        people_block = f'<div class="drill-people">{people_inner}</div>'
         drill_html = (
             '<section class="card analytics-section analytics-drilldown" id="analytics-who">'
-            f"<h2>Кто: {_h(label)} <span class=\"muted\">({_h(ae_selected)})</span></h2>"
-            f'<p class="muted">Период: <b>{_h(report.get("period_label") or "весь период")}</b>. '
-            f"Людей в списке: <b>{len(people)}</b>. "
-            f'<a class="pill" href="{_h(close_href)}">Закрыть</a></p>'
+            '<div class="drill-head">'
+            "<div>"
+            f"<h2>Кто: {_h(label)}</h2>"
+            f'<p class="muted">Период: <b>{_h(report.get("period_label") or "весь период")}</b>'
+            f" · людей: <b>{len(people)}</b></p>"
+            "</div>"
+            f'<a class="pill" href="{_h(close_href)}">Закрыть</a>'
+            "</div>"
             '<div class="analytics-drill-grid">'
-            f'<div><h3 class="analytics-section-title">По дням</h3>{days_table}'
-            '<p class="muted">Клик по дню — только этот день.</p></div>'
-            f'<div><h3 class="analytics-section-title">Люди</h3>{people_table}</div>'
+            f'<aside class="drill-aside"><h3 class="analytics-section-title">По дням</h3>{days_block}</aside>'
+            f'<div class="drill-main"><h3 class="analytics-section-title">Люди</h3>{people_block}</div>'
             "</div></section>"
         )
 
@@ -4284,9 +4293,47 @@ def render_admin_html(
     a.metric-link {{ display:block; text-decoration:none; color:inherit; transition:box-shadow .15s, transform .15s; }}
     a.metric-link:hover {{ box-shadow:0 10px 28px rgba(15,23,42,.12); transform:translateY(-1px); }}
     a.metric-link .metric-who {{ color:#2563eb; margin-top:4px; }}
-    .analytics-drill-grid {{ display:grid; grid-template-columns:minmax(180px,240px) 1fr; gap:16px; align-items:start; }}
-    .analytics-drilldown {{ scroll-margin-top:16px; }}
-    @media (max-width:900px) {{ .analytics-drill-grid {{ grid-template-columns:1fr; }} }}
+    .analytics-drilldown {{ scroll-margin-top:16px; padding:20px 22px; }}
+    .drill-head {{ display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:16px; }}
+    .drill-head h2 {{ margin:0 0 6px; font-size:22px; line-height:1.25; }}
+    .drill-head .muted {{ margin:0; }}
+    .analytics-drill-grid {{ display:grid; grid-template-columns:minmax(200px,260px) minmax(0,1fr); gap:20px; align-items:start; }}
+    .drill-aside, .drill-main {{ min-width:0; }}
+    .drill-days {{ display:flex; flex-direction:column; gap:8px; }}
+    a.drill-day {{
+      display:flex; justify-content:space-between; align-items:center; gap:10px;
+      padding:10px 12px; border:1px solid var(--line); border-radius:12px;
+      background:#f8fafc; text-decoration:none; color:inherit;
+    }}
+    a.drill-day:hover {{ background:#eff6ff; border-color:#bfdbfe; }}
+    .drill-day-date {{ font-weight:700; font-size:14px; white-space:nowrap; }}
+    .drill-day-meta {{ font-size:13px; white-space:nowrap; }}
+    .drill-day-meta b {{ font-size:15px; }}
+    .drill-hint {{ margin:10px 0 0; font-size:12px; }}
+    .drill-people {{ display:flex; flex-direction:column; gap:10px; }}
+    .drill-person {{
+      border:1px solid var(--line); border-radius:14px; padding:12px 14px; background:#fff;
+    }}
+    .drill-person-top {{ display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }}
+    .drill-person-name {{ font-weight:700; font-size:15px; color:#0f172a; text-decoration:none; }}
+    a.drill-person-name:hover {{ color:#2563eb; }}
+    .drill-chips {{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }}
+    .drill-chip {{
+      display:inline-flex; align-items:center; padding:3px 8px; border-radius:999px;
+      background:#f1f5f9; color:#334155; font-size:12px; text-decoration:none; white-space:nowrap;
+    }}
+    a.drill-chip:hover {{ background:#e2e8f0; }}
+    .drill-chip-tg {{ background:#dbeafe; color:#1d4ed8; }}
+    .drill-chip-vk {{ background:#ede9fe; color:#6d28d9; }}
+    .drill-person-count {{ text-align:right; flex-shrink:0; }}
+    .drill-person-count b {{ display:block; font-size:20px; line-height:1.1; }}
+    .drill-person-count .muted {{ font-size:11px; }}
+    .drill-person-times {{ margin-top:8px; font-size:12px; }}
+    @media (max-width:900px) {{
+      .analytics-drill-grid {{ grid-template-columns:1fr; }}
+      .drill-head {{ flex-direction:column; align-items:stretch; }}
+    }}
+
     .filters {{ padding:16px; margin-bottom:20px; display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:space-between; }}
     .analytics-filters {{ flex-direction:column; align-items:stretch; }}
     .filters form {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }}
