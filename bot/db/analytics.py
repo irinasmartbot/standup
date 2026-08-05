@@ -464,10 +464,21 @@ def fetch_analytics_report(
                 if channel in ("telegram", "vkontakte"):
                     booking_params["channel"] = channel
 
-                def _format_booking_metric(booking_format: str, time_column: str) -> dict:
+                def _format_booking_metric(
+                    booking_format: str,
+                    time_column: str,
+                    *,
+                    source_mode: str = "organic",
+                ) -> dict:
+                    """source_mode: organic (tg/vk), import, or all."""
                     where = [f"b.format = '{booking_format}'"]
                     if "channel" in booking_params:
                         where.append("b.source = %(channel)s")
+                    elif source_mode == "organic":
+                        # Импорт из Sheets/Salebot не должен ломать воронку «от входа в бот».
+                        where.append("b.source IN ('telegram', 'vkontakte')")
+                    elif source_mode == "import":
+                        where.append("b.source = 'import'")
                     where_sql = " AND ".join(where)
                     time_filter = ""
                     if "start" in booking_params and "end" in booking_params:
@@ -490,16 +501,35 @@ def fetch_analytics_report(
                         "uniques": int(row.get("uniques") or 0),
                     }
 
-                def _format_bookings(booking_format: str) -> dict:
+                def _format_bookings(booking_format: str, *, source_mode: str = "organic") -> dict:
                     return {
-                        "created": _format_booking_metric(booking_format, "created_at"),
-                        "confirmed": _format_booking_metric(booking_format, "confirmed_at"),
-                        "cancelled": _format_booking_metric(booking_format, "cancelled_at"),
-                        "annulled": _format_booking_metric(booking_format, "annulled_at"),
+                        "created": _format_booking_metric(
+                            booking_format, "created_at", source_mode=source_mode
+                        ),
+                        "confirmed": _format_booking_metric(
+                            booking_format, "confirmed_at", source_mode=source_mode
+                        ),
+                        "cancelled": _format_booking_metric(
+                            booking_format, "cancelled_at", source_mode=source_mode
+                        ),
+                        "annulled": _format_booking_metric(
+                            booking_format, "annulled_at", source_mode=source_mode
+                        ),
                     }
 
                 raffle_bookings = _format_bookings("rozygrysh")
                 proverka_bookings = _format_bookings("proverka")
+                # Отдельно: заливка из таблиц/Salebot (не шаги воронки бота).
+                if "channel" not in booking_params:
+                    proverka_bookings["imported"] = _format_booking_metric(
+                        "proverka", "created_at", source_mode="import"
+                    )
+                    raffle_bookings["imported"] = _format_booking_metric(
+                        "rozygrysh", "created_at", source_mode="import"
+                    )
+                else:
+                    proverka_bookings["imported"] = {"events": 0, "uniques": 0}
+                    raffle_bookings["imported"] = {"events": 0, "uniques": 0}
 
                 # Visited raffle: got a ticket and still have it (not cancelled/annulled).
                 visited_time_filter = ""
@@ -510,6 +540,8 @@ def fetch_analytics_report(
                 visited_where = ["b.format = 'rozygrysh'", "b.status = 'confirmed'"]
                 if "channel" in booking_params:
                     visited_where.append("b.source = %(channel)s")
+                else:
+                    visited_where.append("b.source IN ('telegram', 'vkontakte')")
                 cur.execute(
                     f"""
                     SELECT
@@ -533,6 +565,8 @@ def fetch_analytics_report(
                 booking_where = ["b.format = 'rozygrysh'"]
                 if "channel" in booking_params:
                     booking_where.append("b.source = %(channel)s")
+                else:
+                    booking_where.append("b.source IN ('telegram', 'vkontakte')")
                 booking_where_sql = " AND ".join(booking_where)
 
                 def _raffle_kind_booking_metric(time_column: str) -> dict[str, dict]:
