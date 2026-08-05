@@ -627,6 +627,7 @@ def _mini_app_html(default_flow: str = "") -> str:
   var permissionRequested = false;
   var dialogReady = false;
   var dialogOpened = false;
+  var openAfterSendFromTap = false;
   var launchParamsQuery = window.location.search || "";
   var statusEl = document.getElementById("status");
   var leadEl = document.getElementById("lead");
@@ -780,63 +781,52 @@ def _mini_app_html(default_flow: str = "") -> str:
   function openDialog(opts) {{
     opts = opts || {{}};
     var fromUserTap = !!opts.fromUserTap;
-    var writeUrl = "https://vk.com/write-" + groupId;
-    var vkMeUrl = vkMePath ? ("https://vk.me/" + vkMePath) : writeUrl;
-    var imUrl = "https://vk.com/im?sel=-" + groupId;
-    var mobile = isMobilePlatform();
-    var android = isAndroidPlatform();
+    // Важно: НЕ использовать vk:// / intent:// / window.location внутри mini app —
+    // на Android это часто выкидывает в общий раздел VK, а не в диалог сообщества.
+    // Только VKWebAppOpenURL с https-ссылками на конкретный чат.
+    if (!groupId) {{
+      setStatus("Не задан id сообщества. Откройте диалог вручную.", false);
+      return;
+    }}
+    // Сначала прямой peer чата (im?sel=-), потом vk.me / write-.
+    var urls = [
+      "https://vk.com/im?sel=-" + groupId,
+      "https://vk.ru/im?sel=-" + groupId
+    ];
+    if (vkMePath) {{
+      urls.push("https://vk.me/" + vkMePath);
+    }}
+    urls.push("https://vk.com/write-" + groupId);
+    urls.push("https://m.vk.com/write-" + groupId);
 
     function viaBridge(url) {{
       return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), 2500);
     }}
 
-    function closeMiniAppSoon(ms) {{
-      setTimeout(function () {{
-        bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-      }}, ms || 700);
-    }}
-
-    dialogOpened = true;
-
-    if (mobile) {{
-      // Android пускает deeplink надёжнее из жеста (тап / «Разрешить»).
-      // Без жеста всё равно пробуем vk:// и закрываем mini app — пользователь
-      // возвращается в VK, где уже лежит сообщение сообщества.
-      if (android && fromUserTap) {{
-        window.location.href =
-          "intent://vk.com/write-" + groupId +
-          "#Intent;scheme=https;package=com.vkontakte.android;S.browser_fallback_url=" +
-          encodeURIComponent(writeUrl) + ";end";
-      }} else {{
-        try {{
-          window.location.href = "vk://vk.com/write-" + groupId;
-        }} catch (_) {{}}
+    function tryUrl(index) {{
+      if (index >= urls.length) {{
+        if (fromUserTap) {{
+          setStatus(
+            "Не удалось открыть диалог автоматически. Откройте сообщения сообщества вручную — текст уже там.",
+            false
+          );
+        }}
+        return;
       }}
-      viaBridge(writeUrl)
-        .catch(function () {{ return viaBridge(vkMeUrl); }})
-        .catch(function () {{ return viaBridge(imUrl); }})
+      viaBridge(urls[index])
         .then(function () {{
-          closeMiniAppSoon(fromUserTap ? 900 : 500);
+          dialogOpened = true;
+          // Закрываем mini app только после успешного OpenURL.
+          setTimeout(function () {{
+            bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
+          }}, 350);
         }})
         .catch(function () {{
-          closeMiniAppSoon(fromUserTap ? 900 : 400);
+          tryUrl(index + 1);
         }});
-      return;
     }}
 
-    viaBridge(writeUrl)
-      .catch(function () {{ return viaBridge(vkMeUrl); }})
-      .catch(function () {{ return viaBridge(imUrl); }})
-      .catch(function () {{
-        try {{
-          var opened = window.open(writeUrl, "_blank");
-          if (!opened && window.top) {{
-            window.top.location.href = writeUrl;
-          }}
-        }} catch (_) {{
-          window.location.href = writeUrl;
-        }}
-      }});
+    tryUrl(0);
   }}
 
   function markDialogReady(statusText) {{
@@ -863,7 +853,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     }}), 8000)
       .then(function (data) {{
         clearTimeout(slowTimer);
-        // Ответ «Разрешить» — жест пользователя: сразу уходим в диалог.
+        // После «Разрешить» открываем диалог из того же жеста, потом шлём текст.
         if (data && data.result) {{
           openDialog({{ fromUserTap: true }});
           sendEntry(false);
@@ -914,16 +904,15 @@ def _mini_app_html(default_flow: str = "") -> str:
         sending = false;
         if (res.ok && res.j && res.j.ok) {{
           entrySent = true;
-          markDialogReady("Готово! Сообщение в личке. Открываем диалог… Если не открылся — нажмите кнопку выше.");
-          // Если диалог ещё не открывали (автостарт без тапа) — best-effort уход.
-          if (!dialogOpened) {{
-            setTimeout(function () {{
-              openDialog({{ fromUserTap: false }});
-            }}, isMobilePlatform() ? 120 : 300);
-          }} else if (isMobilePlatform()) {{
-            setTimeout(function () {{
-              bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-            }}, 500);
+          var fromTap = openAfterSendFromTap;
+          openAfterSendFromTap = false;
+          markDialogReady(
+            "Готово! Сообщение уже в личке сообщества. Если диалог не открылся — нажмите кнопку выше."
+          );
+          // Без жеста на мобилке OpenURL режется; не уводим в «общий раздел».
+          // С тапа/«Разрешить» диалог уже открыли раньше. На десктопе — дожимаем.
+          if (!dialogOpened && (fromTap || !isMobilePlatform())) {{
+            openDialog({{ fromUserTap: fromTap }});
           }}
           return;
         }}
@@ -974,8 +963,9 @@ def _mini_app_html(default_flow: str = "") -> str:
       setStatus("Неизвестный сценарий.", false);
       return;
     }}
-    // Один тап: сразу в диалог + параллельно шлём сценарий в личку.
+    // Один тап: сразу OpenURL в диалог (пока жив жест) + параллельно шлём текст.
     if (opts.fromUserTap) {{
+      openAfterSendFromTap = true;
       openDialog({{ fromUserTap: true }});
     }}
     sendEntry(true);
