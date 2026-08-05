@@ -1196,7 +1196,7 @@ def _tabs(
     current = filters.get("tab") or ("date" if can_view_ops else "events")
     return "".join(
         f'<a class="tab {"active" if current == key else ""}" '
-        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="", date_from="", date_to="", channel="", ef="", tickets="", q="")}">{label}</a>'
+        f'href="{_query_link(filters, tab=key, date="", event="", u="", table="", page="", sort="", order="", date_from="", date_to="", channel="", ef="", tickets="", q="", ae="")}">{label}</a>'
         for key, label in tabs
     )
 
@@ -2770,17 +2770,33 @@ def _metric_pair(metric: dict | None) -> str:
     )
 
 
-def _analytics_metric_card(title: str, metric: dict | None, note: str = "", css_class: str = "") -> str:
+def _analytics_metric_card(
+    title: str,
+    metric: dict | None,
+    note: str = "",
+    css_class: str = "",
+    href: str = "",
+) -> str:
     metric = metric or {"events": 0, "uniques": 0}
     note_html = f'<span class="muted">{_h(note)}</span>' if note else ""
     cls = f"metric {css_class}".strip()
+    if href:
+        cls += " metric-link"
+        tag_open = f'<a class="{cls}" href="{_h(href)}">'
+        tag_close = "</a>"
+        hint = '<small class="muted metric-who">кто →</small>'
+    else:
+        tag_open = f'<div class="{cls}">'
+        tag_close = "</div>"
+        hint = ""
     return (
-        f'<div class="{cls}">'
+        f"{tag_open}"
         f"<span>{_h(title)}</span>"
         f'<b>{metric.get("uniques", 0)}</b>'
         f'<small class="muted">всего {metric.get("events", 0)}</small>'
+        f"{hint}"
         f"{note_html}"
-        "</div>"
+        f"{tag_close}"
     )
 
 
@@ -2821,19 +2837,25 @@ def _analytics_tab(report: dict, filters: dict) -> str:
 
     proverka_overview = report.get("proverka_bookings") or {}
     raffle_overview = report.get("raffle_bookings") or {}
+    ae_selected = (filters.get("ae") or "").strip()
+
+    def _ae_link(event_name: str) -> str:
+        return _query_link(filters, tab="analytics", ae=event_name) + "#analytics-who"
+
     overview = (
         '<h3 class="analytics-section-title">Основные события за период</h3>'
+        '<p class="muted">Нажмите карточку со «кто →», чтобы увидеть список людей и разбивку по дням.</p>'
         '<div class="summary analytics-summary">'
-        f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"), css_class="tone-bot-start")}'
-        f'{_analytics_metric_card("Зашли · Проверка", by_name.get("branch_proverka"), css_class="tone-proverka")}'
-        f'{_analytics_metric_card("Зашли · BEST", by_name.get("branch_best"), css_class="tone-best")}'
-        f'{_analytics_metric_card("Зашли · Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto")}'
-        f'{_analytics_metric_card("Help / FAQ · обращение", by_name.get("cmd_help") or by_name.get("help_open"))}'
+        f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"), css_class="tone-bot-start", href=_ae_link("bot_start"))}'
+        f'{_analytics_metric_card("Зашли · Проверка", by_name.get("branch_proverka"), css_class="tone-proverka", href=_ae_link("branch_proverka"))}'
+        f'{_analytics_metric_card("Зашли · BEST", by_name.get("branch_best"), css_class="tone-best", href=_ae_link("branch_best"))}'
+        f'{_analytics_metric_card("Зашли · Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto", href=_ae_link("branch_hitloto"))}'
+        f'{_analytics_metric_card("Help / FAQ · обращение", by_name.get("cmd_help") or by_name.get("help_open"), href=_ae_link("cmd_help" if by_name.get("cmd_help") else "help_open"))}'
         f'{_analytics_metric_card("Брони созданы · проверка", proverka_overview.get("created"))}'
         f'{_analytics_metric_card("Билет получен · проверка", proverka_overview.get("confirmed"))}'
         f'{_analytics_metric_card("Отмены брони · проверка", proverka_overview.get("cancelled"))}'
-        f'{_analytics_metric_card("Отправили скрин · розыгрыш", by_name.get("raffle_screenshot"))}'
-        f'{_analytics_metric_card("Посетили розыгрыш", raffle_overview.get("visited"))}'
+        f'{_analytics_metric_card("Отправили скрин · розыгрыш", by_name.get("raffle_screenshot"), href=_ae_link("raffle_screenshot"))}'
+        f'{_analytics_metric_card("Посетили розыгрыш", raffle_overview.get("visited"), href=_ae_link("raffle_enter"))}'
         "</div>"
     )
 
@@ -3389,12 +3411,102 @@ def _analytics_tab(report: dict, filters: dict) -> str:
       </form>
     </div>
     <p class="muted">Период: <b>{_h(report.get("period_label") or "весь период")}</b>.
-    В карточках: крупно — уникальные люди, мелко — всего заходов.</p>
+    В карточках: крупно — уникальные люди, мелко — всего заходов.
+    Период задаётся кнопками «Сегодня» / «7 дней» или датами С–По.</p>
     """
+
+    drill = report.get("drilldown") or {}
+    drill_html = ""
+    if ae_selected and drill:
+        label = ACTIVITY_SHORT_LABELS.get(ae_selected) or event_labels.get(ae_selected) or ae_selected
+        people = drill.get("people") or []
+        by_day = drill.get("by_day") or []
+        close_href = _query_link(filters, tab="analytics", ae="")
+        day_rows = []
+        for row in by_day:
+            day = row.get("day")
+            if hasattr(day, "strftime"):
+                day_s = day.strftime("%d.%m.%Y")
+                day_iso = day.strftime("%Y-%m-%d")
+            else:
+                day_s = str(day or "")
+                day_iso = day_s
+            day_link = _query_link(
+                filters,
+                tab="analytics",
+                ae=ae_selected,
+                date_from=day_iso,
+                date_to=day_iso,
+                all="",
+            )
+            day_rows.append(
+                "<tr>"
+                f'<td><a href="{_h(day_link)}">{_h(day_s)}</a></td>'
+                f"<td>{int(row.get('uniques') or 0)}</td>"
+                f"<td>{int(row.get('events') or 0)}</td>"
+                "</tr>"
+            )
+        person_rows = []
+        for row in people:
+            uid = row.get("user_id")
+            name = (row.get("name") or "").strip() or "—"
+            tg = row.get("telegram_id")
+            vk = row.get("vk_id")
+            uname = (row.get("username") or "").strip()
+            channel_s = row.get("channel") or ""
+            if uid:
+                who = f'<a href="/admin?tab=users&u={int(uid)}">{_h(name)}</a>'
+            else:
+                who = _h(name)
+            ids = []
+            if tg:
+                ids.append(f"TG {_h(str(tg))}")
+            if vk:
+                ids.append(f'VK <a href="https://vk.com/id{int(vk)}" target="_blank" rel="noopener">{_h(str(vk))}</a>')
+            if uname:
+                ids.append("@" + _h(uname.lstrip("@")))
+            person_rows.append(
+                "<tr>"
+                f"<td>{who}</td>"
+                f'<td class="muted">{", ".join(ids) or "—"}</td>'
+                f"<td>{_h(channel_s)}</td>"
+                f"<td>{int(row.get('events') or 0)}</td>"
+                f"<td>{_h(_fmt_msk(row.get('first_at')))}</td>"
+                f"<td>{_h(_fmt_msk(row.get('last_at')))}</td>"
+                "</tr>"
+            )
+        days_table = (
+            '<div class="table-wrap"><table class="analytics-events">'
+            "<thead><tr><th>День</th><th>Уник.</th><th>Всего</th></tr></thead>"
+            f"<tbody>{''.join(day_rows) or '<tr><td colspan=\"3\">Нет данных</td></tr>'}</tbody>"
+            "</table></div>"
+            if by_day is not None
+            else ""
+        )
+        people_table = (
+            '<div class="table-wrap"><table class="analytics-events">'
+            "<thead><tr><th>Клиент</th><th>ID</th><th>Канал</th><th>Событий</th>"
+            "<th>Первый</th><th>Последний</th></tr></thead>"
+            f"<tbody>{''.join(person_rows) or '<tr><td colspan=\"6\">Никого за период</td></tr>'}</tbody>"
+            "</table></div>"
+        )
+        drill_html = (
+            '<section class="card analytics-section analytics-drilldown" id="analytics-who">'
+            f"<h2>Кто: {_h(label)} <span class=\"muted\">({_h(ae_selected)})</span></h2>"
+            f'<p class="muted">Период: <b>{_h(report.get("period_label") or "весь период")}</b>. '
+            f"Людей в списке: <b>{len(people)}</b>. "
+            f'<a class="pill" href="{_h(close_href)}">Закрыть</a></p>'
+            '<div class="analytics-drill-grid">'
+            f'<div><h3 class="analytics-section-title">По дням</h3>{days_table}'
+            '<p class="muted">Клик по дню — только этот день.</p></div>'
+            f'<div><h3 class="analytics-section-title">Люди</h3>{people_table}</div>'
+            "</div></section>"
+        )
 
     return (
         filters_bar
         + overview
+        + drill_html
         + all_events_table
         + proverka_funnel
         + starts_table
@@ -4149,6 +4261,12 @@ def render_admin_html(
     .metric span {{ display:block; color:var(--muted); font-size:14px; }}
     .metric b {{ display:block; margin-top:8px; font-size:30px; }}
     .metric small {{ display:block; margin-top:6px; font-size:13px; }}
+    a.metric-link {{ display:block; text-decoration:none; color:inherit; transition:box-shadow .15s, transform .15s; }}
+    a.metric-link:hover {{ box-shadow:0 10px 28px rgba(15,23,42,.12); transform:translateY(-1px); }}
+    a.metric-link .metric-who {{ color:#2563eb; margin-top:4px; }}
+    .analytics-drill-grid {{ display:grid; grid-template-columns:minmax(180px,240px) 1fr; gap:16px; align-items:start; }}
+    .analytics-drilldown {{ scroll-margin-top:16px; }}
+    @media (max-width:900px) {{ .analytics-drill-grid {{ grid-template-columns:1fr; }} }}
     .filters {{ padding:16px; margin-bottom:20px; display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:space-between; }}
     .analytics-filters {{ flex-direction:column; align-items:stretch; }}
     .filters form {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }}
@@ -4378,6 +4496,7 @@ def _filters_from_request(request: web.Request) -> dict:
         "ef": ef,
         "tickets": request.query.get("tickets", "").strip(),
         "q": request.query.get("q", "").strip(),
+        "ae": request.query.get("ae", "").strip(),
     }
 
 
@@ -4624,16 +4743,42 @@ async def admin_page(request: web.Request) -> web.Response:
         db_data = {"tables": tables, "browse": browse, "audit": audit_rows}
         dashboard = empty_dashboard
     elif filters.get("tab") == "analytics":
-        from bot.db.analytics import fetch_analytics_report
-
-        analytics = await loop.run_in_executor(
-            None,
-            lambda: fetch_analytics_report(
-                date_from=filters.get("date_from") or None,
-                date_to=filters.get("date_to") or None,
-                channel=filters.get("channel") or "",
-            ),
+        from bot.db.analytics import (
+            fetch_analytics_event_by_day,
+            fetch_analytics_event_people,
+            fetch_analytics_report,
         )
+
+        date_from = filters.get("date_from") or None
+        date_to = filters.get("date_to") or None
+        channel = filters.get("channel") or ""
+        ae_name = (filters.get("ae") or "").strip()
+
+        def _load_analytics():
+            report = fetch_analytics_report(
+                date_from=date_from,
+                date_to=date_to,
+                channel=channel,
+            )
+            if ae_name and report.get("available"):
+                report["drilldown"] = {
+                    "name": ae_name,
+                    "people": fetch_analytics_event_people(
+                        ae_name,
+                        date_from=date_from,
+                        date_to=date_to,
+                        channel=channel,
+                    ),
+                    "by_day": fetch_analytics_event_by_day(
+                        ae_name,
+                        date_from=date_from,
+                        date_to=date_to,
+                        channel=channel,
+                    ),
+                }
+            return report
+
+        analytics = await loop.run_in_executor(None, _load_analytics)
         dashboard = empty_dashboard
     elif filters.get("tab") == "events":
         from bot.db.events_admin import list_events_for_admin

@@ -773,3 +773,162 @@ def fetch_user_activity_counts(
             vk_id,
         )
         return []
+
+
+def _period_bounds(
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> tuple[Any, Any, list[str], dict[str, Any]]:
+    """Return (day_from, day_to, where_parts, params) for MSK calendar days."""
+    from datetime import time, timedelta, timezone
+
+    msk = timezone(timedelta(hours=3))
+    where: list[str] = []
+    params: dict[str, Any] = {}
+
+    def _parse_day(value: str):
+        value = (value or "").strip()
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            try:
+                return datetime.strptime(value, "%d.%m.%Y").date()
+            except ValueError:
+                return None
+
+    day_from = _parse_day(date_from or "")
+    day_to = _parse_day(date_to or "")
+    if day_from and not day_to:
+        day_to = day_from
+    if day_to and not day_from:
+        day_from = day_to
+    if day_from and day_to and day_to < day_from:
+        day_from, day_to = day_to, day_from
+    if day_from and day_to:
+        where.append("ae.created_at >= %(start)s AND ae.created_at < %(end)s")
+        params["start"] = datetime.combine(day_from, time.min, tzinfo=msk)
+        params["end"] = datetime.combine(day_to + timedelta(days=1), time.min, tzinfo=msk)
+    return day_from, day_to, where, params
+
+
+_PERSON_KEY_SQL = """
+COALESCE(
+    ae.user_id::text,
+    CASE WHEN ae.telegram_id IS NOT NULL THEN 'tg:' || ae.telegram_id::text END,
+    CASE WHEN ae.vk_id IS NOT NULL THEN 'vk:' || ae.vk_id::text END
+)
+""".strip()
+
+
+def fetch_analytics_event_people(
+    name: str,
+    *,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    channel: str = "",
+    limit: int = 300,
+) -> list[dict]:
+    """Unique people who fired `name` in the period (for analytics drill-down)."""
+    name = (name or "").strip()
+    if not name or not _use_postgres():
+        return []
+    _, _, where, params = _period_bounds(date_from, date_to)
+    where.insert(0, "ae.name = %(name)s")
+    params["name"] = name
+    params["limit"] = max(1, min(int(limit), 1000))
+    if channel in ("telegram", "vkontakte"):
+        where.append("ae.channel = %(channel)s")
+        params["channel"] = channel
+    where_sql = " AND ".join(where)
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        {_PERSON_KEY_SQL} AS person_key,
+                        COALESCE(MAX(ae.user_id), MAX(u_tg.id), MAX(u_vk.id)) AS user_id,
+                        COALESCE(
+                            NULLIF(MAX(u_by_id.name), ''),
+                            NULLIF(MAX(u_tg.name), ''),
+                            NULLIF(MAX(u_vk.name), ''),
+                            ''
+                        ) AS name,
+                        COALESCE(MAX(ae.telegram_id), MAX(u_by_id.telegram_id), MAX(u_tg.telegram_id)) AS telegram_id,
+                        COALESCE(MAX(ae.vk_id), MAX(u_by_id.vk_id), MAX(u_vk.vk_id)) AS vk_id,
+                        COALESCE(
+                            NULLIF(MAX(u_by_id.username), ''),
+                            NULLIF(MAX(u_tg.username), ''),
+                            NULLIF(MAX(u_vk.username), ''),
+                            ''
+                        ) AS username,
+                        MAX(ae.channel) AS channel,
+                        COUNT(*)::int AS events,
+                        MIN(ae.created_at) AS first_at,
+                        MAX(ae.created_at) AS last_at
+                    FROM analytics_events ae
+                    LEFT JOIN users u_by_id ON u_by_id.id = ae.user_id
+                    LEFT JOIN users u_tg
+                        ON ae.telegram_id IS NOT NULL
+                       AND u_tg.telegram_id = ae.telegram_id
+                    LEFT JOIN users u_vk
+                        ON ae.vk_id IS NOT NULL
+                       AND u_vk.vk_id = ae.vk_id
+                    WHERE {where_sql}
+                      AND {_PERSON_KEY_SQL} IS NOT NULL
+                    GROUP BY 1
+                    ORDER BY MAX(ae.created_at) DESC
+                    LIMIT %(limit)s
+                    """,
+                    params,
+                )
+                return [dict(row) for row in cur.fetchall()]
+    except Exception:
+        logger.exception("fetch_analytics_event_people failed name=%s", name)
+        return []
+
+
+def fetch_analytics_event_by_day(
+    name: str,
+    *,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    channel: str = "",
+    limit: int = 90,
+) -> list[dict]:
+    """Per-day events/uniques for one analytics event name (MSK calendar)."""
+    name = (name or "").strip()
+    if not name or not _use_postgres():
+        return []
+    _, _, where, params = _period_bounds(date_from, date_to)
+    where.insert(0, "ae.name = %(name)s")
+    params["name"] = name
+    params["limit"] = max(1, min(int(limit), 366))
+    if channel in ("telegram", "vkontakte"):
+        where.append("ae.channel = %(channel)s")
+        params["channel"] = channel
+    where_sql = " AND ".join(where)
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        ((ae.created_at AT TIME ZONE 'Europe/Moscow')::date) AS day,
+                        COUNT(*)::int AS events,
+                        COUNT(DISTINCT {_PERSON_KEY_SQL})::int AS uniques
+                    FROM analytics_events ae
+                    WHERE {where_sql}
+                    GROUP BY 1
+                    ORDER BY 1 DESC
+                    LIMIT %(limit)s
+                    """,
+                    params,
+                )
+                return [dict(row) for row in cur.fetchall()]
+    except Exception:
+        logger.exception("fetch_analytics_event_by_day failed name=%s", name)
+        return []
+
