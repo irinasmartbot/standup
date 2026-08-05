@@ -840,26 +840,67 @@ def _mini_app_html(default_flow: str = "") -> str:
       setStatus("Не задан id сообщества. Откройте диалог вручную.", false);
       return;
     }}
-    // Без vk.me и без write- (у них промежуточный экран сообщества).
-    var urls = [
-      "https://vk.com/im?sel=-" + groupId,
-      "https://vk.ru/im?sel=-" + groupId
-    ];
+    // Только прямой peer чата — без vk.me / write- (промежуточный экран).
+    var chatUrl = "https://vk.com/im?sel=-" + groupId;
+    var chatUrlRu = "https://vk.ru/im?sel=-" + groupId;
+    var urls = [chatUrl, chatUrlRu];
+
+    function closeMiniAppSoon(ms) {{
+      setTimeout(function () {{
+        bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
+      }}, ms || 400);
+    }}
+
+    function viaBridge(url) {{
+      return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), 3500);
+    }}
 
     var syncOk = false;
     var skipSync = !!opts.skipSync;
-    // На десктопе жест клика надёжнее отрабатывает через window.open / <a>,
-    // чем только через bridge (часто молчит или таймаутится).
+    // Десктоп: жест клика → window.open / <a>.
     if (fromUserTap && !skipSync && !isMobilePlatform()) {{
-      syncOk = openViaWindow(urls[0]);
+      syncOk = openViaWindow(chatUrl);
       if (syncOk) {{
         dialogOpened = true;
         setStatus("Открыли диалог. Если вкладка не появилась — разрешите всплывающие окна браузера.", true);
       }}
     }}
 
-    function viaBridge(url) {{
-      return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), 4000);
+    // Мобилка: bridge → deeplink на im → закрытие mini app.
+    // Так раньше уходило «само» после отправки; vk.me/write- не используем.
+    if (isMobilePlatform()) {{
+      var android = isAndroidPlatform();
+      if (fromUserTap && android) {{
+        try {{
+          window.location.href =
+            "intent://vk.com/im?sel=-" + groupId +
+            "#Intent;scheme=https;package=com.vkontakte.android;end";
+        }} catch (_) {{}}
+      }} else {{
+        try {{
+          window.location.href = "vk://vk.com/im?sel=-" + groupId;
+        }} catch (_) {{}}
+      }}
+      viaBridge(chatUrl)
+        .catch(function () {{ return viaBridge(chatUrlRu); }})
+        .then(function () {{
+          dialogOpened = true;
+          closeMiniAppSoon(fromUserTap ? 450 : 350);
+        }})
+        .catch(function () {{
+          try {{
+            window.location.href = chatUrl;
+          }} catch (_) {{}}
+          // Даже без OpenURL закрываем mini app — пользователь возвращается в VK.
+          closeMiniAppSoon(fromUserTap ? 700 : 500);
+          if (fromUserTap) {{
+            setStatus(
+              "Если диалог не открылся — откройте сообщения сообщества вручную, текст уже там.",
+              false
+            );
+          }}
+        }});
+      return;
     }}
 
     function tryUrl(index) {{
@@ -875,11 +916,6 @@ def _mini_app_html(default_flow: str = "") -> str:
       viaBridge(urls[index])
         .then(function () {{
           dialogOpened = true;
-          if (isMobilePlatform()) {{
-            setTimeout(function () {{
-              bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-            }}, 350);
-          }}
         }})
         .catch(function () {{
           tryUrl(index + 1);
@@ -967,12 +1003,14 @@ def _mini_app_html(default_flow: str = "") -> str:
           var fromTap = openAfterSendFromTap;
           openAfterSendFromTap = false;
           markDialogReady(
-            "Готово! Сообщение уже в личке сообщества. Если диалог не открылся — нажмите кнопку выше."
+            "Готово! Сообщение уже в личке. Открываем диалог… Если не открылся — нажмите кнопку выше."
           );
-          // Без жеста на мобилке OpenURL режется; не уводим в «общий раздел».
-          // С тапа/«Разрешить» диалог уже открыли раньше. На десктопе — дожимаем.
-          if (!dialogOpened && (fromTap || !isMobilePlatform())) {{
-            openDialog({{ fromUserTap: fromTap }});
+          // Мобилка: после успешной отправки снова пробуем автоуход
+          // (deeplink im?sel=- + Close), как раньше. Если уже открыли с тапа — не дублируем.
+          if (!dialogOpened) {{
+            setTimeout(function () {{
+              openDialog({{ fromUserTap: !!fromTap }});
+            }}, isMobilePlatform() ? 120 : 250);
           }}
           return;
         }}
