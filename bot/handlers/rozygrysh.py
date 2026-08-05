@@ -1472,7 +1472,11 @@ async def rz_not_alone(call: CallbackQuery):
 # ─── бронь ────────────────────────────────────────────────────────────────────
 
 
-def _phone_kb():
+def _phone_kb(chat_id: int | None = None):
+    if chat_id is not None:
+        from bot.utils.reply_keyboard import mark_reply_keyboard
+
+        mark_reply_keyboard(chat_id)
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="📱 Отправить номер", request_contact=True)]],
         resize_keyboard=True,
@@ -1609,7 +1613,7 @@ async def _ask_phone(message, state: FSMContext, telegram_id: int):
 
     await message.answer(
         "Поделитесь номером телефона или введите вручную:",
-        reply_markup=_phone_kb(),
+        reply_markup=_phone_kb(message.chat.id),
     )
     await state.set_state(RaffleState.waiting_phone)
 
@@ -1646,7 +1650,7 @@ async def rz_phone_saved(call: CallbackQuery, state: FSMContext):
 async def rz_phone_change(call: CallbackQuery, state: FSMContext):
     await call.message.answer(
         "Поделитесь номером телефона или введите вручную:",
-        reply_markup=_phone_kb(),
+        reply_markup=_phone_kb(call.message.chat.id),
     )
     await state.set_state(RaffleState.waiting_phone)
     await call.answer()
@@ -1663,7 +1667,11 @@ async def rz_phone_contact(message: Message, state: FSMContext):
 async def rz_phone_text(message: Message, state: FSMContext):
     phone = normalize_phone(message.text)
     if not phone:
-        await message.answer(PHONE_INVALID_TEXT, reply_markup=_phone_kb(), parse_mode="HTML")
+        await message.answer(
+            PHONE_INVALID_TEXT,
+            reply_markup=_phone_kb(message.chat.id),
+            parse_mode="HTML",
+        )
         return
     await state.update_data(phone=phone)
     await _finish_booking(message, state, message.from_user)
@@ -1736,7 +1744,7 @@ async def _finish_booking(message: Message, state: FSMContext, user):
         if not phone:
             await message.answer(
                 PHONE_INVALID_TEXT,
-                reply_markup=_phone_kb(),
+                reply_markup=_phone_kb(message.chat.id),
                 parse_mode="HTML",
             )
             await state.set_state(RaffleState.waiting_phone)

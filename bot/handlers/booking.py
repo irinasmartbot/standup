@@ -543,7 +543,11 @@ async def pdn_consent_done(call: CallbackQuery):
     await call.answer()
 
 
-def _phone_kb():
+def _phone_kb(chat_id: int | None = None):
+    if chat_id is not None:
+        from bot.utils.reply_keyboard import mark_reply_keyboard
+
+        mark_reply_keyboard(chat_id)
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📱 Поделиться номером", request_contact=True)],
@@ -568,7 +572,10 @@ async def name_confirmed(call: CallbackQuery, state: FSMContext):
             parse_mode="HTML",
         )
     else:
-        await call.message.answer("Поделитесь номером телефона или введите вручную:", reply_markup=_phone_kb())
+        await call.message.answer(
+            "Поделитесь номером телефона или введите вручную:",
+            reply_markup=_phone_kb(call.message.chat.id),
+        )
         await state.set_state(BookingState.waiting_phone)
     await call.answer()
 
@@ -583,7 +590,10 @@ async def name_change(call: CallbackQuery, state: FSMContext):
 @router.message(BookingState.waiting_name)
 async def process_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer("Поделитесь номером телефона или введите вручную:", reply_markup=_phone_kb())
+    await message.answer(
+        "Поделитесь номером телефона или введите вручную:",
+        reply_markup=_phone_kb(message.chat.id),
+    )
     await state.set_state(BookingState.waiting_phone)
 
 
@@ -627,7 +637,11 @@ async def process_phone_contact(message: Message, state: FSMContext):
 async def process_phone_text(message: Message, state: FSMContext):
     phone = normalize_phone(message.text)
     if not phone:
-        await message.answer(PHONE_INVALID_TEXT, reply_markup=_phone_kb(), parse_mode="HTML")
+        await message.answer(
+            PHONE_INVALID_TEXT,
+            reply_markup=_phone_kb(message.chat.id),
+            parse_mode="HTML",
+        )
         return
     await state.update_data(phone=phone)
     await _ask_guests_after_phone(message, state, clear_reply=True)
@@ -640,7 +654,7 @@ async def phone_use_saved(call: CallbackQuery, state: FSMContext):
     if not phone:
         await call.message.answer(
             PHONE_INVALID_TEXT,
-            reply_markup=_phone_kb(),
+            reply_markup=_phone_kb(call.message.chat.id),
             parse_mode="HTML",
         )
         await state.set_state(BookingState.waiting_phone)
@@ -654,7 +668,10 @@ async def phone_use_saved(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "phone_change")
 async def phone_change(call: CallbackQuery, state: FSMContext):
-    await call.message.answer("Поделитесь номером телефона или введите вручную:", reply_markup=_phone_kb())
+    await call.message.answer(
+        "Поделитесь номером телефона или введите вручную:",
+        reply_markup=_phone_kb(call.message.chat.id),
+    )
     await state.set_state(BookingState.waiting_phone)
     await call.answer()
 
