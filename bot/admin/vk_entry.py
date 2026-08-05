@@ -669,6 +669,7 @@ def _mini_app_html(default_flow: str = "") -> str:
 
   function setDialogLinkButton() {{
     var url = dialogUrl();
+    uiBusy = false;
     actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
       if (button.hidden || button.style.display === "none") return;
       if (button.tagName === "A") {{
@@ -676,6 +677,9 @@ def _mini_app_html(default_flow: str = "") -> str:
         button.target = "_blank";
         button.rel = "noopener noreferrer";
         button.textContent = "Открыть диалог VK";
+        button.style.pointerEvents = "";
+        button.style.opacity = "";
+        button.removeAttribute("aria-busy");
         return;
       }}
       var a = document.createElement("a");
@@ -685,6 +689,8 @@ def _mini_app_html(default_flow: str = "") -> str:
       a.rel = "noopener noreferrer";
       a.setAttribute("data-flow", button.getAttribute("data-flow") || "");
       a.textContent = "Открыть диалог VK";
+      a.style.pointerEvents = "";
+      a.style.opacity = "";
       button.replaceWith(a);
     }});
   }}
@@ -814,6 +820,25 @@ def _mini_app_html(default_flow: str = "") -> str:
     }});
   }}
 
+  var uiBusy = false;
+
+  function setUiBusy(on, label) {{
+    uiBusy = !!on;
+    actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
+      if (button.hidden || button.style.display === "none") return;
+      if (on) {{
+        button.textContent = label || "Отправляем…";
+        button.style.pointerEvents = "none";
+        button.style.opacity = "0.72";
+        button.setAttribute("aria-busy", "true");
+      }} else {{
+        button.style.pointerEvents = "";
+        button.style.opacity = "";
+        button.removeAttribute("aria-busy");
+      }}
+    }});
+  }}
+
   function setFlow(flow, singleButton) {{
     if (!flowLabels[flow]) return false;
     currentFlow = flow;
@@ -840,7 +865,8 @@ def _mini_app_html(default_flow: str = "") -> str:
       setStatus("Не задан id сообщества. Откройте диалог вручную.", false);
       return;
     }}
-    // Только прямой peer чата — без vk.me / write- (промежуточный экран).
+    // Только прямой peer чата — без vk.me / write- / intent / vk://
+    // (они дают промежуточный экран или «общий раздел» VK).
     var chatUrl = "https://vk.com/im?sel=-" + groupId;
     var chatUrlRu = "https://vk.ru/im?sel=-" + groupId;
     var urls = [chatUrl, chatUrlRu];
@@ -848,11 +874,11 @@ def _mini_app_html(default_flow: str = "") -> str:
     function closeMiniAppSoon(ms) {{
       setTimeout(function () {{
         bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-      }}, ms || 400);
+      }}, ms || 250);
     }}
 
-    function viaBridge(url) {{
-      return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), 3500);
+    function viaBridge(url, ms) {{
+      return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), ms || 2500);
     }}
 
     var syncOk = false;
@@ -866,39 +892,18 @@ def _mini_app_html(default_flow: str = "") -> str:
       }}
     }}
 
-    // Мобилка: bridge → deeplink на im → закрытие mini app.
-    // Так раньше уходило «само» после отправки; vk.me/write- не используем.
+    // Мобилка: короткий OpenURL + быстрый Close.
+    // Не ждём 3+ сек таймаута — из‑за этого «зависание» и ложные тапы по кнопке.
     if (isMobilePlatform()) {{
-      var android = isAndroidPlatform();
-      if (fromUserTap && android) {{
-        try {{
-          window.location.href =
-            "intent://vk.com/im?sel=-" + groupId +
-            "#Intent;scheme=https;package=com.vkontakte.android;end";
-        }} catch (_) {{}}
-      }} else {{
-        try {{
-          window.location.href = "vk://vk.com/im?sel=-" + groupId;
-        }} catch (_) {{}}
-      }}
-      viaBridge(chatUrl)
-        .catch(function () {{ return viaBridge(chatUrlRu); }})
+      var waitMs = fromUserTap ? 1800 : 650;
+      viaBridge(chatUrl, waitMs)
+        .catch(function () {{ return viaBridge(chatUrlRu, waitMs); }})
         .then(function () {{
           dialogOpened = true;
-          closeMiniAppSoon(fromUserTap ? 450 : 350);
+          closeMiniAppSoon(200);
         }})
         .catch(function () {{
-          try {{
-            window.location.href = chatUrl;
-          }} catch (_) {{}}
-          // Даже без OpenURL закрываем mini app — пользователь возвращается в VK.
-          closeMiniAppSoon(fromUserTap ? 700 : 500);
-          if (fromUserTap) {{
-            setStatus(
-              "Если диалог не открылся — откройте сообщения сообщества вручную, текст уже там.",
-              false
-            );
-          }}
+          closeMiniAppSoon(150);
         }});
       return;
     }}
@@ -913,7 +918,7 @@ def _mini_app_html(default_flow: str = "") -> str:
         }}
         return;
       }}
-      viaBridge(urls[index])
+      viaBridge(urls[index], 2500)
         .then(function () {{
           dialogOpened = true;
         }})
@@ -974,9 +979,11 @@ def _mini_app_html(default_flow: str = "") -> str:
   function sendEntry(allowPermissionFallback) {{
     if (!currentFlow || sending) return;
     sending = true;
-    setStatus("Отправляем сообщение в VK. Обычно оно приходит в течение пары секунд…", true);
+    setUiBusy(true, "Отправляем…");
+    setStatus("Отправляем в личку и открываем диалог…", true);
     if (!launchParamsQuery || launchParamsQuery.indexOf("vk_") === -1) {{
       sending = false;
+      setUiBusy(false);
       setStatus(
         "Нет параметров запуска VK. Откройте приложение внутри VK (не в обычном браузере): vk.com/app" +
           "{_env_mini_app_id() or '54704296'}" +
@@ -1002,15 +1009,9 @@ def _mini_app_html(default_flow: str = "") -> str:
           entrySent = true;
           var fromTap = openAfterSendFromTap;
           openAfterSendFromTap = false;
-          markDialogReady(
-            "Готово! Сообщение уже в личке. Открываем диалог… Если не открылся — нажмите кнопку выше."
-          );
-          // Мобилка: после успешной отправки снова пробуем автоуход
-          // (deeplink im?sel=- + Close), как раньше. Если уже открыли с тапа — не дублируем.
+          markDialogReady("Готово! Открываем диалог…");
           if (!dialogOpened) {{
-            setTimeout(function () {{
-              openDialog({{ fromUserTap: !!fromTap }});
-            }}, isMobilePlatform() ? 120 : 250);
+            openDialog({{ fromUserTap: !!fromTap }});
           }}
           return;
         }}
@@ -1018,10 +1019,18 @@ def _mini_app_html(default_flow: str = "") -> str:
           requestPermissionAndSend(currentFlow);
           return;
         }}
+        setUiBusy(false);
+        if (currentFlow && flowLabels[currentFlow]) {{
+          setVisibleButtonText(flowLabels[currentFlow].button);
+        }}
         setStatus((res.j && res.j.error) || "Не удалось отправить сообщение.", false);
       }})
       .catch(function () {{
         sending = false;
+        setUiBusy(false);
+        if (currentFlow && flowLabels[currentFlow]) {{
+          setVisibleButtonText(flowLabels[currentFlow].button);
+        }}
         setStatus("Сеть недоступна. Попробуйте ещё раз.", false);
       }});
   }}
@@ -1057,15 +1066,17 @@ def _mini_app_html(default_flow: str = "") -> str:
 
   function start(flow, opts) {{
     opts = opts || {{}};
+    if (sending || entrySent) return;
     if (!setFlow(flow, true)) {{
       setStatus("Неизвестный сценарий.", false);
       return;
     }}
-    // Один тап: сразу OpenURL в диалог (пока жив жест) + параллельно шлём текст.
+    // С тапа не открываем диалог сразу — сначала шлём текст, потом openDialog.
+    // Иначе повторный тап во время автостарта уводит в «общий раздел».
     if (opts.fromUserTap) {{
       openAfterSendFromTap = true;
-      openDialog({{ fromUserTap: true }});
     }}
+    setUiBusy(true, "Отправляем…");
     sendEntry(true);
   }}
 
@@ -1083,12 +1094,15 @@ def _mini_app_html(default_flow: str = "") -> str:
     }}
     autoStarted = true;
     if (!setFlow(flow, true)) return;
+    // Сразу гасим CTA, чтобы за ожидание не жали «Участвовать…» повторно.
+    setUiBusy(true, "Отправляем…");
+    setStatus("Отправляем в личку и открываем диалог…", true);
     if (pendingStartTimer) clearTimeout(pendingStartTimer);
     pendingStartTimer = setTimeout(function () {{
       pendingStartTimer = null;
       if (entrySent || sending) return;
       start(flow, {{ fromUserTap: false }});
-    }}, 300);
+    }}, 80);
   }}
 
   bridge.send("VKWebAppInit").catch(function () {{}});
@@ -1113,13 +1127,17 @@ def _mini_app_html(default_flow: str = "") -> str:
     var button = event.target.closest("[data-flow]");
     if (!button) return;
     if (dialogReady) {{
-      // Реальная <a target=_blank> сама открывает чат; bridge — доп. попытка.
       if (button.tagName === "A") {{
         openDialog({{ fromUserTap: true, skipSync: true }});
         return;
       }}
       event.preventDefault();
       openDialog({{ fromUserTap: true }});
+      return;
+    }}
+    // Пока идёт автоотправка — игнорируем тапы (иначе уносит в общий раздел).
+    if (uiBusy || sending || entrySent || autoStarted) {{
+      event.preventDefault();
       return;
     }}
     event.preventDefault();
