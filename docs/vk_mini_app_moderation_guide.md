@@ -22,8 +22,8 @@ VK_COMMUNITY_LINK=https://vk.ru/<screen_name>
 VK_GROUP_ID=<id сообщества без минуса>
 
 MINI_APP_DOMAIN=<домен, где будет доступен mini app>
-MINI_APP_URL=https://<домен>/vk-mini
-MINI_APP_START_URL=https://<домен>/vk-mini/start/booking
+MINI_APP_URL=https://vk.com/app<VK_MINI_APP_ID>_-<VK_GROUP_ID>#flow=booking
+MINI_APP_FALLBACK_URL=https://<домен>/vk-mini/start/booking
 
 SERVER_HOST=<user>@<server_ip_or_host>
 PROJECT_PATH=<путь к проекту на сервере>
@@ -147,20 +147,22 @@ https://vk.com/apps?act=manage
 - Доступ к серверу/деплою.
 - Понимание, какой сценарий показываем модератору.
 
-Универсальный шаблон:
+Универсальный шаблон (канонические ссылки — внутри VK):
 
 ```text
-Домен: <your-mini-app-domain>
-Mini App: https://<your-mini-app-domain>/vk-mini
-Стартовый сценарий: https://<your-mini-app-domain>/vk-mini/start/booking
+Домен backend: <your-mini-app-domain>
+Mini App booking: https://vk.com/app<VK_MINI_APP_ID>_-<VK_GROUP_ID>#flow=booking
+Mini App raffle: https://vk.com/app<VK_MINI_APP_ID>_-<VK_GROUP_ID>#flow=raffle
+Mini App gift: https://vk.com/app<VK_MINI_APP_ID>_-<VK_GROUP_ID>#flow=offline_gift
 ```
 
 Пример нашего проекта:
 
 ```text
-Домен: go.moscowstandupshow.ru
-Mini App: https://go.moscowstandupshow.ru/vk-mini
-Старт booking-сценария: https://go.moscowstandupshow.ru/vk-mini/start/booking
+Домен backend: go.moscowstandupshow.ru
+https://vk.com/app54704296_-225298932#flow=booking
+https://vk.com/app54704296_-225298932#flow=raffle
+https://vk.com/app54704296_-225298932#flow=offline_gift
 ```
 
 ## 4. Настройки в кабинете VK
@@ -221,32 +223,24 @@ go.moscowstandupshow.ru
 
 ### URL приложения
 
-Указать рабочий URL mini app:
-
-Универсальный шаблон:
+Указать рабочий URL mini app (backend page):
 
 ```text
 https://<your-mini-app-domain>/vk-mini
 ```
 
-Пример нашего проекта:
+Для людей и для сценариев использовать канонические ссылки внутри VK:
 
 ```text
-https://go.moscowstandupshow.ru/vk-mini
-```
-
-Если нужен конкретный сценарий для модерации, можно использовать стартовый URL:
-
-Универсальный шаблон:
-
-```text
-https://<your-mini-app-domain>/vk-mini/start/booking
+https://vk.com/app<VK_MINI_APP_ID>_-<VK_GROUP_ID>#flow=booking
 ```
 
 Пример нашего проекта:
 
 ```text
-https://go.moscowstandupshow.ru/vk-mini/start/booking
+https://vk.com/app54704296_-225298932#flow=booking
+https://vk.com/app54704296_-225298932#flow=raffle
+https://vk.com/app54704296_-225298932#flow=offline_gift
 ```
 
 ### Привязка к сообществу

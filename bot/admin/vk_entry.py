@@ -108,12 +108,16 @@ def _mini_flow_from_handoff(request: web.Request) -> str:
     return flow_key if flow_key in FLOWS else ""
 
 
-def _mini_app_vk_url(settings) -> str:
+def _mini_app_vk_url(settings, flow_key: str = "") -> str:
+    """Каноническая ссылка mini app внутри VK: vk.com/app{id}_-{group}#flow=…"""
     app_id = _env_mini_app_id()
     if not app_id:
         app_id = "54704296"
     group_suffix = f"_-{int(settings.group_id)}" if settings.group_id else ""
-    return f"https://vk.com/app{app_id}{group_suffix}"
+    url = f"https://vk.com/app{app_id}{group_suffix}"
+    if flow_key and flow_key in FLOWS:
+        url = f"{url}#flow={flow_key}"
+    return url
 
 
 def _formats_keyboard() -> str:
@@ -670,27 +674,37 @@ def _mini_app_html(default_flow: str = "") -> str:
     return /mobile_android|android/i.test(platform + " " + ua);
   }}
 
+  var FLOW_ALIASES = {{
+    book: "booking",
+    booking: "booking",
+    standup_book: "booking",
+    raffle: "raffle",
+    rozygr: "raffle",
+    rozygrysh: "raffle",
+    standup_rozygr: "raffle",
+    gift: "offline_gift",
+    offline_gift: "offline_gift"
+  }};
+
+  function normalizeFlow(value) {{
+    if (!value) return "";
+    var key = String(value).trim();
+    if (flowLabels[key]) return key;
+    var aliased = FLOW_ALIASES[key] || "";
+    return flowLabels[aliased] ? aliased : "";
+  }}
+
   function parseFlowValue(value) {{
     if (!value) return "";
     var raw = String(value).replace(/^#/, "").replace(/^\\?/, "");
     try {{ raw = decodeURIComponent(raw); }} catch (_) {{}}
     raw = raw.replace(/^\\/+/, "").replace(/^\\?/, "");
-    if (flowLabels[raw]) return raw;
+    var direct = normalizeFlow(raw);
+    if (direct) return direct;
     var params = new URLSearchParams(raw);
-    var flow = params.get("flow") || params.get("start") || params.get("start_param") || "";
-    if (flowLabels[flow]) return flow;
-    var aliases = {{
-      book: "booking",
-      booking: "booking",
-      standup_book: "booking",
-      raffle: "raffle",
-      rozygr: "raffle",
-      rozygrysh: "raffle",
-      standup_rozygr: "raffle",
-      gift: "offline_gift",
-      offline_gift: "offline_gift"
-    }};
-    return aliases[raw] || "";
+    return normalizeFlow(
+      params.get("flow") || params.get("start") || params.get("start_param") || ""
+    );
   }}
 
   function flowFromLocation() {{
@@ -711,6 +725,15 @@ def _mini_app_html(default_flow: str = "") -> str:
       parseFlowValue(data.vk_hash || "") ||
       parseFlowValue(data.start_param || "") ||
       parseFlowValue(data.flow || "")
+    );
+  }}
+
+  function resolveFlow(launchData) {{
+    // Приоритет: hash/launch params из VK, и только потом server handoff.
+    return (
+      flowFromLaunchParams(launchData) ||
+      flowFromLocation() ||
+      parseFlowValue(serverFlow)
     );
   }}
 
@@ -885,6 +908,7 @@ def _mini_app_html(default_flow: str = "") -> str:
       .then(function (res) {{
         sending = false;
         if (res.ok && res.j && res.j.ok) {{
+          entrySent = true;
           markDialogReady("Готово! Сообщение в личке. Открываем диалог… Если не открылся — нажмите кнопку выше.");
           if (isMobilePlatform()) {{
             setTimeout(function () {{ openDialog({{ fromUserTap: false }}); }}, 150);
@@ -931,6 +955,9 @@ def _mini_app_html(default_flow: str = "") -> str:
     }});
   }}
 
+  var pendingStartTimer = null;
+  var entrySent = false;
+
   function start(flow, opts) {{
     opts = opts || {{}};
     if (!setFlow(flow, true)) {{
@@ -941,12 +968,25 @@ def _mini_app_html(default_flow: str = "") -> str:
   }}
 
   function autoStart(flow) {{
-    if (!flow || autoStarted) return;
+    if (!flow || entrySent || sending) return;
+    if (!flowLabels[flow]) return;
+    // До отправки можно поправить flow, если hash/launch params пришли позже handoff.
+    if (autoStarted && currentFlow === flow) return;
+    if (autoStarted && currentFlow && currentFlow !== flow && pendingStartTimer) {{
+      clearTimeout(pendingStartTimer);
+      pendingStartTimer = null;
+    }} else if (autoStarted && currentFlow && currentFlow !== flow && !pendingStartTimer) {{
+      // Уже ушли в send другого сценария — не перебиваем.
+      if (sending || dialogReady) return;
+    }}
     autoStarted = true;
-    setFlow(flow, true);
-    setTimeout(function () {{
+    if (!setFlow(flow, true)) return;
+    if (pendingStartTimer) clearTimeout(pendingStartTimer);
+    pendingStartTimer = setTimeout(function () {{
+      pendingStartTimer = null;
+      if (entrySent || sending) return;
       start(flow, {{ fromUserTap: false }});
-    }}, 250);
+    }}, 300);
   }}
 
   bridge.send("VKWebAppInit").catch(function () {{}});
@@ -961,7 +1001,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     var data = raw.data || (raw.detail && raw.detail.data) || {{}};
     if (type !== "VKWebAppLocationChanged" && type !== "VKWebAppChangeFragment") return;
     var flow = parseFlowValue(data.location || data.hash || data.fragment || "");
-    if (flow && !currentFlow) setFlow(flow, true);
+    if (flow) autoStart(flow);
   }}
 
   window.addEventListener("message", handleFragmentEvent);
@@ -978,8 +1018,8 @@ def _mini_app_html(default_flow: str = "") -> str:
   }});
 
   function showAllFlows() {{
-    titleEl.textContent = "Бронирование";
-    leadEl.textContent = "Забронируйте места на шоу — продолжение в личке VK.";
+    titleEl.textContent = "Moscow StandUp Show";
+    leadEl.textContent = "Выберите действие — продолжение в личке VK.";
     actionsEl.hidden = false;
     actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
       var flow = button.getAttribute("data-flow");
@@ -994,23 +1034,26 @@ def _mini_app_html(default_flow: str = "") -> str:
     }});
   }}
 
-  var initialFlow = flowFromLocation() || parseFlowValue(serverFlow);
-  if (initialFlow) {{
-    setFlow(initialFlow, true);
-    autoStart(initialFlow);
+  // Не стартуем сразу из server handoff: в VK hash часто приходит чуть позже
+  // через GetLaunchParams, иначе все ссылки уезжают в booking.
+  var earlyFlow = flowFromLocation();
+  if (earlyFlow) {{
+    setFlow(earlyFlow, true);
   }} else {{
     showAllFlows();
   }}
   bridge.send("VKWebAppGetLaunchParams").then(function (data) {{
     rememberLaunchParams(data);
-    var flow = flowFromLaunchParams(data);
+    var flow = resolveFlow(data) || currentFlow;
     if (flow) {{
       autoStart(flow);
-    }} else if (!currentFlow) {{
+    }} else {{
       showAllFlows();
     }}
   }}).catch(function () {{
-    if (!currentFlow) showAllFlows();
+    var flow = flowFromLocation() || currentFlow || parseFlowValue(serverFlow);
+    if (flow) autoStart(flow);
+    else showAllFlows();
   }});
 }})();
 </script>
@@ -1100,9 +1143,11 @@ async def mini_app_start(request: web.Request) -> web.Response:
     flow_key = str(request.match_info.get("flow") or "").strip()
     if flow_key not in FLOWS:
         raise web.HTTPNotFound(text="Unknown VK Mini App flow")
+    # Запасной handoff по IP, если клиент срежет #flow= при редиректе.
     _remember_mini_flow(request, flow_key)
     settings = load_vk_settings()
-    raise web.HTTPFound(_mini_app_vk_url(settings))
+    # Канонический вход — сразу в VK mini app с hash сценария.
+    raise web.HTTPFound(_mini_app_vk_url(settings, flow_key))
 
 
 def _verify_mini_launch_params(raw_query: str) -> tuple[bool, dict[str, str], str]:
