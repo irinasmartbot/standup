@@ -2851,10 +2851,10 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         f'{_analytics_metric_card("Зашли · BEST", by_name.get("branch_best"), css_class="tone-best", href=_ae_link("branch_best"))}'
         f'{_analytics_metric_card("Зашли · Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto", href=_ae_link("branch_hitloto"))}'
         f'{_analytics_metric_card("Help / FAQ · обращение", by_name.get("cmd_help") or by_name.get("help_open"), href=_ae_link("cmd_help" if by_name.get("cmd_help") else "help_open"))}'
-        f'{_analytics_metric_card("Брони созданы · проверка (бот)", proverka_overview.get("created"))}'
-        f'{_analytics_metric_card("Билет получен · проверка", proverka_overview.get("confirmed"))}'
-        f'{_analytics_metric_card("Отмены брони · проверка", proverka_overview.get("cancelled"))}'
-        f'{_analytics_metric_card("Импорт броней · проверка", proverka_overview.get("imported"), note="не из бота")}'
+        f'{_analytics_metric_card("Брони созданы · проверка (бот)", (proverka_overview.get("from_bot") or {}).get("created") or proverka_overview.get("created"), href=_ae_link("booking_created"))}'
+        f'{_analytics_metric_card("Билет получен · проверка", (proverka_overview.get("from_bot") or {}).get("confirmed") or proverka_overview.get("confirmed"))}'
+        f'{_analytics_metric_card("Отмены брони · проверка", (proverka_overview.get("from_bot") or {}).get("cancelled") or proverka_overview.get("cancelled"))}'
+        f'{_analytics_metric_card("Брони без следа в боте", proverka_overview.get("off_bot"), note="импорт / заливка")}'
         f'{_analytics_metric_card("Отправили скрин · розыгрыш", by_name.get("raffle_screenshot"), href=_ae_link("raffle_screenshot"))}'
         f'{_analytics_metric_card("Посетили розыгрыш", raffle_overview.get("visited"), href=_ae_link("raffle_enter"))}'
         "</div>"
@@ -2959,13 +2959,19 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "uniques": 0,
     }
     by_name["raffle_annulled"] = raffle_bookings_preview.get("annulled") or {"events": 0, "uniques": 0}
-    by_name["proverka_booked"] = proverka_bookings_preview.get("created") or {"events": 0, "uniques": 0}
-    by_name["proverka_ticket"] = proverka_bookings_preview.get("confirmed") or {"events": 0, "uniques": 0}
-    by_name["proverka_booking_cancelled"] = proverka_bookings_preview.get("cancelled") or {
+    _pv_bot = proverka_bookings_preview.get("from_bot") or {}
+    by_name["proverka_booked"] = _pv_bot.get("created") or proverka_bookings_preview.get("created") or {
         "events": 0,
         "uniques": 0,
     }
-    by_name["proverka_annulled"] = proverka_bookings_preview.get("annulled") or {
+    by_name["proverka_ticket"] = _pv_bot.get("confirmed") or proverka_bookings_preview.get("confirmed") or {
+        "events": 0,
+        "uniques": 0,
+    }
+    by_name["proverka_booking_cancelled"] = _pv_bot.get("cancelled") or proverka_bookings_preview.get(
+        "cancelled"
+    ) or {"events": 0, "uniques": 0}
+    by_name["proverka_annulled"] = _pv_bot.get("annulled") or proverka_bookings_preview.get("annulled") or {
         "events": 0,
         "uniques": 0,
     }
@@ -3284,24 +3290,16 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             )
         return '<div class="bar-funnel">' + "".join(rows) + "</div>"
 
-    # Проверка: карточки по дате+локации суммарно (заходы); уники — сумма с возможным пересечением.
-    proverka_card_events = 0
-    proverka_card_uniques = 0
-    for row in report.get("show_cards") or []:
-        if (row.get("format") or "") != "proverka":
-            continue
-        proverka_card_events += int(row.get("events") or 0)
-        proverka_card_uniques += int(row.get("uniques") or 0)
-    proverka_browse = {"events": proverka_card_events, "uniques": proverka_card_uniques}
     proverka_bookings = report.get("proverka_bookings") or {}
-    proverka_imported = proverka_bookings.get("imported") or {"events": 0, "uniques": 0}
-    imported_note = ""
-    if int(proverka_imported.get("events") or 0) > 0:
-        imported_note = (
+    proverka_bot = proverka_bookings.get("from_bot") or {}
+    proverka_off = proverka_bookings.get("off_bot") or {"events": 0, "uniques": 0}
+    off_note = ""
+    if int(proverka_off.get("events") or 0) > 0:
+        off_note = (
             '<p class="muted analytics-import-note">'
-            f'Импорт (не из бота): <b>{int(proverka_imported.get("events") or 0)}</b> броней · '
-            f'{int(proverka_imported.get("uniques") or 0)} чел. '
-            "В шаги 3–6 воронки не входят — только telegram/vkontakte."
+            f'В базе за период есть ещё <b>{int(proverka_off.get("events") or 0)}</b> броней '
+            f'({int(proverka_off.get("uniques") or 0)} чел.) без события «создана в боте» — '
+            "это заливка/импорт. В шаги воронки они не входят."
             "</p>"
         )
     proverka_funnel = (
@@ -3310,29 +3308,31 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         '<summary class="details-summary">'
         "<div>"
         "<strong>Воронка · Проверка</strong>"
-        '<span class="muted">Бесплатное бронирование · от входа до билета · без импорта</span>'
+        '<span class="muted">Только действия в боте (analytics) · от входа до билета</span>'
         "</div>"
         '<span class="details-action"><span class="closed-label">Развернуть</span>'
         '<span class="open-label">Свернуть</span></span>'
         "</summary>"
         '<div class="details-body">'
-        + imported_note
+        + off_note
         + _bar_funnel_html(
             [
-                ("1. Зашли в бесплатное бронирование (по дате / локации)", proverka_browse),
-                ("2. Выбрали дату / начали бронирование", by_name.get("branch_proverka")),
-                ("3. Бронь есть (из бота)", proverka_bookings.get("created")),
-                ("4. Получили билет / подтвердили бронь", proverka_bookings.get("confirmed")),
+                ("1. Зашли в «Проверку»", proverka_bot.get("entered") or by_name.get("branch_proverka")),
+                ("2. Смотрели даты / карточки шоу", proverka_bot.get("browsed")),
+                ("3. Создали бронь в боте", proverka_bot.get("created")),
+                ("4. Получили билет / подтвердили", proverka_bot.get("confirmed")),
             ],
             drops=[
-                ("5. Отменили бронирование", proverka_bookings.get("cancelled")),
-                ("6. Бронь аннулирована / не подтвердили", proverka_bookings.get("annulled")),
+                ("5. Отменили бронирование", proverka_bot.get("cancelled")),
+                ("6. Бронь аннулирована", proverka_bot.get("annulled")),
             ],
-            drop_base=proverka_bookings.get("created"),
+            drop_base=proverka_bot.get("created"),
         )
         + "</div></details></section>"
     )
 
+    raffle_bot = raffle_bookings.get("from_bot") or {}
+    raffle_off = raffle_bookings.get("off_bot") or {"events": 0, "uniques": 0}
     raffle_body = _bar_funnel_html(
         [
             ("1. Зашли в розыгрыш", by_name.get("raffle_enter")),
@@ -3340,14 +3340,14 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             ("3. Отправили скрин", by_name.get("raffle_screenshot")),
             ("4. Скрин принят", by_name.get("raffle_approved")),
             ("5. Подтвердили подписку", by_name.get("raffle_subscribed")),
-            ("6. Забронировали бесплатный билет", raffle_bookings.get("created")),
-            ("7. Получили билет / подтвердили бронь", raffle_bookings.get("confirmed")),
+            ("6. Забронировали бесплатный билет", raffle_bot.get("created") or raffle_bookings.get("created")),
+            ("7. Получили билет / подтвердили бронь", raffle_bot.get("confirmed") or raffle_bookings.get("confirmed")),
         ],
         drops=[
-            ("8. Отменили бронирование", raffle_bookings.get("cancelled")),
-            ("9. Бронь аннулирована / не подтвердили", raffle_bookings.get("annulled")),
+            ("8. Отменили бронирование", raffle_bot.get("cancelled") or raffle_bookings.get("cancelled")),
+            ("9. Бронь аннулирована / не подтвердили", raffle_bot.get("annulled") or raffle_bookings.get("annulled")),
         ],
-        drop_base=raffle_bookings.get("created"),
+        drop_base=raffle_bot.get("created") or raffle_bookings.get("created"),
     )
 
     def _branch_metric(title: str, metric: dict | None) -> str:
@@ -3387,11 +3387,11 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "</summary>"
         '<div class="details-body">'
         + (
-            f'<p class="muted analytics-import-note">Импорт броней розыгрыша: '
-            f'<b>{int((raffle_bookings.get("imported") or {}).get("events") or 0)}</b> · '
-            f'{int((raffle_bookings.get("imported") or {}).get("uniques") or 0)} чел. '
+            f'<p class="muted analytics-import-note">Брони розыгрыша без следа в боте: '
+            f'<b>{int(raffle_off.get("events") or 0)}</b> · '
+            f'{int(raffle_off.get("uniques") or 0)} чел. '
             "(не в шагах воронки)</p>"
-            if int((raffle_bookings.get("imported") or {}).get("events") or 0) > 0
+            if int(raffle_off.get("events") or 0) > 0
             else ""
         )
         + f"{raffle_body}"
