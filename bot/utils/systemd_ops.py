@@ -73,11 +73,33 @@ def restart_unit(alias_or_unit: str) -> tuple[bool, str]:
     unit = resolve_unit(alias_or_unit)
     if not unit:
         return False, f"Неизвестный сервис: {alias_or_unit}. Можно: bot, vk, admin"
+    # Self-restart: waiting on systemctl kills this process (SIGTERM → exit -15)
+    # before we can read the result. Fire-and-forget; reply is sent by the handler first.
+    if unit == UNITS["bot"]:
+        try:
+            subprocess.Popen(
+                ["sudo", "-n", "systemctl", "restart", unit],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            return False, f"Не удалось запустить перезапуск {unit}: {exc}"
+        return True, (
+            f"Перезапуск {unit} запущен. Бот сейчас кратко отключится и через "
+            f"несколько секунд снова ответит. Проверка: /tech_status"
+        )
     # -n = non-interactive; needs NOPASSWD sudoers on the VPS.
     code, out = _run(["sudo", "-n", "systemctl", "restart", unit], timeout=60)
     if code == 0:
         active = unit_active(unit)
         return True, f"Перезапуск {unit} выполнен. Сейчас: {active}"
+    # -15 = SIGTERM: often means our own process was stopped mid-wait.
+    if code == -15:
+        return True, (
+            f"Перезапуск {unit} мог пройти (процесс получил SIGTERM). "
+            f"Проверь: /tech_status"
+        )
     hint = (
         "Нет права на sudo без пароля. На сервере нужен файл "
         "/etc/sudoers.d/standup-tech (см. deploy/sudoers-standup-tech)."

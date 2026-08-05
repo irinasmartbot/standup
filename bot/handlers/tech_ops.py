@@ -57,6 +57,21 @@ async def cmd_tech_restart(message: Message, command: CommandObject):
     if alias not in UNITS:
         await message.answer(f"Можно только: {', '.join(UNITS)}")
         return
+    if alias == "bot":
+        # Answer first — systemctl will SIGTERM this process.
+        await message.answer(
+            "Перезапуск <code>standup-bot</code> запущен. "
+            "Бот сейчас кратко отключится; через несколько секунд снова ответит. "
+            "Проверка: /tech_status",
+            parse_mode="HTML",
+        )
+        ok, text = restart_unit(alias)
+        if not ok:
+            await message.answer(text)
+            logger.warning("tech_restart bot failed: %s", text)
+        else:
+            logger.info("tech_restart bot scheduled by=%s", message.from_user.id)
+        return
     await message.answer(f"Перезапускаю <code>{alias}</code>…", parse_mode="HTML")
     ok, text = restart_unit(alias)
     await message.answer(text)
@@ -106,9 +121,21 @@ async def cb_tech_restart(call: CallbackQuery):
         await call.answer("Неизвестный сервис", show_alert=True)
         return
     await call.answer(f"Restart {alias}…")
+    who = call.from_user.id if call.from_user else "?"
+    if alias == "bot":
+        if call.message:
+            await call.message.answer(
+                "Перезапуск <code>standup-bot</code> запущен "
+                f"(от {who}). Проверка через пару секунд: /tech_status",
+                parse_mode="HTML",
+            )
+        ok, text = restart_unit(alias)
+        if not ok and call.message:
+            await call.message.answer(text)
+            logger.warning("tech callback restart bot failed: %s", text)
+        return
     ok, text = restart_unit(alias)
     if call.message:
-        who = call.from_user.id if call.from_user else "?"
         await call.message.answer(f"{text}\n\n(от {who})")
     if not ok:
         logger.warning("tech callback restart failed alias=%s: %s", alias, text)
