@@ -1437,6 +1437,11 @@ class VKBotApp:
         if not session:
             return False
 
+        # Выход из ввода имени/телефона/гостей: «Назад к датам», меню, другой формат…
+        if cmd and cmd in vk_booking.ESCAPE_CMDS:
+            vk_booking.clear_session(self.booking_sessions, vk_id)
+            return False
+
         if cmd == "booking_phone_use":
             phone = normalize_phone(session.get("phone"))
             if not phone:

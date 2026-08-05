@@ -27,6 +27,49 @@ STEP_NAME = "waiting_name"
 STEP_PHONE = "waiting_phone"
 STEP_GUESTS = "waiting_guests"
 
+# Команды навигации: при активной сессии имени/телефона сбрасываем бронь
+# и отдаём управление основному роутеру (иначе «Назад к датам» снова просит имя).
+ESCAPE_CMDS: frozenset[str] = frozenset(
+    {
+        "main_menu",
+        "formats",
+        "book",
+        "buy_ticket",
+        "rules",
+        "booking_rules",
+        "venues",
+        "venues_details",
+        "venues_card",
+        "check",
+        "check_date_page",
+        "check_date",
+        "check_event",
+        "check_venues",
+        "check_venue",
+        "check_venue_date",
+        "best",
+        "best_date_page",
+        "best_date",
+        "best_event",
+        "best_venues",
+        "best_venue",
+        "best_venue_date",
+        "best_carousel",
+        "best_carousel_pos",
+        "hitloto",
+        "hitloto_date_page",
+        "hitloto_date",
+        "hitloto_event",
+        "raffle",
+        "offline_gift",
+        "ogift_event",
+        "ogift_today",
+        "help",
+        "channel",
+        "my_bookings",
+    }
+)
+
 NAME_ASK_TEXT = "Напишите, пожалуйста, <b>ваше имя</b>."
 PHONE_ASK_TEXT = (
     "Введите <b>номер телефона</b> с кодом страны.\n"
