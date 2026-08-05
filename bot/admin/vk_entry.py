@@ -635,7 +635,8 @@ def _mini_app_html(default_flow: str = "") -> str:
   var titleEl = document.getElementById("title");
 
   function dialogUrl() {{
-    if (vkMePath) return "https://vk.me/" + vkMePath;
+    // Только прямой peer чата. vk.me/* даёт промежуточный экран
+    // «Написать сообщение / Перейти к странице» — его не показываем.
     return "https://vk.com/im?sel=-" + groupId;
   }}
 
@@ -839,11 +840,11 @@ def _mini_app_html(default_flow: str = "") -> str:
       setStatus("Не задан id сообщества. Откройте диалог вручную.", false);
       return;
     }}
-    var urls = [];
-    if (vkMePath) urls.push("https://vk.me/" + vkMePath);
-    urls.push("https://vk.com/im?sel=-" + groupId);
-    urls.push("https://vk.ru/im?sel=-" + groupId);
-    urls.push("https://vk.com/write-" + groupId);
+    // Без vk.me и без write- (у них промежуточный экран сообщества).
+    var urls = [
+      "https://vk.com/im?sel=-" + groupId,
+      "https://vk.ru/im?sel=-" + groupId
+    ];
 
     var syncOk = false;
     var skipSync = !!opts.skipSync;
