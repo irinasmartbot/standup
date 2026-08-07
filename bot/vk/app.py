@@ -2394,9 +2394,9 @@ class VKBotApp:
             return
         count = int((result.get("event") or {}).get("entries_count") or 0)
         status = (
-            "Ты в списке участников ✅"
+            "Зафиксировал в списке участников ✅"
             if result.get("inserted")
-            else "Ты уже есть в списке участников ✅"
+            else "Уже зафиксировал в списке участников ✅"
         )
         mid = await self._send_text(
             peer_id,
