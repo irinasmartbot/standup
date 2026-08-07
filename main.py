@@ -2,7 +2,12 @@ import asyncio
 import logging
 import traceback
 
-from aiogram.exceptions import TelegramNetworkError, TelegramServerError
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramServerError,
+)
 from aiogram.types import ErrorEvent
 
 from bot.config import MODERATION_CHAT_ID, TECH_CHAT_ID, bot, dp
@@ -20,14 +25,29 @@ from bot.utils.tech_alerts import format_alert, notify_tech, notify_tech_sync
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Обычные отказы Telegram: не баги, в техчат не шлём.
+_IGNORE_TG_MARKERS = (
+    "bot was blocked by the user",
+    "user is deactivated",
+    "chat not found",
+    "bot can't initiate conversation",
+    "have no rights to send a message",
+)
+
 
 @dp.errors()
 async def on_unhandled_error(event: ErrorEvent):
     exc = event.exception
-    logger.exception("Unhandled update error: %s", exc)
-    # Сетевые сбои Telegram не шлём в техчат — иначе шум при Bad Gateway.
-    if isinstance(exc, (TelegramNetworkError, TelegramServerError)):
+    # Сетевые сбои / блокировки пользователя — шум, не инцидент.
+    if isinstance(exc, (TelegramNetworkError, TelegramServerError, TelegramForbiddenError)):
+        logger.warning("Ignored update error: %s", exc)
         return True
+    if isinstance(exc, TelegramBadRequest):
+        msg = str(exc).lower()
+        if any(m in msg for m in _IGNORE_TG_MARKERS):
+            logger.warning("Ignored update error: %s", exc)
+            return True
+    logger.exception("Unhandled update error: %s", exc)
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     update = event.update
     update_hint = type(update).__name__ if update else "update"
