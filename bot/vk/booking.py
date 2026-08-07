@@ -471,9 +471,9 @@ async def issue_ticket(
         await client.send_message(peer_id, "Бронь не найдена или уже отменена.")
         return
     status = booking[10]
-    if status == "confirmed":
-        await client.send_message(peer_id, "Билет уже был выдан ранее.")
-        return
+    already_confirmed = status == "confirmed"
+    # Индекс ticket_message_id в BOOKING_SELECT_SQL — 15.
+    ticket_message_id = booking[15] if len(booking) > 15 else None
 
     name = booking[3]
     event_date = booking[5]
@@ -493,7 +493,8 @@ async def issue_ticket(
             (e for e in events if e.get("date") == event_date and e.get("time") == event_time),
             None,
         )
-    if event:
+    # Места проверяем только при первом подтверждении.
+    if not already_confirmed and event:
         confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
         if confirmed_guests + guests > event["max_seats"]:
             available = max(0, event["max_seats"] - confirmed_guests)
@@ -507,28 +508,30 @@ async def issue_ticket(
     place = f"{event_location}, {event_address}".strip(", ") if event_location else event_address
     is_raffle = False
     try:
-        from bot.db.crud import get_active_raffle_booking, get_booking_format, set_rozygrysh_used
+        from bot.db.crud import get_active_raffle_booking, get_booking_format
 
         fmt = (get_booking_format(booking_id) or "").strip().lower()
         raffle_row = get_active_raffle_booking(vk_id=int(peer_id))
         is_raffle = fmt == "rozygrysh" or bool(
             raffle_row and int(raffle_row[0]) == int(booking_id)
         )
-        if is_raffle:
-            set_rozygrysh_used(vk_id=int(peer_id), used=True)
     except Exception:
         pass
 
     place_on_ticket = format_ticket_place(event_location, event_address)
     ticket_buf = generate_ticket(name or "", event_date, event_time, place_on_ticket, guests)
-    update_booking_status(booking_id, "confirmed")
 
     vk_manager = (manager_link or "").strip() or MANAGER_LINK
     vk_community = (community_link or "").strip() or CHANNEL_LINK
+    head = (
+        "<b>Ваш билет ещё раз</b> 👇\n\n"
+        if already_confirmed
+        else "<b>Отлично!</b>\n\n"
+    )
 
     if is_raffle:
         caption = (
-            "<b>Отлично!</b>\n\n"
+            f"{head}"
             "<b>Данные по билету:</b>\n\n"
             f"<b>Ваше имя:</b> {name or ''}\n"
             f"<b>Дата:</b> {event_date or ''}\n"
@@ -546,7 +549,7 @@ async def issue_ticket(
         keyboard = raffle_ticket_manage_keyboard(booking_id, manager_link=manager_link)
     else:
         caption = (
-            "<b>Отлично!</b>\n\n"
+            f"{head}"
             "<b>Данные по билету:</b>\n\n"
             f"<b>Ваше имя:</b> {name or ''}\n"
             f"<b>Дата:</b> {event_date or ''}\n"
@@ -560,6 +563,8 @@ async def issue_ticket(
         )
         keyboard = manage_ticket_keyboard(booking_id, manager_link)
 
+    # Сначала картинка в чат, потом confirmed — иначе при сбое upload/send
+    # в карточке «билет получен», а гость видит только «уже был выдан».
     attachment = await client.upload_message_photo(
         peer_id,
         ticket_buf.getvalue(),
@@ -572,6 +577,21 @@ async def issue_ticket(
         keyboard=keyboard,
     )
     save_ticket_message_id(booking_id, msg_id)
+    if not already_confirmed:
+        update_booking_status(booking_id, "confirmed")
+        if is_raffle:
+            try:
+                from bot.db.crud import set_rozygrysh_used
+
+                set_rozygrysh_used(vk_id=int(peer_id), used=True)
+            except Exception:
+                logger.exception("set_rozygrysh_used failed booking_id=%s", booking_id)
+    elif not ticket_message_id:
+        logger.warning(
+            "VK ticket resent after confirmed-without-message booking_id=%s peer_id=%s",
+            booking_id,
+            peer_id,
+        )
 
 
 def saved_phone_for(vk_id: int) -> str | None:
