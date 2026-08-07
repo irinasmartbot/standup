@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 import psycopg
@@ -12,12 +12,19 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from bot.config import BOOKINGS_SOURCE, DATABASE_URL
+from bot.utils.ticket import now_msk
 
 logger = logging.getLogger(__name__)
 
 BOOKING_STATUSES = ("booked", "confirmed", "cancelled", "annulled")
 CHANNELS = ("telegram", "vkontakte", "both")
 CAMPAIGN_STATUSES = ("draft", "queued", "running", "paused", "done", "cancelled")
+
+# Отбивка, если нажали кнопку после даты актуальности рассылки.
+FOLLOWUP_EXPIRED_TEXT = (
+    "Здравствуйте! Это предложение уже неактуально — мероприятие прошло 😊\n"
+    "Следите за новостями в нашем сообществе: там появляются свежие анонсы и розыгрыши ☝️"
+)
 
 
 def _use_postgres() -> bool:
@@ -109,9 +116,51 @@ def ensure_mailing_tables() -> None:
                     ADD COLUMN IF NOT EXISTS disable_link_preview BOOLEAN NOT NULL DEFAULT false
                     """
                 )
+                cur.execute(
+                    """
+                    ALTER TABLE mailing_campaigns
+                    ADD COLUMN IF NOT EXISTS followup_until DATE
+                    """
+                )
             conn.commit()
     except Exception:
         logger.exception("ensure_mailing_tables failed")
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def campaign_followup_until(campaign: dict | None) -> date | None:
+    """Дата, до которой (включительно) кнопка follow-up актуальна."""
+    if not campaign:
+        return None
+    until = _parse_iso_date(campaign.get("followup_until"))
+    if until:
+        return until
+    filters = campaign.get("filters") or {}
+    if isinstance(filters, str):
+        try:
+            filters = json.loads(filters)
+        except Exception:
+            filters = {}
+    if not isinstance(filters, dict):
+        return None
+    return _parse_iso_date(filters.get("date_to")) or _parse_iso_date(filters.get("date_from"))
 
 
 def normalize_filters(raw: dict | None) -> dict[str, Any]:
@@ -323,6 +372,7 @@ def create_campaign(
     button_text: str | None = None,
     button_url: str | None = None,
     followup_html: str | None = None,
+    followup_until: date | str | None = None,
     disable_link_preview: bool = False,
     created_by: str = "owner",
     start: bool = True,
@@ -342,6 +392,12 @@ def create_campaign(
     followup_html = (followup_html or "").strip() or None
     if button_text and not button_url and not followup_html:
         raise ValueError("Для кнопки укажите ссылку или текст follow-up")
+    until = _parse_iso_date(followup_until)
+    if until is None and followup_html:
+        # Если явно не указали — берём дату шоу из фильтров аудитории.
+        until = _parse_iso_date(filters_n.get("date_to")) or _parse_iso_date(
+            filters_n.get("date_from")
+        )
 
     preview = preview_audience(channel, filters_n)
     capped = int(preview["capped_total"])
@@ -354,13 +410,15 @@ def create_campaign(
                 """
                 INSERT INTO mailing_campaigns (
                     title, channel, status, body_html, photo_path,
-                    button_text, button_url, followup_html, disable_link_preview,
-                    interval_sec, batch_limit, filters, total_count, created_by
+                    button_text, button_url, followup_html, followup_until,
+                    disable_link_preview, interval_sec, batch_limit, filters,
+                    total_count, created_by
                 )
                 VALUES (
                     %(title)s, %(channel)s, %(status)s, %(body_html)s, %(photo_path)s,
-                    %(button_text)s, %(button_url)s, %(followup_html)s, %(disable_link_preview)s,
-                    %(interval_sec)s, %(batch_limit)s, %(filters)s, 0, %(created_by)s
+                    %(button_text)s, %(button_url)s, %(followup_html)s, %(followup_until)s,
+                    %(disable_link_preview)s, %(interval_sec)s, %(batch_limit)s, %(filters)s,
+                    0, %(created_by)s
                 )
                 RETURNING *
                 """,
@@ -373,6 +431,7 @@ def create_campaign(
                     "button_text": button_text,
                     "button_url": button_url,
                     "followup_html": followup_html,
+                    "followup_until": until,
                     "disable_link_preview": bool(disable_link_preview),
                     "interval_sec": interval_sec,
                     "batch_limit": filters_n.get("batch_limit"),
@@ -459,11 +518,37 @@ def get_campaign(campaign_id: int) -> dict | None:
 
 
 def get_campaign_followup(campaign_id: int) -> str | None:
+    """Текст после кнопки: обычный follow-up или «уже неактуально», если дата прошла."""
     row = get_campaign(campaign_id)
     if not row:
         return None
     text = (row.get("followup_html") or "").strip()
-    return text or None
+    if not text:
+        return None
+    until = campaign_followup_until(row)
+    if until and now_msk().date() > until:
+        return FOLLOWUP_EXPIRED_TEXT
+    return text
+
+
+def set_campaign_followup_until(campaign_id: int, until: date | str | None) -> dict | None:
+    """Проставить/сбросить дату актуальности кнопки для уже созданной кампании."""
+    ensure_mailing_tables()
+    parsed = _parse_iso_date(until) if until not in (None, "") else None
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE mailing_campaigns
+                SET followup_until = %(until)s
+                WHERE id = %(id)s
+                RETURNING *
+                """,
+                {"id": int(campaign_id), "until": parsed},
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
 
 
 def set_campaign_status(campaign_id: int, status: str) -> dict | None:

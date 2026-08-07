@@ -164,16 +164,34 @@ def render_mailing_tab(
         follow = (detail.get("followup_html") or "").strip()
         body = detail.get("body_html") or ""
         preview_off = bool(detail.get("disable_link_preview"))
+        until_raw = detail.get("followup_until")
+        until_val = ""
+        if until_raw:
+            until_val = str(until_raw)[:10]
         msg_meta = (
             f"<p class='muted'>Кнопка: {_h(btn) or '—'} · "
             f"URL: {_h(btn_url) or 'нет'} · "
-            f"превью ссылок: {'выкл' if preview_off else 'вкл'}</p>"
+            f"превью ссылок: {'выкл' if preview_off else 'вкл'} · "
+            f"кнопка до: {_h(until_val) or 'не задано'}</p>"
         )
         follow_block = (
             f"<p><b>После кнопки:</b></p><div class='mailing-msg-preview'>{follow}</div>"
             if follow
             else ""
         )
+        until_form = ""
+        if follow:
+            until_form = (
+                '<form method="post" action="/admin/mailing/followup-until" class="inline-form" '
+                'style="margin:12px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:end">'
+                f'<input type="hidden" name="campaign_id" value="{int(cid)}">'
+                "<label>Кнопка актуальна до (дата шоу)"
+                f'<input type="date" name="followup_until" value="{_h(until_val)}"></label>'
+                '<button type="submit">Сохранить дату</button>'
+                "<p class='muted' style='margin:0;flex-basis:100%'>"
+                "После этой даты по кнопке уйдёт текст «мероприятие уже неактуально».</p>"
+                "</form>"
+            )
         detail_html = (
             '<section class="card">'
             f"<h2>Кампания #{_h(cid)} · {_h(detail.get('title'))}</h2>"
@@ -182,7 +200,7 @@ def render_mailing_tab(
             f"<p><b>Статистика:</b> отправлено {sent} / {total_c} · ошибки {failed}</p>"
             "<p><b>Текст сообщения:</b></p>"
             f"<div class='mailing-msg-preview'>{body or '<span class=\"muted\">(пусто)</span>'}</div>"
-            f"{msg_meta}{follow_block}"
+            f"{msg_meta}{follow_block}{until_form}"
             f'<div class="counters">{"".join(status_pills)}</div>'
             f'<div class="users-pager">{prev}'
             f'<span class="muted">стр. {page}/{pages} · {total}</span>{next_}</div>'
@@ -225,6 +243,10 @@ def render_mailing_tab(
     </div>
     <label>После нажатия кнопки (если нет URL) — доп. текст
       <textarea name="followup_html" rows="3" placeholder="Отлично! Вот детали..."></textarea>
+    </label>
+    <label>Кнопка актуальна до (дата шоу)
+      <input type="date" name="followup_until">
+      <span class="muted">После этой даты по кнопке — «мероприятие уже неактуально». Если пусто, возьмём дату шоу из фильтров ниже.</span>
     </label>
     <fieldset class="mailing-row">
       <legend>Превью ссылок в Telegram</legend>

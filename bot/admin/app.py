@@ -5917,6 +5917,8 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     button_text = (form.get("button_text") or "").strip()
     button_url = (form.get("button_url") or "").strip()
     followup_html = (form.get("followup_html") or "").strip()
+    followup_until = _form_text(form, "followup_until")
+    followup_until = _date_to_input(followup_until) or followup_until
     disable_link_preview = (form.get("disable_link_preview") or "") in {
         "1",
         "on",
@@ -5964,6 +5966,7 @@ async def mailing_create_page(request: web.Request) -> web.Response:
                 button_text=button_text,
                 button_url=button_url,
                 followup_html=followup_html,
+                followup_until=followup_until or None,
                 disable_link_preview=disable_link_preview,
                 created_by=_admin_role(request, config) or "owner",
                 start=True,
@@ -6006,6 +6009,42 @@ async def mailing_create_page(request: web.Request) -> web.Response:
         f"Кампания #{campaign.get('id')} запущена · {campaign.get('total_count')} получателей"
     )
     raise web.HTTPFound(f"/admin?tab=mailing&m_flash={flash}")
+
+
+async def mailing_followup_until_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin/login")
+    form = await request.post()
+    from urllib.parse import quote
+
+    from bot.db.admin_audit import log_admin_action
+    from bot.db.mailing import set_campaign_followup_until
+
+    try:
+        cid = int(_form_text(form, "campaign_id") or 0)
+    except ValueError:
+        cid = 0
+    until = _form_text(form, "followup_until")
+    until = _date_to_input(until) or until or None
+    if not cid:
+        raise web.HTTPFound("/admin?tab=mailing")
+    row = await asyncio.get_running_loop().run_in_executor(
+        None, set_campaign_followup_until, cid, until
+    )
+    if not row:
+        raise web.HTTPFound(
+            f"/admin?tab=mailing&m_err={quote('Кампания не найдена')}"
+        )
+    log_admin_action(
+        actor_role=_admin_role(request, config) or "owner",
+        action="mailing_followup_until",
+        entity_type="mailing_campaign",
+        entity_id=str(cid),
+        details={"followup_until": until},
+    )
+    flash = quote(f"Дата актуальности кнопки для #{cid}: {until or 'сброшена'}")
+    raise web.HTTPFound(f"/admin?tab=mailing&campaign={cid}&m_flash={flash}")
 
 
 async def mailing_status_page(request: web.Request) -> web.Response:
@@ -6057,6 +6096,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_post("/admin/mailing/preview", mailing_preview_page)
     app.router.add_post("/admin/mailing/create", mailing_create_page)
     app.router.add_post("/admin/mailing/status", mailing_status_page)
+    app.router.add_post("/admin/mailing/followup-until", mailing_followup_until_page)
     app.router.add_get("/admin/mailing/users-search", mailing_users_search_page)
     app.router.add_post("/admin/mailing/test", mailing_test_page)
     app.router.add_post("/admin/login", login_page)
