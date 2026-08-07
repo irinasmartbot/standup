@@ -99,15 +99,21 @@ def _throttled(key: str | None, throttle_sec: int) -> bool:
     return False
 
 
+def _clip_body(body: str, limit: int = 3500) -> str:
+    """Для traceback важнее хвост (тип ошибки), не начало aiogram middleware."""
+    text = (body or "").strip()
+    if len(text) <= limit:
+        return text
+    # Prefer keeping the exception line at the end.
+    return "…\n" + text[-(limit - 2) :]
+
+
 def format_alert(title: str, body: str = "", *, source: str = "") -> str:
     parts = [f"<b>{escape(title)}</b>"]
     if source:
         parts.append(f"<i>{escape(source)}</i>")
     if body:
-        clipped = body.strip()
-        if len(clipped) > 3500:
-            clipped = clipped[:3500] + "…"
-        parts.append(f"<pre>{escape(clipped)}</pre>")
+        parts.append(f"<pre>{escape(_clip_body(body))}</pre>")
     return "\n".join(parts)
 
 

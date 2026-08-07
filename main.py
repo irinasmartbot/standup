@@ -29,10 +29,24 @@ async def on_unhandled_error(event: ErrorEvent):
     if isinstance(exc, (TelegramNetworkError, TelegramServerError)):
         return True
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    update_hint = type(event.update).__name__ if event.update else "update"
+    update = event.update
+    update_hint = type(update).__name__ if update else "update"
+    # Короткий контекст: callback data / текст, без огромного JSON.
+    ctx = ""
+    try:
+        if update and update.callback_query:
+            cq = update.callback_query
+            ctx = f"callback data={cq.data!r} from={getattr(cq.from_user, 'id', None)}"
+        elif update and update.message:
+            msg = update.message
+            ctx = f"message text={(msg.text or msg.caption or '')[:120]!r} from={getattr(msg.from_user, 'id', None)}"
+    except Exception:
+        ctx = ""
+    head = f"{type(exc).__name__}: {exc}"
+    body = "\n".join(part for part in (head, ctx, f"update={update_hint}", tb) if part)
     text = format_alert(
         "TG bot: необработанная ошибка",
-        f"{update_hint}\n{tb}",
+        body,
         source="standup-bot",
     )
     await notify_tech(text, key="tg_unhandled", throttle_sec=180, bot=bot)
