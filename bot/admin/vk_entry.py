@@ -59,7 +59,7 @@ FLOWS: dict[str, dict[str, Any]] = {
 # После модерации снова показываем все входные сценарии mini app.
 MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking", "raffle", "offline_gift")
 
-_ENTRY_COOLDOWN_SEC = 20.0
+_ENTRY_COOLDOWN_SEC = 45.0
 _MINI_FLOW_HANDOFF_TTL_SEC = 300.0
 _last_entry: dict[tuple[int, str], float] = {}
 _mini_flow_handoff: dict[str, tuple[str, float]] = {}
@@ -241,10 +241,16 @@ def _gift_event_label(event: dict[str, Any]) -> str:
 
 async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int) -> None:
     """Сразу ветка бота — без сообщения «нажмите кнопку ниже»."""
-    from bot.db.analytics import EVENT_BOT_START, EVENT_BRANCH_PROVERKA, track_event
+    from bot.db.analytics import EVENT_BOT_START, track_event
     from bot.vk import raffle as vk_raffle
+    from bot.vk.entry_dedupe import claim_flow_send, clear_flow_send
 
     flow = FLOWS.get(flow_key) or {}
+    # Общий антидубль с VK-ботом (разные процессы / воркеры).
+    if not claim_flow_send(int(vk_id), flow_key):
+        logger.info("VK entry deduped vk_id=%s flow=%s", vk_id, flow_key)
+        return
+
     track_event(
         EVENT_BOT_START,
         vk_id=int(vk_id),
@@ -255,6 +261,16 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
             "flow": flow_key,
         },
     )
+
+    try:
+        await _send_flow_chain_body(client, settings, flow_key, vk_id, vk_raffle)
+    except Exception:
+        clear_flow_send(int(vk_id), flow_key)
+        raise
+
+
+async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id: int, vk_raffle) -> None:
+    from bot.db.analytics import EVENT_BRANCH_PROVERKA, track_event
 
     if flow_key == "raffle":
         ok, reason, booking_id = vk_raffle.can_enter_raffle(vk_id)
@@ -388,20 +404,24 @@ def _landing_html(flow_key: str) -> str:
     return s && s !== "0" && s !== "undefined" && s !== "null" ? s : null;
   }}
 
+  var allowedOnce = false;
+
   function openVkAppOnly() {{
+    // Без ?ref=: текст сценария уже отправили через /vk/entry.
+    // Иначе бот снова шлёт «Привет-привет» по deeplink.
+    var chatUrl = "https://vk.com/im?sel=-" + groupId;
     var ua = navigator.userAgent || "";
     if (/Android/i.test(ua)) {{
       window.location.href =
-        "intent://vk.com/write-" + groupId +
+        "intent://vk.com/im?sel=-" + groupId +
         "#Intent;scheme=https;package=com.vkontakte.android;end";
       return;
     }}
     if (/iPhone|iPad|iPod/i.test(ua)) {{
-      window.location.href = "vk://vk.com/write-" + groupId;
+      window.location.href = "vk://vk.com/im?sel=-" + groupId;
       return;
     }}
-    // Только десктоп — сайт VK.
-    window.location.href = "https://vk.com/write-" + groupId + "?ref=" + encodeURIComponent(ref);
+    window.location.href = chatUrl;
   }}
 
   function afterSendOk() {{
@@ -429,32 +449,37 @@ def _landing_html(flow_key: str) -> str:
         return r.json().then(function (j) {{ return {{ ok: r.ok, status: r.status, j: j }}; }});
       }})
       .then(function (res) {{
-        sending = false;
         if (res.ok && res.j && res.j.ok) {{
           afterSendOk();
           return;
         }}
+        sending = false;
+        allowedOnce = false;
         var err = (res.j && res.j.error) ? res.j.error : "";
         setStatus(err || "Не удалось отправить. Попробуйте ещё раз.", false);
       }})
       .catch(function () {{
         sending = false;
+        allowedOnce = false;
         setStatus("Сеть недоступна. Попробуйте ещё раз.", false);
       }});
   }}
 
   function onAllowed(userId) {{
+    if (allowedOnce || sending) return;
     var id = normalizeId(userId);
     console.log("allow-messages allowed", userId, id);
     if (!id) {{
       setStatus("VK не передал id. Нажмите «Запретить», затем снова «Разрешить».", false);
       return;
     }}
+    allowedOnce = true;
     vkId = id;
     sendEntry();
   }}
 
   VK.init({{ apiId: appId, onlyWidgets: true }});
+  // Только один канал колбэка — иначе allowed срабатывает дважды.
   if (VK.Observer && VK.Observer.subscribe) {{
     VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onAllowed);
     VK.Observer.subscribe("widgets.allowMessagesFromCommunity.denied", function () {{
@@ -463,8 +488,7 @@ def _landing_html(flow_key: str) -> str:
     VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", function () {{
       setStatus("Снова нажмите виджет и разрешите сообщения.", false);
     }});
-  }}
-  if (typeof VK.addCallback === "function") {{
+  }} else if (typeof VK.addCallback === "function") {{
     VK.addCallback("widgets.allowMessagesFromCommunity.allowed", onAllowed);
   }}
   VK.Widgets.AllowMessagesFromCommunity(
@@ -1037,7 +1061,7 @@ def _mini_app_html(default_flow: str = "") -> str:
   }}
 
   function requestPermissionAndSend(flow) {{
-    if (permissionRequested) return;
+    if (permissionRequested || entrySent) return;
     permissionRequested = true;
     sending = false;
     setStatus("Открываем запрос VK…", true);
@@ -1073,7 +1097,7 @@ def _mini_app_html(default_flow: str = "") -> str:
   }}
 
   function sendEntry(allowPermissionFallback) {{
-    if (!currentFlow || sending) return;
+    if (!currentFlow || sending || entrySent) return;
     sending = true;
     setUiBusy(true, "Отправляем…");
     setStatus("Отправляем в личку и открываем диалог…", true);

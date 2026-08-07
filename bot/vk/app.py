@@ -2856,9 +2856,16 @@ class VKBotApp:
         await self._ask_name(peer_id, vk_id, session)
 
     async def _send_raffle_start(self, peer_id: int, vk_id: int) -> None:
+        from bot.vk.entry_dedupe import claim_flow_send, clear_flow_send
+
+        # Тот же ключ, что у mini app / лендинга — не дублируем «Привет-привет».
+        if not claim_flow_send(int(vk_id), "raffle"):
+            logger.info("Skip duplicate VK raffle start vk_id=%s", vk_id)
+            return
         self._track(vk_id, EVENT_RAFFLE_ENTER)
         ok, reason, booking_id = vk_raffle.can_enter_raffle(vk_id)
         if not ok:
+            clear_flow_send(int(vk_id), "raffle")
             await self._send_text(
                 peer_id,
                 reason,
@@ -2868,13 +2875,17 @@ class VKBotApp:
         self._clear_raffle_screenshot_wait(vk_id)
         start_att = self._random_cover_attachment()
         self._remember_raffle_attachment(peer_id, start_att)
-        await self._send_text(
-            peer_id,
-            vk_raffle.start_text(self.settings.community_link),
-            keyboard=vk_raffle.start_keyboard(),
-            attachment=start_att,
-            replace_nav=False,
-        )
+        try:
+            await self._send_text(
+                peer_id,
+                vk_raffle.start_text(self.settings.community_link),
+                keyboard=vk_raffle.start_keyboard(),
+                attachment=start_att,
+                replace_nav=False,
+            )
+        except Exception:
+            clear_flow_send(int(vk_id), "raffle")
+            raise
 
     async def _send_raffle_review(self, peer_id: int) -> None:
         attachments: list[str] = []
