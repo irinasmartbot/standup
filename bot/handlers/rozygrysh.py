@@ -1871,9 +1871,7 @@ async def rz_ticket(call: CallbackQuery):
         if not row or row[1] != call.from_user.id:
             await call.answer("Бронь не найдена", show_alert=True)
             return
-        if row[10] == "confirmed":
-            await call.answer("Билет уже был выдан ранее.", show_alert=True)
-            return
+        already_confirmed = row[10] == "confirmed"
         if row[10] not in ("booked", "confirmed"):
             await call.answer("Бронь уже неактивна", show_alert=True)
             return
@@ -1885,32 +1883,31 @@ async def rz_ticket(call: CallbackQuery):
         event_location = row[8]
         guests = row[9]
 
-        events = await load_events("best")
-        event = next(
-            (
-                e for e in events
-                if e["date"] == event_date
-                and e["time"] == event_time
-                and e["location"] == event_location
-            ),
-            None,
-        )
-        if event:
-            confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
-            if confirmed_guests + guests > event["max_seats"]:
-                await call.message.answer(
-                    "К сожалению, на это мероприятие уже не осталось мест для подтверждения билета.\n\n"
-                    f"Сейчас свободно: {max(0, event['max_seats'] - confirmed_guests)}. "
-                    f"Напишите менеджеру {_manager_username()}, мы поможем подобрать другой вариант.",
-                    parse_mode="HTML",
-                )
-                await call.answer()
-                return
+        if not already_confirmed:
+            events = await load_events("best")
+            event = next(
+                (
+                    e for e in events
+                    if e["date"] == event_date
+                    and e["time"] == event_time
+                    and e["location"] == event_location
+                ),
+                None,
+            )
+            if event:
+                confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
+                if confirmed_guests + guests > event["max_seats"]:
+                    await call.message.answer(
+                        "К сожалению, на это мероприятие уже не осталось мест для подтверждения билета.\n\n"
+                        f"Сейчас свободно: {max(0, event['max_seats'] - confirmed_guests)}. "
+                        f"Напишите менеджеру {_manager_username()}, мы поможем подобрать другой вариант.",
+                        parse_mode="HTML",
+                    )
+                    await call.answer()
+                    return
 
         place_on_ticket = format_ticket_place(event_location, event_address)
         ticket_buf = generate_ticket(name, event_date, event_time, place_on_ticket, guests)
-        update_booking_status(booking_id, "confirmed")
-        set_rozygrysh_used(call.from_user.id, True)
 
         caption = TICKET_ISSUED_TEXT.format(
             name=escape(name),
@@ -1919,13 +1916,37 @@ async def rz_ticket(call: CallbackQuery):
             place=escape(place_on_ticket),
             manager=_manager_username(),
         )
-        ticket_msg = await call.message.answer_photo(
-            photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
-            caption=caption,
-            reply_markup=_ticket_manage_kb(booking_id),
-            parse_mode="HTML",
-        )
+        if already_confirmed:
+            caption = "Ваш билет ещё раз 👇\n\n" + caption
+        try:
+            ticket_msg = await call.message.answer_photo(
+                photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
+                caption=caption,
+                reply_markup=_ticket_manage_kb(booking_id),
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.exception("TG raffle ticket send failed booking_id=%s", booking_id)
+            try:
+                from bot.utils.tech_alerts import alert_ticket_failure
+
+                alert_ticket_failure(
+                    channel="telegram_raffle",
+                    booking_id=booking_id,
+                    user_id=call.from_user.id if call.from_user else None,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+            await call.message.answer(
+                "Не удалось отправить билет картинкой. Напишите менеджеру — поможем вручную."
+            )
+            await call.answer()
+            return
         save_ticket_message_id(booking_id, ticket_msg.message_id)
+        if not already_confirmed:
+            update_booking_status(booking_id, "confirmed")
+            set_rozygrysh_used(call.from_user.id, True)
         await refresh_user_commands(call.message.bot, call.from_user.id)
 
         # убрать кнопки с confirm

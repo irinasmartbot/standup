@@ -1,3 +1,4 @@
+import logging
 import os
 import random
 from datetime import datetime
@@ -30,6 +31,8 @@ from bot.services.sheets import load_events, get_event
 from bot.utils.bot_commands import refresh_user_commands
 from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
 from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
+logger = logging.getLogger(__name__)
+
 from bot.utils.ticket import (
     MONTHS,
     format_date,
@@ -853,9 +856,7 @@ async def get_ticket(call: CallbackQuery):
             await call.message.answer("Бронь не найдена или уже отменена.")
             await call.answer()
             return
-        if booking[10] == "confirmed":
-            await call.answer("Билет уже был выдан ранее.", show_alert=True)
-            return
+        already_confirmed = booking[10] == "confirmed"
 
         name = booking[3]
         event_date = booking[5]
@@ -864,30 +865,31 @@ async def get_ticket(call: CallbackQuery):
         event_location = booking[8]
         guests = booking[9]
 
-        event = await get_event(event_date, event_time)
-        if event:
-            confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
-            if confirmed_guests + guests > event["max_seats"]:
-                available = max(0, event["max_seats"] - confirmed_guests)
-                kb = InlineKeyboardBuilder()
-                kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
-                kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
-                kb.adjust(1)
-                await call.message.answer(
-                    "К сожалению, на это мероприятие уже не осталось мест для подтверждения билета.\n\n"
-                    f"Сейчас свободно: {available}."
-                    " Вы можете выбрать другую дату или написать менеджеру.",
-                    reply_markup=kb.as_markup(),
-                )
-                await call.answer()
-                return
+        if not already_confirmed:
+            event = await get_event(event_date, event_time)
+            if event:
+                confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
+                if confirmed_guests + guests > event["max_seats"]:
+                    available = max(0, event["max_seats"] - confirmed_guests)
+                    kb = InlineKeyboardBuilder()
+                    kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
+                    kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+                    kb.adjust(1)
+                    await call.message.answer(
+                        "К сожалению, на это мероприятие уже не осталось мест для подтверждения билета.\n\n"
+                        f"Сейчас свободно: {available}."
+                        " Вы можете выбрать другую дату или написать менеджеру.",
+                        reply_markup=kb.as_markup(),
+                    )
+                    await call.answer()
+                    return
 
         place = format_ticket_place(event_location, event_address)
         ticket_buf = generate_ticket(name, event_date, event_time, place, guests)
-        update_booking_status(booking_id, "confirmed")
+        head = "Ваш билет ещё раз 👇\n\n" if already_confirmed else "Отлично!\n\n"
 
         caption = (
-            "Отлично!\n\n"
+            f"{head}"
             "<b>Данные по билету:</b>\n\n"
             f"<b>Ваше имя:</b> {escape(name or '')}\n"
             f"<b>Дата:</b> {escape(event_date or '')}\n"
@@ -901,13 +903,34 @@ async def get_ticket(call: CallbackQuery):
             f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
             "(там часто дарят бесплатные билеты на платные шоу😉)"
         )
-        ticket_msg = await call.message.answer_photo(
-            photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
-            caption=caption,
-            reply_markup=_manage_kb(booking_id),
-            parse_mode="HTML",
-        )
+        try:
+            ticket_msg = await call.message.answer_photo(
+                photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
+                caption=caption,
+                reply_markup=_manage_kb(booking_id),
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.exception("TG ticket send failed booking_id=%s", booking_id)
+            try:
+                from bot.utils.tech_alerts import alert_ticket_failure
+
+                alert_ticket_failure(
+                    channel="telegram",
+                    booking_id=booking_id,
+                    user_id=call.from_user.id if call.from_user else None,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+            await call.message.answer(
+                "Не удалось отправить билет картинкой. Напишите менеджеру — поможем вручную."
+            )
+            await call.answer()
+            return
         save_ticket_message_id(booking_id, ticket_msg.message_id)
+        if not already_confirmed:
+            update_booking_status(booking_id, "confirmed")
         await _remove_ticket_button(booking_id, call.from_user.id)
         await refresh_user_commands(call.message.bot, call.from_user.id)
         await call.answer()

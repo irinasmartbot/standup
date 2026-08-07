@@ -1043,8 +1043,19 @@ class VKBotApp:
                 manager_link=self.settings.manager_link,
                 community_link=self.settings.community_link,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("VK ticket issue failed booking_id=%s", booking_id)
+            try:
+                from bot.utils.tech_alerts import alert_ticket_failure
+
+                alert_ticket_failure(
+                    channel="vk",
+                    booking_id=int(booking_id),
+                    user_id=int(peer_id),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
             await self.client.send_message(
                 peer_id,
                 "Не удалось отправить билет картинкой. Напишите менеджеру — поможем вручную.",

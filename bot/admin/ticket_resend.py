@@ -306,6 +306,17 @@ async def resend_ticket_async(
         return result
     except Exception as exc:
         logger.exception("resend_ticket failed for booking %s", booking_id)
+        try:
+            from bot.utils.tech_alerts import alert_ticket_failure
+
+            alert_ticket_failure(
+                channel="admin_resend",
+                booking_id=int(booking_id),
+                user_id=row.get("vk_id") or row.get("telegram_id"),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception:
+            pass
         return {"ok": False, "error": str(exc), **meta}
 
 
