@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
 
 from bot.config import CHANNEL_LINK
 from bot.db.crud import (
@@ -128,6 +127,8 @@ async def send_vk_annulled_message(client: VKClient, row, *, community_link: str
 
 
 async def process_due_vk_reminders(client: VKClient, *, community_link: str, manager_link: str) -> None:
+    from bot.utils.reminder_schedule import plan_booking_reminders
+
     now = now_msk().replace(tzinfo=None)
     for row in get_booked_for_reminders("proverka"):
         if _row_channel(row) != "vkontakte":
@@ -143,35 +144,15 @@ async def process_due_vk_reminders(client: VKClient, *, community_link: str, man
             logger.warning("VK reminder: bad datetime booking=%s %s %s", booking_id, event_date, event_time)
             continue
 
-        one_day_reminder_at = datetime.combine(
-            event_dt.date() - timedelta(days=1), datetime.min.time()
-        ).replace(hour=14)
-        ten_am_on_event_day = datetime.combine(event_dt.date(), datetime.min.time()).replace(hour=10)
-        time_until_at_booking = event_dt - created_at
-
-        if created_at < ten_am_on_event_day:
-            day_fire_at = ten_am_on_event_day
-        elif time_until_at_booking >= timedelta(hours=2):
-            day_fire_at = created_at + timedelta(hours=2)
-        elif time_until_at_booking >= timedelta(hours=1):
-            day_fire_at = event_dt - timedelta(hours=1)
-        elif time_until_at_booking >= timedelta(minutes=30):
-            day_fire_at = created_at + timedelta(minutes=15)
-        elif time_until_at_booking >= timedelta(minutes=10):
-            day_fire_at = created_at + timedelta(minutes=1)
-        else:
-            day_fire_at = None
-
-        if created_at >= event_dt - timedelta(hours=2):
-            annul_at = event_dt + timedelta(minutes=30)
-        else:
-            annul_at = event_dt - timedelta(hours=2)
+        plan = plan_booking_reminders(created_at, event_dt)
+        day_fire_at = plan["reminder_day_at"]
+        annul_at = plan["annul_at"]
+        one_day_reminder_at = plan["reminder_24h_at"]
 
         try:
-            days_before_event = (event_dt.date() - created_at.date()).days
             if (
                 not reminder_24h_sent
-                and days_before_event >= 2
+                and one_day_reminder_at is not None
                 and now >= one_day_reminder_at
                 and now < event_dt
             ):

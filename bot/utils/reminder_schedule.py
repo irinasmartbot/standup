@@ -1,14 +1,17 @@
-"""Compute planned reminder / annulment times for booked bookings (admin + docs)."""
+"""Compute planned reminder / annulment times for booked bookings (admin + loops)."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+# После дневного напоминания даём время забрать билет, прежде чем аннулировать.
+_ANNUL_AFTER_REMINDER = timedelta(minutes=30)
+
 
 def plan_booking_reminders(created_at: datetime, event_dt: datetime) -> dict:
     """Return planned reminder timestamps for a still-booked booking.
 
-    Mirrors bot/handlers/reminders.py timing rules.
+    Used by admin UI and by TG/VK/raffle reminder loops — keep one source of truth.
     """
     if created_at.tzinfo is not None:
         created_at = created_at.replace(tzinfo=None)
@@ -37,13 +40,36 @@ def plan_booking_reminders(created_at: datetime, event_dt: datetime) -> dict:
     else:
         day_fire_at = None
 
-    if created_at >= event_dt - timedelta(hours=2):
-        annul_at = event_dt + timedelta(minutes=30)
-    else:
-        annul_at = event_dt - timedelta(hours=2)
+    annul_at = _annul_at(created_at, event_dt, day_fire_at)
 
     return {
         "reminder_24h_at": reminder_24h_at,
         "reminder_day_at": day_fire_at,
         "annul_at": annul_at,
     }
+
+
+def _annul_at(
+    created_at: datetime,
+    event_dt: datetime,
+    day_fire_at: datetime | None,
+) -> datetime:
+    """Аннуляция не должна быть раньше дневного напоминания.
+
+    Раньше при брони днём (например 14:38 на 18:00) day-reminder был 16:38,
+    а annul жёстко event−2ч = 16:00 — бронь снимали до напоминания.
+    """
+    late_booking = created_at >= event_dt - timedelta(hours=2)
+    if late_booking:
+        return event_dt + timedelta(minutes=30)
+
+    annul_at = event_dt - timedelta(hours=2)
+    if day_fire_at is not None:
+        after_reminder = day_fire_at + _ANNUL_AFTER_REMINDER
+        if after_reminder > annul_at:
+            annul_at = after_reminder
+
+    # Если после сдвига упёрлись в старт шоу — как у поздней брони: +30 мин после начала.
+    if annul_at >= event_dt:
+        return event_dt + timedelta(minutes=30)
+    return annul_at

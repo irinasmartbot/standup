@@ -1,7 +1,5 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
-
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import bot, CHANNEL_LINK
@@ -112,6 +110,8 @@ def _is_telegram_reminder_row(row) -> bool:
 
 
 async def process_due_reminders():
+    from bot.utils.reminder_schedule import plan_booking_reminders
+
     now = now_msk().replace(tzinfo=None)
     for row in get_booked_for_reminders():
         if not _is_telegram_reminder_row(row):
@@ -127,54 +127,33 @@ async def process_due_reminders():
             logger.warning("Cannot parse event datetime for booking %s: %s %s", booking_id, event_date, event_time)
             continue
 
-        # Фиксированные точки
-        one_day_reminder_at = datetime.combine(event_dt.date() - timedelta(days=1), datetime.min.time()).replace(hour=14)
-        ten_am_on_event_day  = datetime.combine(event_dt.date(), datetime.min.time()).replace(hour=10)
-        event_is_today       = event_dt.date() == now.date()
-        time_until_at_booking = event_dt - created_at
-
-        # --- Когда должно сработать напоминание в день шоу ---
-        if created_at < ten_am_on_event_day:
-            # Бронь была до 10:00 дня шоу (включая накануне и раньше) → 10:00 в день шоу
-            day_fire_at = ten_am_on_event_day
-        elif time_until_at_booking >= timedelta(hours=2):
-            day_fire_at = created_at + timedelta(hours=2)
-        elif time_until_at_booking >= timedelta(hours=1):
-            day_fire_at = event_dt - timedelta(hours=1)
-        elif time_until_at_booking >= timedelta(minutes=30):
-            day_fire_at = created_at + timedelta(minutes=15)
-        elif time_until_at_booking >= timedelta(minutes=10):
-            day_fire_at = created_at + timedelta(minutes=1)
-        else:
-            day_fire_at = None  # менее 10 мин до шоу — напоминание не нужно
-
-        # --- Аннулирование ---
-        if created_at >= event_dt - timedelta(hours=2):
-            # Бронь сделана менее чем за 2 часа до шоу → аннулируем через 30 мин после старта
-            annul_at = event_dt + timedelta(minutes=30)
-        else:
-            # Бронь заранее → аннулируем за 2 часа до шоу
-            annul_at = event_dt - timedelta(hours=2)
+        plan = plan_booking_reminders(created_at, event_dt)
+        day_fire_at = plan["reminder_day_at"]
+        annul_at = plan["annul_at"]
+        one_day_reminder_at = plan["reminder_24h_at"]
 
         try:
             # Напоминание накануне в 14:00 — только если бронь сделана за 2+ дня до шоу
-            days_before_event = (event_dt.date() - created_at.date()).days
-            if (not reminder_24h_sent
-                    and days_before_event >= 2
-                    and now >= one_day_reminder_at
-                    and now < event_dt):
+            if (
+                not reminder_24h_sent
+                and one_day_reminder_at is not None
+                and now >= one_day_reminder_at
+                and now < event_dt
+            ):
                 await send_booking_reminder(row, "24h")
                 update_reminder_flag(booking_id, "reminder_24h_sent")
 
             # Напоминание в день шоу
-            if (not reminder_day_sent
-                    and day_fire_at is not None
-                    and now >= day_fire_at
-                    and now < event_dt):
+            if (
+                not reminder_day_sent
+                and day_fire_at is not None
+                and now >= day_fire_at
+                and now < event_dt
+            ):
                 await send_booking_reminder(row, "day")
                 update_reminder_flag(booking_id, "reminder_day_sent")
 
-            # Аннулирование
+            # Аннулирование (всегда после точки дневного напоминания + запас)
             if now >= annul_at:
                 await send_annulled_message(row)
 
