@@ -2277,8 +2277,13 @@ def get_manager_stata_bookings_for_date(
     *,
     booking_format: str = "proverka",
     event_format: str = "proverka",
+    statuses: tuple[str, ...] | list[str] | None = None,
 ) -> list[dict]:
-    """Подтверждённые брони (билет забран) на дату, по шоу."""
+    """Брони на дату по шоу.
+
+    По умолчанию только confirmed (как new_stata).
+    Для new_stata_all передайте statuses=('booked', 'confirmed').
+    """
     if not _use_postgres():
         return []
     try:
@@ -2287,6 +2292,9 @@ def get_manager_stata_bookings_for_date(
         return []
     b_fmt = (booking_format or "proverka").strip().lower() or "proverka"
     e_fmt = (event_format or "proverka").strip().lower() or "proverka"
+    status_list = [str(s).strip().lower() for s in (statuses or ("confirmed",)) if str(s).strip()]
+    if not status_list:
+        status_list = ["confirmed"]
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -2307,10 +2315,12 @@ def get_manager_stata_bookings_for_date(
                 WHERE e.event_date = %s
                   AND e.format = %s
                   AND b.format = %s
-                  AND b.status = 'confirmed'
-                ORDER BY e.event_time, e.location, b.id
+                  AND b.status = ANY(%s)
+                ORDER BY e.event_time, e.location,
+                         CASE b.status WHEN 'confirmed' THEN 0 WHEN 'booked' THEN 1 ELSE 2 END,
+                         b.id
                 """,
-                (parsed, e_fmt, b_fmt),
+                (parsed, e_fmt, b_fmt, status_list),
             )
             rows = cur.fetchall()
     return [
