@@ -553,22 +553,31 @@ async def delete_linked_venue_album(call: CallbackQuery):
 
 
 async def _delete_previous_menu_message(call: CallbackQuery):
-    text = call.message.text or call.message.caption or ""
+    from bot.utils.tg_callback import message_text, reply_target
+
+    msg = call.message
+    if msg is None:
+        return
+    # Старое сообщение могли удалить / оно InaccessibleMessage — без .text/.caption.
+    text = message_text(msg)
     if WELCOME_MARKER in text:
         return
-    forget_booking_nav(call.message.chat.id, call.message.message_id)
+    forget_booking_nav(msg.chat.id, msg.message_id)
     await delete_linked_venue_album(call)
     try:
-        await call.message.delete()
+        await reply_target(call).delete()
     except Exception:
         pass
 
 
 @router.callback_query(lambda c: c.data == "formats")
 async def show_formats(call: CallbackQuery):
-    await delete_booking_nav(call.bot, call.message.chat.id)
+    from bot.utils.tg_callback import reply_target
+
+    chat_id = call.message.chat.id if call.message else call.from_user.id
+    await delete_booking_nav(call.bot, chat_id)
     await _delete_previous_menu_message(call)
-    await send_all_formats(call.message)
+    await send_all_formats(reply_target(call))
     await call.answer()
 
 
