@@ -3040,20 +3040,11 @@ class VKBotApp:
         )
 
     async def _handle_unknown_free_text(self, peer_id: int, vk_id: int, text: str) -> None:
+        # Как в TG: ≥10 символов → в HELP_CHAT без отбивки клиенту.
         if not is_meaningful_free_text(text):
             return
         self._track(vk_id, EVENT_HELP_QUESTION, props={"chars": len(text.strip())})
-        forwarded = await self._forward_vk_help_question(vk_id, text)
-        kb = VKKeyboardBuilder(inline=True)
-        if not forwarded:
-            kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
-        kb.button("В главное меню", _payload("main_menu"))
-        kb.adjust(1)
-        await self._send_text(
-            peer_id,
-            "Спасибо! Передали вопрос в техподдержку, скоро ответим.",
-            keyboard=kb.as_json(),
-        )
+        await self._forward_vk_help_question(vk_id, text)
 
     async def _forward_vk_help_question(self, vk_id: int, text: str) -> bool:
         """Карточка в Telegram HELP_CHAT + запись help_requests (как TG /help)."""
