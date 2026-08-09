@@ -148,6 +148,21 @@ def _ticket_bytes(row: dict) -> bytes:
     return buf.getvalue()
 
 
+def ticket_image_bytes(booking_id: int) -> bytes | None:
+    """Rebuild ticket JPEG for admin preview (same image as sent / resend)."""
+    row = get_booking_for_ticket_resend(booking_id)
+    if not row:
+        return None
+    # Показываем только тем, кому билет реально уходил (или был подтверждён).
+    if row.get("status") != "confirmed" and not row.get("confirmed_at"):
+        return None
+    try:
+        return _ticket_bytes(row)
+    except Exception:
+        logger.exception("ticket_image_bytes failed for booking %s", booking_id)
+        return None
+
+
 def _caption(row: dict, *, updated: bool) -> str:
     place = f"{row.get('location') or ''}, {row.get('address') or ''}".strip(", ")
     head = (
@@ -291,6 +306,17 @@ async def resend_ticket_async(
         return result
     except Exception as exc:
         logger.exception("resend_ticket failed for booking %s", booking_id)
+        try:
+            from bot.utils.tech_alerts import alert_ticket_failure
+
+            alert_ticket_failure(
+                channel="admin_resend",
+                booking_id=int(booking_id),
+                user_id=row.get("vk_id") or row.get("telegram_id"),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception:
+            pass
         return {"ok": False, "error": str(exc), **meta}
 
 

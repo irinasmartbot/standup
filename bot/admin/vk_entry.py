@@ -56,22 +56,10 @@ FLOWS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Временно для модерации mini app: только бронь (розыгрыш/подарок вернём в боевом режиме).
-MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking",)
+# После модерации снова показываем все входные сценарии mini app.
+MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking", "raffle", "offline_gift")
 
-# Временно без cmd-клавиатуры форматов (Salebot ещё на линии; для модерации чище).
-# Боевой режим: FORMATS_TEXT + _formats_keyboard().
-BOOKING_ENTRY_TEXT = (
-    "Привет! 😊\n\n"
-    "Мы поможем забронировать места на шоу <b>Moscow StandUp Show</b>.\n\n"
-    "Доступные форматы:\n"
-    "• StandUp BEST\n"
-    "• Хитлото\n"
-    "• StandUp Проверка материала\n\n"
-    "Напишите, какой формат вам интересен — менеджер пришлёт варианты."
-)
-
-_ENTRY_COOLDOWN_SEC = 20.0
+_ENTRY_COOLDOWN_SEC = 45.0
 _MINI_FLOW_HANDOFF_TTL_SEC = 300.0
 _last_entry: dict[tuple[int, str], float] = {}
 _mini_flow_handoff: dict[str, tuple[str, float]] = {}
@@ -120,12 +108,102 @@ def _mini_flow_from_handoff(request: web.Request) -> str:
     return flow_key if flow_key in FLOWS else ""
 
 
-def _mini_app_vk_url(settings) -> str:
+def _mini_app_vk_url(settings, flow_key: str = "") -> str:
+    """Каноническая ссылка mini app внутри VK: vk.com/app{id}_-{group}#flow=…"""
     app_id = _env_mini_app_id()
     if not app_id:
         app_id = "54704296"
     group_suffix = f"_-{int(settings.group_id)}" if settings.group_id else ""
-    return f"https://vk.com/app{app_id}{group_suffix}"
+    url = f"https://vk.com/app{app_id}{group_suffix}"
+    if flow_key and flow_key in FLOWS:
+        url = f"{url}#flow={flow_key}"
+    return url
+
+
+def _mini_start_bridge_html(flow_key: str, target_url: str) -> str:
+    """Промежуточная страница для /vk-mini/start/{{flow}}.
+
+    На телефоне не делаем intent/vk:// + запасные таймеры — из‑за них
+    клиент «болтает» между браузером и VK и не доходит до диалога.
+    Мобилка: одна кнопка с обычной https-ссылкой. Десктоп: один replace.
+    """
+    flow = FLOWS.get(flow_key) or {}
+    headline = escape(str(flow.get("headline") or "Moscow StandUp Show"))
+    target = escape(target_url, quote=True)
+    target_js = json.dumps(target_url)
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+  <title>VK · Moscow StandUp Show</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700&family=Pacifico&display=swap" rel="stylesheet">
+  <style>
+    :root {{
+      --bg0: #070708; --gold: #e8c56a; --gold-deep: #c9a227;
+      --text: #f7f3ea; --muted: #d2c4b0;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0; min-height: 100vh; color: var(--text);
+      font-family: Manrope, sans-serif;
+      background:
+        radial-gradient(ellipse 90% 55% at 50% 100%, rgba(180, 30, 45, .45) 0%, transparent 55%),
+        linear-gradient(180deg, #12080c 0%, var(--bg0) 45%, #14060a 100%);
+    }}
+    main {{ width: min(440px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 72px; }}
+    .brand {{
+      margin: 0 0 18px; font-family: Pacifico, cursive; font-size: 22px;
+      color: var(--gold); line-height: 1.2;
+    }}
+    h1 {{
+      margin: 0 0 14px; font-size: clamp(28px, 7vw, 38px); font-weight: 700;
+      line-height: 1.15; letter-spacing: -0.02em;
+    }}
+    .lead {{ margin: 0 0 22px; font-size: 16px; line-height: 1.45; color: var(--muted); }}
+    .cta {{
+      display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
+      padding: 14px 16px; cursor: pointer; text-align: center; text-decoration: none;
+      background: linear-gradient(180deg, #f0d48a 0%, var(--gold-deep) 100%);
+      color: #1a1208; font: 700 16px Manrope, sans-serif;
+      box-shadow: 0 8px 28px rgba(201, 162, 39, .28);
+    }}
+    .status {{
+      font-size: 14px; margin: 14px 0 0; padding: 12px 14px; border-radius: 12px;
+      background: rgba(255,255,255,.06); border: 1px solid rgba(232, 197, 106, .18);
+      color: #d8f5d0;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand">Moscow StandUp Show</p>
+    <h1>{headline}</h1>
+    <p class="lead" id="lead">Нажмите кнопку — откроется мини-приложение в VK.</p>
+    <a class="cta" id="open" href="{target}">Открыть в VK</a>
+    <p class="status" id="status">Дальше продолжение будет в личке сообщества.</p>
+  </main>
+  <script>
+  (function () {{
+    var url = {target_js};
+    var openBtn = document.getElementById("open");
+    var leadEl = document.getElementById("lead");
+    var ua = navigator.userAgent || "";
+    var mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+    openBtn.href = url;
+    // Никаких intent/vk:// и повторных location через setTimeout —
+    // они как раз дают «болтанку» и не доводят до диалога.
+    if (!mobile) {{
+      if (leadEl) leadEl.textContent = "Открываем мини-приложение в VK…";
+      window.location.replace(url);
+    }}
+  }})();
+  </script>
+</body>
+</html>"""
 
 
 def _formats_keyboard() -> str:
@@ -163,10 +241,25 @@ def _gift_event_label(event: dict[str, Any]) -> str:
 
 async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int) -> None:
     """Сразу ветка бота — без сообщения «нажмите кнопку ниже»."""
-    from bot.db.analytics import EVENT_BOT_START, EVENT_BRANCH_PROVERKA, track_event
+    from bot.db.analytics import EVENT_BOT_START, track_event
     from bot.vk import raffle as vk_raffle
+    from bot.vk.entry_dedupe import claim_flow_send, clear_flow_send
 
     flow = FLOWS.get(flow_key) or {}
+    # Общий антидубль с VK-ботом (разные процессы / воркеры).
+    # Офлайн-розыгрыш: 30 мин без дубля карточки; повтор = действие «участвовать/выбрать».
+    ttl = 1800.0 if flow_key == "offline_gift" else None
+    claimed = (
+        claim_flow_send(int(vk_id), flow_key, ttl_sec=ttl)
+        if ttl is not None
+        else claim_flow_send(int(vk_id), flow_key)
+    )
+    if not claimed:
+        logger.info("VK entry deduped vk_id=%s flow=%s", vk_id, flow_key)
+        if flow_key == "offline_gift":
+            await _offline_gift_repeat_action(client, vk_id)
+        return
+
     track_event(
         EVENT_BOT_START,
         vk_id=int(vk_id),
@@ -177,6 +270,97 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
             "flow": flow_key,
         },
     )
+
+    try:
+        await _send_flow_chain_body(client, settings, flow_key, vk_id, vk_raffle)
+    except Exception:
+        clear_flow_send(int(vk_id), flow_key)
+        raise
+
+
+async def _offline_gift_repeat_action(client: VKClient, vk_id: int) -> None:
+    """Повторный запуск в окне 30 мин: как «участвовать» / «выберите шоу»."""
+    from bot.db.crud import (
+        get_offline_gift_today_events,
+        record_offline_gift_entry,
+        set_offline_gift_pending,
+    )
+
+    events = get_offline_gift_today_events()
+    if not events:
+        await client.send_message(
+            vk_id,
+            (
+                "🎁 <b>Розыгрыш подарка</b>\n\n"
+                "На сегодня активных шоу не найдено. "
+                "Покажи это сообщение администратору или попробуй позже."
+            ),
+        )
+        return
+    if len(events) == 1:
+        event = events[0]
+        event_id = int(event["id"])
+        try:
+            subscribed = await client.is_group_member(int(vk_id))
+        except Exception:
+            logger.exception("offline gift sub check failed vk_id=%s", vk_id)
+            subscribed = False
+        if subscribed:
+            try:
+                name = await client.get_user_display_name(int(vk_id))
+            except Exception:
+                name = ""
+            record_offline_gift_entry(event_id=event_id, vk_id=int(vk_id), full_name=name or "")
+            await client.send_message(
+                vk_id,
+                (
+                    "🎁 <b>Зафиксировал в списке участников ✅</b>\n\n"
+                    f"<b>Шоу:</b> {_gift_event_label(event)}\n\n"
+                    "Ведущий выберет победителя во время шоу. Удачи!"
+                ),
+            )
+            return
+        set_offline_gift_pending(vk_id=int(vk_id), event_id=event_id)
+        kb = VKKeyboardBuilder(inline=True)
+        settings = load_vk_settings()
+        if settings.community_link:
+            kb.button("Перейти в сообщество", link=settings.community_link)
+        kb.button(
+            "Готово",
+            {"cmd": "ogift_sub_check", "event_id": event_id},
+            color="primary",
+        )
+        kb.adjust(1)
+        await client.send_message(
+            vk_id,
+            (
+                "🎁 <b>Ты пока не в списке участников.</b>\n\n"
+                "Выполни задание ведущего — и будешь в списке.\n\n"
+                f"<b>Шоу:</b> {_gift_event_label(event)}"
+            ),
+            keyboard=kb.as_json(),
+        )
+        return
+    kb = VKKeyboardBuilder(inline=True)
+    for event in events[:8]:
+        kb.button(
+            _gift_event_label(event)[:40],
+            {"cmd": "ogift_event", "event_id": int(event["id"])},
+            color="primary",
+        )
+    kb.adjust(1)
+    await client.send_message(
+        vk_id,
+        (
+            "🎁 Чтобы попасть в список участников, выберите мероприятие, "
+            "на котором вы сейчас находитесь 👇"
+        ),
+        keyboard=kb.as_json(),
+    )
+
+
+async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id: int, vk_raffle) -> None:
+    from bot.db.analytics import EVENT_BRANCH_PROVERKA, track_event
 
     if flow_key == "raffle":
         ok, reason, booking_id = vk_raffle.can_enter_raffle(vk_id)
@@ -201,9 +385,9 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
             channel="vkontakte",
             props={"via": "mini_app_flow"},
         )
-        # Временно нейтральный текст без кнопок форматов (модерация / Salebot).
-        # Боевой режим: FORMATS_TEXT + _formats_keyboard().
-        await client.send_message(vk_id, BOOKING_ENTRY_TEXT)
+        from bot.handlers.formats import FORMATS_TEXT
+
+        await client.send_message(vk_id, FORMATS_TEXT, keyboard=_formats_keyboard())
         return
 
     from bot.db.crud import get_offline_gift_today_events
@@ -251,7 +435,8 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
         vk_id,
         (
             "🎁 <b>Розыгрыш подарка на шоу</b>\n\n"
-            "Выбери мероприятие, на котором вы сейчас находитесь:"
+            "Чтобы мы могли внести вас в нужный список, выберите мероприятие, "
+            "на котором вы сейчас находитесь:"
         ),
         keyboard=kb.as_json(),
     )
@@ -309,20 +494,24 @@ def _landing_html(flow_key: str) -> str:
     return s && s !== "0" && s !== "undefined" && s !== "null" ? s : null;
   }}
 
+  var allowedOnce = false;
+
   function openVkAppOnly() {{
+    // Без ?ref=: текст сценария уже отправили через /vk/entry.
+    // Иначе бот снова шлёт «Привет-привет» по deeplink.
+    var chatUrl = "https://vk.com/im?sel=-" + groupId;
     var ua = navigator.userAgent || "";
     if (/Android/i.test(ua)) {{
       window.location.href =
-        "intent://vk.com/write-" + groupId +
+        "intent://vk.com/im?sel=-" + groupId +
         "#Intent;scheme=https;package=com.vkontakte.android;end";
       return;
     }}
     if (/iPhone|iPad|iPod/i.test(ua)) {{
-      window.location.href = "vk://vk.com/write-" + groupId;
+      window.location.href = "vk://vk.com/im?sel=-" + groupId;
       return;
     }}
-    // Только десктоп — сайт VK.
-    window.location.href = "https://vk.com/write-" + groupId + "?ref=" + encodeURIComponent(ref);
+    window.location.href = chatUrl;
   }}
 
   function afterSendOk() {{
@@ -350,32 +539,37 @@ def _landing_html(flow_key: str) -> str:
         return r.json().then(function (j) {{ return {{ ok: r.ok, status: r.status, j: j }}; }});
       }})
       .then(function (res) {{
-        sending = false;
         if (res.ok && res.j && res.j.ok) {{
           afterSendOk();
           return;
         }}
+        sending = false;
+        allowedOnce = false;
         var err = (res.j && res.j.error) ? res.j.error : "";
         setStatus(err || "Не удалось отправить. Попробуйте ещё раз.", false);
       }})
       .catch(function () {{
         sending = false;
+        allowedOnce = false;
         setStatus("Сеть недоступна. Попробуйте ещё раз.", false);
       }});
   }}
 
   function onAllowed(userId) {{
+    if (allowedOnce || sending) return;
     var id = normalizeId(userId);
     console.log("allow-messages allowed", userId, id);
     if (!id) {{
       setStatus("VK не передал id. Нажмите «Запретить», затем снова «Разрешить».", false);
       return;
     }}
+    allowedOnce = true;
     vkId = id;
     sendEntry();
   }}
 
   VK.init({{ apiId: appId, onlyWidgets: true }});
+  // Только один канал колбэка — иначе allowed срабатывает дважды.
   if (VK.Observer && VK.Observer.subscribe) {{
     VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onAllowed);
     VK.Observer.subscribe("widgets.allowMessagesFromCommunity.denied", function () {{
@@ -384,8 +578,7 @@ def _landing_html(flow_key: str) -> str:
     VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", function () {{
       setStatus("Снова нажмите виджет и разрешите сообщения.", false);
     }});
-  }}
-  if (typeof VK.addCallback === "function") {{
+  }} else if (typeof VK.addCallback === "function") {{
     VK.addCallback("widgets.allowMessagesFromCommunity.allowed", onAllowed);
   }}
   VK.Widgets.AllowMessagesFromCommunity(
@@ -494,9 +687,23 @@ async def landing_offline_gift(_: web.Request) -> web.Response:
     return _html_response(_landing_html("offline_gift"))
 
 
+def _vk_me_path(community_link: str, group_id: int) -> str:
+    """Путь для vk.me / write: screen_name или club{{id}}."""
+    link = (community_link or "").strip().rstrip("/")
+    for host in ("vk.com/", "vk.ru/", "m.vk.com/", "m.vk.ru/"):
+        if host in link:
+            name = link.split(host, 1)[-1].split("?")[0].split("/")[0].strip()
+            if name and name not in {"club", "public", "write"}:
+                if name.startswith("write-"):
+                    break
+                return name
+    return f"club{int(group_id)}" if group_id else ""
+
+
 def _mini_app_html(default_flow: str = "") -> str:
     settings = load_vk_settings()
     group_id = int(settings.group_id or 0)
+    vk_me = _vk_me_path(settings.community_link, group_id)
     ready = bool(group_id and settings.group_token)
     visible = [key for key in MINI_APP_VISIBLE_FLOWS if key in FLOWS]
     flow_labels = {
@@ -610,8 +817,9 @@ def _mini_app_html(default_flow: str = "") -> str:
     }};
   }}
 
-  var bridge = window.vkBridge || createFallbackBridge();
+  var bridge = (window.vkBridge && (window.vkBridge.send ? window.vkBridge : window.vkBridge.default)) || createFallbackBridge();
   var groupId = {group_id};
+  var vkMePath = {json.dumps(vk_me)};
   var serverFlow = {json.dumps(default_flow if default_flow in FLOWS else "")};
   var flowLabels = {json.dumps(flow_labels, ensure_ascii=False)};
   var currentFlow = null;
@@ -619,11 +827,82 @@ def _mini_app_html(default_flow: str = "") -> str:
   var autoStarted = false;
   var permissionRequested = false;
   var dialogReady = false;
+  var dialogOpened = false;
+  var openAfterSendFromTap = false;
   var launchParamsQuery = window.location.search || "";
   var statusEl = document.getElementById("status");
   var leadEl = document.getElementById("lead");
   var actionsEl = document.getElementById("actions");
   var titleEl = document.getElementById("title");
+
+  function dialogUrl() {{
+    // Только прямой peer чата. vk.me/* даёт промежуточный экран
+    // «Написать сообщение / Перейти к странице» — его не показываем.
+    return "https://vk.com/im?sel=-" + groupId;
+  }}
+
+  function openViaWindow(url) {{
+    try {{
+      var w = window.open(url, "_blank", "noopener,noreferrer");
+      if (w) return true;
+    }} catch (_) {{}}
+    try {{
+      var a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return true;
+    }} catch (_) {{}}
+    try {{
+      if (window.top && window.top !== window) {{
+        window.top.location.href = url;
+        return true;
+      }}
+      window.location.href = url;
+      return true;
+    }} catch (_) {{}}
+    return false;
+  }}
+
+  function setDialogLinkButton() {{
+    var url = dialogUrl();
+    uiBusy = false;
+    var mobile = isMobilePlatform();
+    actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
+      if (button.hidden || button.style.display === "none") return;
+      if (button.tagName === "A") {{
+        button.href = url;
+        // На мобилке внутри VK надёжнее тот же webview, не _blank.
+        if (mobile) {{
+          button.removeAttribute("target");
+        }} else {{
+          button.target = "_blank";
+          button.rel = "noopener noreferrer";
+        }}
+        button.textContent = "Открыть диалог VK";
+        button.style.pointerEvents = "";
+        button.style.opacity = "";
+        button.removeAttribute("aria-busy");
+        return;
+      }}
+      var a = document.createElement("a");
+      a.className = button.className || "cta";
+      a.href = url;
+      if (!mobile) {{
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+      }}
+      a.setAttribute("data-flow", button.getAttribute("data-flow") || "");
+      a.textContent = "Открыть диалог VK";
+      a.style.pointerEvents = "";
+      a.style.opacity = "";
+      button.replaceWith(a);
+    }});
+  }}
 
   function rememberLaunchParams(raw) {{
     if (!raw) return;
@@ -660,27 +939,43 @@ def _mini_app_html(default_flow: str = "") -> str:
     return /mobile_android|mobile_iphone|mobile_ipad|android|iphone|ipad/i.test(platform + " " + ua);
   }}
 
+  function isAndroidPlatform() {{
+    var platform = new URLSearchParams(window.location.search || "").get("vk_platform") || "";
+    var ua = navigator.userAgent || "";
+    return /mobile_android|android/i.test(platform + " " + ua);
+  }}
+
+  var FLOW_ALIASES = {{
+    book: "booking",
+    booking: "booking",
+    standup_book: "booking",
+    raffle: "raffle",
+    rozygr: "raffle",
+    rozygrysh: "raffle",
+    standup_rozygr: "raffle",
+    gift: "offline_gift",
+    offline_gift: "offline_gift"
+  }};
+
+  function normalizeFlow(value) {{
+    if (!value) return "";
+    var key = String(value).trim();
+    if (flowLabels[key]) return key;
+    var aliased = FLOW_ALIASES[key] || "";
+    return flowLabels[aliased] ? aliased : "";
+  }}
+
   function parseFlowValue(value) {{
     if (!value) return "";
     var raw = String(value).replace(/^#/, "").replace(/^\\?/, "");
     try {{ raw = decodeURIComponent(raw); }} catch (_) {{}}
     raw = raw.replace(/^\\/+/, "").replace(/^\\?/, "");
-    if (flowLabels[raw]) return raw;
+    var direct = normalizeFlow(raw);
+    if (direct) return direct;
     var params = new URLSearchParams(raw);
-    var flow = params.get("flow") || params.get("start") || params.get("start_param") || "";
-    if (flowLabels[flow]) return flow;
-    var aliases = {{
-      book: "booking",
-      booking: "booking",
-      standup_book: "booking",
-      raffle: "raffle",
-      rozygr: "raffle",
-      rozygrysh: "raffle",
-      standup_rozygr: "raffle",
-      gift: "offline_gift",
-      offline_gift: "offline_gift"
-    }};
-    return aliases[raw] || "";
+    return normalizeFlow(
+      params.get("flow") || params.get("start") || params.get("start_param") || ""
+    );
   }}
 
   function flowFromLocation() {{
@@ -701,6 +996,15 @@ def _mini_app_html(default_flow: str = "") -> str:
       parseFlowValue(data.vk_hash || "") ||
       parseFlowValue(data.start_param || "") ||
       parseFlowValue(data.flow || "")
+    );
+  }}
+
+  function resolveFlow(launchData) {{
+    // Приоритет: hash/launch params из VK, и только потом server handoff.
+    return (
+      flowFromLaunchParams(launchData) ||
+      flowFromLocation() ||
+      parseFlowValue(serverFlow)
     );
   }}
 
@@ -725,6 +1029,25 @@ def _mini_app_html(default_flow: str = "") -> str:
     }});
   }}
 
+  var uiBusy = false;
+
+  function setUiBusy(on, label) {{
+    uiBusy = !!on;
+    actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
+      if (button.hidden || button.style.display === "none") return;
+      if (on) {{
+        button.textContent = label || "Отправляем…";
+        button.style.pointerEvents = "none";
+        button.style.opacity = "0.72";
+        button.setAttribute("aria-busy", "true");
+      }} else {{
+        button.style.pointerEvents = "";
+        button.style.opacity = "";
+        button.removeAttribute("aria-busy");
+      }}
+    }});
+  }}
+
   function setFlow(flow, singleButton) {{
     if (!flowLabels[flow]) return false;
     currentFlow = flow;
@@ -744,24 +1067,91 @@ def _mini_app_html(default_flow: str = "") -> str:
       "Не удалось выполнить действие. Попробуйте ещё раз.";
   }}
 
-  function openDialog() {{
-    var webUrl = "https://vk.com/im?sel=-" + groupId;
-    var appUrl = "vk://vk.com/write-" + groupId;
-    if (isMobilePlatform()) {{
-      window.location.href = appUrl;
-      setTimeout(function () {{
-        bridge.send("VKWebAppClose", {{ status: "success" }}).catch(function () {{}});
-      }}, 1200);
-    }} else {{
-      var opened = window.open(webUrl, "_blank");
-      if (!opened) {{
-        withTimeout(bridge.send("VKWebAppOpenURL", {{ url: webUrl }}), 1200).catch(function () {{}});
+  function openDialog(opts) {{
+    opts = opts || {{}};
+    var fromUserTap = !!opts.fromUserTap;
+    if (!groupId) {{
+      setStatus("Не задан id сообщества. Откройте диалог вручную.", false);
+      return;
+    }}
+    // Только прямой peer чата — без vk.me / write- / intent / vk:// / VKWebAppClose.
+    // Close без реального перехода возвращает к источнику ссылки (файл/пост).
+    var chatUrl = "https://vk.com/im?sel=-" + groupId;
+    var chatUrlRu = "https://vk.ru/im?sel=-" + groupId;
+    var urls = [chatUrl, chatUrlRu];
+
+    function viaBridge(url, ms) {{
+      return withTimeout(bridge.send("VKWebAppOpenURL", {{ url: url }}), ms || 2500);
+    }}
+
+    var syncOk = false;
+    var skipSync = !!opts.skipSync;
+    // Десктоп: жест клика → window.open / <a>.
+    if (fromUserTap && !skipSync && !isMobilePlatform()) {{
+      syncOk = openViaWindow(chatUrl);
+      if (syncOk) {{
+        dialogOpened = true;
+        setStatus("Открыли диалог. Если вкладка не появилась — разрешите всплывающие окна браузера.", true);
       }}
     }}
+
+    // Мобилка: только OpenURL. Без Close — иначе выкидывает туда, откуда открыли ссылку.
+    if (isMobilePlatform()) {{
+      var waitMs = fromUserTap ? 1600 : 500;
+      viaBridge(chatUrl, waitMs)
+        .catch(function () {{ return viaBridge(chatUrlRu, waitMs); }})
+        .then(function () {{
+          dialogOpened = true;
+        }})
+        .catch(function () {{
+          if (fromUserTap) {{
+            try {{
+              window.location.replace(chatUrl);
+            }} catch (_) {{}}
+          }}
+          setDialogLinkButton();
+          setStatus(
+            "Сообщение уже в личке. Нажмите «Открыть диалог VK».",
+            true
+          );
+        }});
+      return;
+    }}
+
+    function tryUrl(index) {{
+      if (index >= urls.length) {{
+        if (fromUserTap && !syncOk && !dialogOpened) {{
+          setStatus(
+            "Не удалось открыть диалог автоматически. Нажмите «Открыть диалог VK» — текст уже в личке.",
+            false
+          );
+        }}
+        return;
+      }}
+      viaBridge(urls[index], 2500)
+        .then(function () {{
+          dialogOpened = true;
+        }})
+        .catch(function () {{
+          tryUrl(index + 1);
+        }});
+    }}
+
+    tryUrl(0);
+  }}
+
+  function markDialogReady(statusText) {{
+    dialogReady = true;
+    setDialogLinkButton();
+    setStatus(
+      statusText ||
+        "Готово! Сообщение уже в личке. Если диалог не открылся — нажмите «Открыть диалог VK».",
+      true
+    );
   }}
 
   function requestPermissionAndSend(flow) {{
-    if (permissionRequested) return;
+    if (permissionRequested || entrySent) return;
     permissionRequested = true;
     sending = false;
     setStatus("Открываем запрос VK…", true);
@@ -774,11 +1164,14 @@ def _mini_app_html(default_flow: str = "") -> str:
     }}), 8000)
       .then(function (data) {{
         clearTimeout(slowTimer);
+        // После «Разрешить» открываем диалог из того же жеста, потом шлём текст.
         if (data && data.result) {{
+          openDialog({{ fromUserTap: true }});
           sendEntry(false);
           return;
         }}
         setStatus("Проверяем разрешение и отправляем сообщение…", true);
+        openDialog({{ fromUserTap: true }});
         sendEntry(false);
       }})
       .catch(function (error) {{
@@ -788,16 +1181,19 @@ def _mini_app_html(default_flow: str = "") -> str:
           return;
         }}
         setStatus("VK не вернул ответ на разрешение. Проверяем и отправляем сообщение…", true);
+        openDialog({{ fromUserTap: true }});
         sendEntry(false);
       }});
   }}
 
   function sendEntry(allowPermissionFallback) {{
-    if (!currentFlow || sending) return;
+    if (!currentFlow || sending || entrySent) return;
     sending = true;
-    setStatus("Отправляем сообщение в VK. Обычно оно приходит в течение пары секунд…", true);
+    setUiBusy(true, "Отправляем…");
+    setStatus("Отправляем в личку и открываем диалог…", true);
     if (!launchParamsQuery || launchParamsQuery.indexOf("vk_") === -1) {{
       sending = false;
+      setUiBusy(false);
       setStatus(
         "Нет параметров запуска VK. Откройте приложение внутри VK (не в обычном браузере): vk.com/app" +
           "{_env_mini_app_id() or '54704296'}" +
@@ -820,13 +1216,15 @@ def _mini_app_html(default_flow: str = "") -> str:
       .then(function (res) {{
         sending = false;
         if (res.ok && res.j && res.j.ok) {{
-          if (isMobilePlatform()) {{
-            setStatus("Готово! Сообщение уже отправлено в личку VK.", true);
-            setTimeout(openDialog, 150);
-          }} else {{
-            dialogReady = true;
-            setStatus("Готово! Сообщение отправлено. Нажмите кнопку выше, чтобы открыть диалог VK.", true);
-            setVisibleButtonText("Открыть диалог VK");
+          entrySent = true;
+          var fromTap = openAfterSendFromTap;
+          openAfterSendFromTap = false;
+          markDialogReady(
+            "Готово! Сообщение в личке. Открываем диалог… Если не открылся — нажмите кнопку ниже."
+          );
+          // Сразу пробуем OpenURL; Close больше не зовём (возвращал к файлу/посту).
+          if (!dialogOpened) {{
+            openDialog({{ fromUserTap: !!fromTap }});
           }}
           return;
         }}
@@ -834,10 +1232,18 @@ def _mini_app_html(default_flow: str = "") -> str:
           requestPermissionAndSend(currentFlow);
           return;
         }}
+        setUiBusy(false);
+        if (currentFlow && flowLabels[currentFlow]) {{
+          setVisibleButtonText(flowLabels[currentFlow].button);
+        }}
         setStatus((res.j && res.j.error) || "Не удалось отправить сообщение.", false);
       }})
       .catch(function () {{
         sending = false;
+        setUiBusy(false);
+        if (currentFlow && flowLabels[currentFlow]) {{
+          setVisibleButtonText(flowLabels[currentFlow].button);
+        }}
         setStatus("Сеть недоступна. Попробуйте ещё раз.", false);
       }});
   }}
@@ -868,25 +1274,48 @@ def _mini_app_html(default_flow: str = "") -> str:
     }});
   }}
 
-  function messagesAlreadyAllowed() {{
-    return new URLSearchParams(window.location.search || "").get("vk_are_notifications_enabled") === "1";
-  }}
+  var pendingStartTimer = null;
+  var entrySent = false;
 
-  function start(flow) {{
+  function start(flow, opts) {{
+    opts = opts || {{}};
+    if (sending || entrySent) return;
     if (!setFlow(flow, true)) {{
       setStatus("Неизвестный сценарий.", false);
       return;
     }}
+    // С тапа не открываем диалог сразу — сначала шлём текст, потом openDialog.
+    // Иначе повторный тап во время автостарта уводит в «общий раздел».
+    if (opts.fromUserTap) {{
+      openAfterSendFromTap = true;
+    }}
+    setUiBusy(true, "Отправляем…");
     sendEntry(true);
   }}
 
   function autoStart(flow) {{
-    if (!flow || autoStarted) return;
+    if (!flow || entrySent || sending) return;
+    if (!flowLabels[flow]) return;
+    // До отправки можно поправить flow, если hash/launch params пришли позже handoff.
+    if (autoStarted && currentFlow === flow) return;
+    if (autoStarted && currentFlow && currentFlow !== flow && pendingStartTimer) {{
+      clearTimeout(pendingStartTimer);
+      pendingStartTimer = null;
+    }} else if (autoStarted && currentFlow && currentFlow !== flow && !pendingStartTimer) {{
+      // Уже ушли в send другого сценария — не перебиваем.
+      if (sending || dialogReady) return;
+    }}
     autoStarted = true;
-    setFlow(flow, true);
-    setTimeout(function () {{
-      start(flow);
-    }}, 250);
+    if (!setFlow(flow, true)) return;
+    // Сразу гасим CTA, чтобы за ожидание не жали «Участвовать…» повторно.
+    setUiBusy(true, "Отправляем…");
+    setStatus("Отправляем в личку и открываем диалог…", true);
+    if (pendingStartTimer) clearTimeout(pendingStartTimer);
+    pendingStartTimer = setTimeout(function () {{
+      pendingStartTimer = null;
+      if (entrySent || sending) return;
+      start(flow, {{ fromUserTap: false }});
+    }}, 80);
   }}
 
   bridge.send("VKWebAppInit").catch(function () {{}});
@@ -901,7 +1330,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     var data = raw.data || (raw.detail && raw.detail.data) || {{}};
     if (type !== "VKWebAppLocationChanged" && type !== "VKWebAppChangeFragment") return;
     var flow = parseFlowValue(data.location || data.hash || data.fragment || "");
-    if (flow && !currentFlow) setFlow(flow, true);
+    if (flow) autoStart(flow);
   }}
 
   window.addEventListener("message", handleFragmentEvent);
@@ -911,15 +1340,26 @@ def _mini_app_html(default_flow: str = "") -> str:
     var button = event.target.closest("[data-flow]");
     if (!button) return;
     if (dialogReady) {{
-      openDialog();
+      if (button.tagName === "A") {{
+        openDialog({{ fromUserTap: true, skipSync: true }});
+        return;
+      }}
+      event.preventDefault();
+      openDialog({{ fromUserTap: true }});
       return;
     }}
-    start(button.getAttribute("data-flow"));
+    // Пока идёт автоотправка — игнорируем тапы (иначе уносит в общий раздел).
+    if (uiBusy || sending || entrySent || autoStarted) {{
+      event.preventDefault();
+      return;
+    }}
+    event.preventDefault();
+    start(button.getAttribute("data-flow"), {{ fromUserTap: true }});
   }});
 
   function showAllFlows() {{
-    titleEl.textContent = "Бронирование";
-    leadEl.textContent = "Забронируйте места на шоу — продолжение в личке VK.";
+    titleEl.textContent = "Moscow StandUp Show";
+    leadEl.textContent = "Выберите действие — продолжение в личке VK.";
     actionsEl.hidden = false;
     actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
       var flow = button.getAttribute("data-flow");
@@ -934,23 +1374,26 @@ def _mini_app_html(default_flow: str = "") -> str:
     }});
   }}
 
-  var initialFlow = flowFromLocation() || parseFlowValue(serverFlow);
-  if (initialFlow) {{
-    setFlow(initialFlow, true);
-    autoStart(initialFlow);
+  // Не стартуем сразу из server handoff: в VK hash часто приходит чуть позже
+  // через GetLaunchParams, иначе все ссылки уезжают в booking.
+  var earlyFlow = flowFromLocation();
+  if (earlyFlow) {{
+    setFlow(earlyFlow, true);
   }} else {{
     showAllFlows();
   }}
   bridge.send("VKWebAppGetLaunchParams").then(function (data) {{
     rememberLaunchParams(data);
-    var flow = flowFromLaunchParams(data);
+    var flow = resolveFlow(data) || currentFlow;
     if (flow) {{
       autoStart(flow);
-    }} else if (!currentFlow) {{
+    }} else {{
       showAllFlows();
     }}
   }}).catch(function () {{
-    if (!currentFlow) showAllFlows();
+    var flow = flowFromLocation() || currentFlow || parseFlowValue(serverFlow);
+    if (flow) autoStart(flow);
+    else showAllFlows();
   }});
 }})();
 </script>
@@ -1002,7 +1445,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     [hidden] {{ display: none !important; }}
     .cta {{
       display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
-      padding: 14px 16px; cursor: pointer;
+      padding: 14px 16px; cursor: pointer; text-align: center; text-decoration: none;
       background: linear-gradient(180deg, #f0d48a 0%, var(--gold-deep) 100%);
       color: #1a1208; font: 700 16px Manrope, sans-serif;
       box-shadow: 0 8px 28px rgba(201, 162, 39, .28);
@@ -1025,6 +1468,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     <h1 id="title">Бронирование</h1>
     {body}
   </main>
+  <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
   {app_js}
 </body>
 </html>"""
@@ -1040,9 +1484,12 @@ async def mini_app_start(request: web.Request) -> web.Response:
     flow_key = str(request.match_info.get("flow") or "").strip()
     if flow_key not in FLOWS:
         raise web.HTTPNotFound(text="Unknown VK Mini App flow")
+    # Запасной handoff по IP, если клиент срежет #flow=.
     _remember_mini_flow(request, flow_key)
     settings = load_vk_settings()
-    raise web.HTTPFound(_mini_app_vk_url(settings))
+    target = _mini_app_vk_url(settings, flow_key)
+    # Не HTTP-редирект: на телефоне он часто даёт белый экран.
+    return _html_response(_mini_start_bridge_html(flow_key, target))
 
 
 def _verify_mini_launch_params(raw_query: str) -> tuple[bool, dict[str, str], str]:
@@ -1183,7 +1630,7 @@ async def mini_entry_post(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "Неизвестный сценарий."}, status=400)
     if flow_key not in MINI_APP_VISIBLE_FLOWS:
         return web.json_response(
-            {"ok": False, "error": "Сейчас доступно только бронирование."},
+            {"ok": False, "error": "Этот сценарий сейчас недоступен."},
             status=400,
         )
 

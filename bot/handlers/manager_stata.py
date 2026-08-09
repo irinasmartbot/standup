@@ -1,7 +1,8 @@
-"""Списки подтверждённых броней для менеджера.
+"""Списки броней для менеджера.
 
-- ?start=new_stata — Проверка материала
-- ?start=new_stata_rozygr — розыгрыш (бронь на BEST)
+- ?start=new_stata — Проверка материала (только подтверждённые)
+- ?start=new_stata_all — Проверка: все / подтверждённые / не подтвердили
+- ?start=new_stata_rozygr — розыгрыш (бронь на BEST, только подтверждённые)
 """
 
 from __future__ import annotations
@@ -31,22 +32,33 @@ CHOOSE_DATE_TEXT_PROVERKA = (
     "с билетом на проверку материала.\n\n"
     "Если нужной даты нет — напиши в формате DD.MM.YYYY"
 )
+CHOOSE_DATE_TEXT_ALL = (
+    "Выбери дату, на которую нужно получить полный список броней "
+    "на проверку материала (все / подтверждённые / не подтвердили).\n\n"
+    "Если нужной даты нет — напиши в формате DD.MM.YYYY"
+)
 CHOOSE_DATE_TEXT_ROZYGR = (
     "Выбери дату, на которую нужно получить список гостей "
     "с билетом по розыгрышу.\n\n"
     "Если нужной даты нет — напиши в формате DD.MM.YYYY"
 )
 EMPTY_TEXT_PROVERKA = "Нет подтверждённых броней на указанную дату"
+EMPTY_TEXT_ALL = "Нет активных броней на указанную дату"
 EMPTY_TEXT_ROZYGR = "Нет подтверждённых броней розыгрыша на указанную дату"
 
 # mode -> (callback prefix, event_format, booking_format, choose text, empty text)
 _MODE = {
     "proverka": ("nst", "proverka", "proverka", CHOOSE_DATE_TEXT_PROVERKA, EMPTY_TEXT_PROVERKA),
+    "all": ("nsta", "proverka", "proverka", CHOOSE_DATE_TEXT_ALL, EMPTY_TEXT_ALL),
     "rozygr": ("nstr", "best", "rozygrysh", CHOOSE_DATE_TEXT_ROZYGR, EMPTY_TEXT_ROZYGR),
 }
 
 
 class ManagerStata(StatesGroup):
+    choosing_date = State()
+
+
+class ManagerStataAll(StatesGroup):
     choosing_date = State()
 
 
@@ -59,7 +71,11 @@ def _mode_cfg(mode: str):
 
 
 def _state_for_mode(mode: str):
-    return ManagerStataRozygr.choosing_date if mode == "rozygr" else ManagerStata.choosing_date
+    if mode == "rozygr":
+        return ManagerStataRozygr.choosing_date
+    if mode == "all":
+        return ManagerStataAll.choosing_date
+    return ManagerStata.choosing_date
 
 
 def _rolling_calendar_dates(count: int = ROZYGR_DATE_BUTTONS) -> list[str]:
@@ -135,10 +151,7 @@ def _show_header(row: dict) -> str:
     return escape(venue or "Шоу")
 
 
-def build_stata_report(rows: list[dict], *, empty_text: str = EMPTY_TEXT_PROVERKA) -> str:
-    if not rows:
-        return empty_text
-
+def _group_by_show(rows: list[dict]) -> list[tuple[dict, list[dict]]]:
     groups: list[tuple[dict, list[dict]]] = []
     current_key = None
     current_header_row = None
@@ -156,7 +169,14 @@ def build_stata_report(rows: list[dict], *, empty_text: str = EMPTY_TEXT_PROVERK
             current_rows.append(row)
     if current_header_row is not None:
         groups.append((current_header_row, current_rows))
+    return groups
 
+
+def build_stata_report(rows: list[dict], *, empty_text: str = EMPTY_TEXT_PROVERKA) -> str:
+    if not rows:
+        return empty_text
+
+    groups = _group_by_show(rows)
     blocks: list[str] = []
     day_guests = 0
     for header_row, group_rows in groups:
@@ -169,6 +189,57 @@ def build_stata_report(rows: list[dict], *, empty_text: str = EMPTY_TEXT_PROVERK
 
     if len(blocks) > 1:
         blocks.append(f"Всего за день: {day_guests}")
+    return "\n\n".join(blocks)
+
+
+def _section_block(title: str, rows: list[dict]) -> list[str]:
+    guests = sum(int(r.get("guests") or 0) for r in rows)
+    lines = [f"<b>{escape(title)}</b> · {guests}"]
+    if rows:
+        lines.extend(_guest_line(r) for r in rows)
+    else:
+        lines.append("—")
+    return lines
+
+
+def build_stata_report_all(rows: list[dict], *, empty_text: str = EMPTY_TEXT_ALL) -> str:
+    """Один блок на шоу: все брони → подтверждённые → не подтвердили."""
+    if not rows:
+        return empty_text
+
+    groups = _group_by_show(rows)
+    blocks: list[str] = []
+    day_all = 0
+    day_confirmed = 0
+    day_booked = 0
+
+    for header_row, group_rows in groups:
+        confirmed = [r for r in group_rows if (r.get("status") or "") == "confirmed"]
+        booked = [r for r in group_rows if (r.get("status") or "") == "booked"]
+        # «Все» = активные (booked + confirmed), в стабильном порядке.
+        all_rows = confirmed + booked
+
+        g_all = sum(int(r.get("guests") or 0) for r in all_rows)
+        g_conf = sum(int(r.get("guests") or 0) for r in confirmed)
+        g_booked = sum(int(r.get("guests") or 0) for r in booked)
+        day_all += g_all
+        day_confirmed += g_conf
+        day_booked += g_booked
+
+        lines = [_show_header(header_row), ""]
+        lines.extend(_section_block("Все брони", all_rows))
+        lines.append("")
+        lines.extend(_section_block("Подтверждённые", confirmed))
+        lines.append("")
+        lines.extend(_section_block("Не подтвердили", booked))
+        lines.append("")
+        lines.append(f"Итого: все {g_all} · подтв. {g_conf} · не подтв. {g_booked}")
+        blocks.append("\n".join(lines))
+
+    if len(blocks) > 1:
+        blocks.append(
+            f"Всего за день: все {day_all} · подтв. {day_confirmed} · не подтв. {day_booked}"
+        )
     return "\n\n".join(blocks)
 
 
@@ -224,6 +295,10 @@ async def send_manager_stata_start(message: Message, state: FSMContext):
     await _start_for_mode(message, state, "proverka")
 
 
+async def send_manager_stata_all_start(message: Message, state: FSMContext):
+    await _start_for_mode(message, state, "all")
+
+
 async def send_manager_stata_rozygr_start(message: Message, state: FSMContext):
     await _start_for_mode(message, state, "rozygr")
 
@@ -250,12 +325,21 @@ async def _send_report(message: Message, state: FSMContext, event_date: str, mod
     await state.set_state(_state_for_mode(mode))
     await state.update_data(stata_mode=mode)
     _, event_format, booking_format, _, empty_text = _mode_cfg(mode)
-    rows = get_manager_stata_bookings_for_date(
-        event_date,
-        booking_format=booking_format,
-        event_format=event_format,
-    )
-    text = build_stata_report(rows, empty_text=empty_text)
+    if mode == "all":
+        rows = get_manager_stata_bookings_for_date(
+            event_date,
+            booking_format=booking_format,
+            event_format=event_format,
+            statuses=("booked", "confirmed"),
+        )
+        text = build_stata_report_all(rows, empty_text=empty_text)
+    else:
+        rows = get_manager_stata_bookings_for_date(
+            event_date,
+            booking_format=booking_format,
+            event_format=event_format,
+        )
+        text = build_stata_report(rows, empty_text=empty_text)
     chunks = _split_text(text)
     markup = _back_keyboard(mode)
 
@@ -298,6 +382,22 @@ async def nst_date(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
+@router.callback_query(F.data == "nsta:back")
+async def nsta_back(call: CallbackQuery, state: FSMContext):
+    await _show_dates(call.message, state, "all", edit=True)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("nsta:d:"))
+async def nsta_date(call: CallbackQuery, state: FSMContext):
+    event_date = call.data.split(":", 2)[2]
+    if not DATE_RE.match(event_date or ""):
+        await call.answer("Некорректная дата", show_alert=True)
+        return
+    await _send_report(call.message, state, event_date, "all", edit=True)
+    await call.answer()
+
+
 @router.callback_query(F.data == "nstr:back")
 async def nstr_back(call: CallbackQuery, state: FSMContext):
     await _show_dates(call.message, state, "rozygr", edit=True)
@@ -321,6 +421,15 @@ async def nst_typed_date(message: Message, state: FSMContext):
         await message.answer("Нужна дата в формате DD.MM.YYYY, например 31.07.2026")
         return
     await _send_report(message, state, raw, "proverka", edit=False)
+
+
+@router.message(ManagerStataAll.choosing_date, F.chat.type == "private", F.text)
+async def nsta_typed_date(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    if not DATE_RE.match(raw):
+        await message.answer("Нужна дата в формате DD.MM.YYYY, например 31.07.2026")
+        return
+    await _send_report(message, state, raw, "all", edit=False)
 
 
 @router.message(ManagerStataRozygr.choosing_date, F.chat.type == "private", F.text)

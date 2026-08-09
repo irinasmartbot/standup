@@ -10,10 +10,28 @@ https://go.moscowstandupshow.ru/vk/raffle
 https://go.moscowstandupshow.ru/vk/offline-gift
 ```
 
-Mini App:
+Mini App (канонические ссылки — внутри VK):
+
+```text
+https://vk.com/app54704296_-225298932#flow=booking
+https://vk.com/app54704296_-225298932#flow=raffle
+https://vk.com/app54704296_-225298932#flow=offline_gift
+```
+
+`225298932` — `VK_GROUP_ID` сообщества, к которому привязан mini app.  
+`54704296` — `VK_MINI_APP_ID`.
+
+В кабинете VK Mini App поле **URL приложения** должно быть ровно:
 
 ```text
 https://go.moscowstandupshow.ru/vk-mini
+```
+
+Не `.../vk-mini/start/booking` — иначе все `#flow=` ссылки открывают бронирование.
+
+Служебные URL на `go…` (редиректят в VK с `#flow=`):
+
+```text
 https://go.moscowstandupshow.ru/vk-mini/start/booking
 https://go.moscowstandupshow.ru/vk-mini/start/raffle
 https://go.moscowstandupshow.ru/vk-mini/start/offline_gift

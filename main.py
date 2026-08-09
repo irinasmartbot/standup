@@ -2,7 +2,12 @@ import asyncio
 import logging
 import traceback
 
-from aiogram.exceptions import TelegramNetworkError, TelegramServerError
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramServerError,
+)
 from aiogram.types import ErrorEvent
 
 from bot.config import MODERATION_CHAT_ID, TECH_CHAT_ID, bot, dp
@@ -20,19 +25,48 @@ from bot.utils.tech_alerts import format_alert, notify_tech, notify_tech_sync
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Обычные отказы Telegram: не баги, в техчат не шлём.
+_IGNORE_TG_MARKERS = (
+    "bot was blocked by the user",
+    "user is deactivated",
+    "chat not found",
+    "bot can't initiate conversation",
+    "have no rights to send a message",
+)
+
 
 @dp.errors()
 async def on_unhandled_error(event: ErrorEvent):
     exc = event.exception
-    logger.exception("Unhandled update error: %s", exc)
-    # Сетевые сбои Telegram не шлём в техчат — иначе шум при Bad Gateway.
-    if isinstance(exc, (TelegramNetworkError, TelegramServerError)):
+    # Сетевые сбои / блокировки пользователя — шум, не инцидент.
+    if isinstance(exc, (TelegramNetworkError, TelegramServerError, TelegramForbiddenError)):
+        logger.warning("Ignored update error: %s", exc)
         return True
+    if isinstance(exc, TelegramBadRequest):
+        msg = str(exc).lower()
+        if any(m in msg for m in _IGNORE_TG_MARKERS):
+            logger.warning("Ignored update error: %s", exc)
+            return True
+    logger.exception("Unhandled update error: %s", exc)
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    update_hint = type(event.update).__name__ if event.update else "update"
+    update = event.update
+    update_hint = type(update).__name__ if update else "update"
+    # Короткий контекст: callback data / текст, без огромного JSON.
+    ctx = ""
+    try:
+        if update and update.callback_query:
+            cq = update.callback_query
+            ctx = f"callback data={cq.data!r} from={getattr(cq.from_user, 'id', None)}"
+        elif update and update.message:
+            msg = update.message
+            ctx = f"message text={(msg.text or msg.caption or '')[:120]!r} from={getattr(msg.from_user, 'id', None)}"
+    except Exception:
+        ctx = ""
+    head = f"{type(exc).__name__}: {exc}"
+    body = "\n".join(part for part in (head, ctx, f"update={update_hint}", tb) if part)
     text = format_alert(
         "TG bot: необработанная ошибка",
-        f"{update_hint}\n{tb}",
+        body,
         source="standup-bot",
     )
     await notify_tech(text, key="tg_unhandled", throttle_sec=180, bot=bot)

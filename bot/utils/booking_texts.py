@@ -1,9 +1,10 @@
 """Общие тексты для подтверждения брони."""
 
+from datetime import datetime
 from html import escape
 
 from bot.db.crud import get_same_day_bookings_summary
-from bot.utils.ticket import format_date
+from bot.utils.ticket import format_date, now_msk
 
 _FORMAT_LABELS = {
     "proverka": "проверка материала",
@@ -82,4 +83,77 @@ def reminder_details_cut(*, event_time: str, location_line: str, guests: int) ->
         f"5. Количество гостей — {guests} чел.\n"
         "6. Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО ПРЕДУПРЕДИТЕ 😊"
         "</blockquote>"
+    )
+
+
+def ticket_window_open(event_date: str) -> bool:
+    """True если уже можно получить билет (за сутки и в день шоу)."""
+    try:
+        days_until = (datetime.strptime(event_date, "%d.%m.%Y").date() - now_msk().date()).days
+    except Exception:
+        return False
+    return days_until <= 1
+
+
+def proverka_reminder_24h_text(
+    *,
+    date_str: str,
+    event_time: str,
+    address_line: str,
+    guests: int,
+    expandable: bool = True,
+) -> str:
+    """Текст напоминания за сутки для проверки материала (TG/VK)."""
+    time = escape(event_time or "")
+    address = escape((address_line or "").strip())
+    if address and not address.lower().startswith("адрес"):
+        address_display = f"📍 Адрес {address}"
+        if not address_display.rstrip().endswith("."):
+            address_display += "."
+    else:
+        address_display = f"📍 {address}" if address else "📍 Адрес"
+    body = (
+        f"Привет! 😊 Пишу подтвердить бронь на завтрашнюю проверку материала "
+        f"({escape(date_str)})! 🎤\n\n"
+        "<u>Чтобы подтвердить бронь, нажми на кнопку «Получить билет»</u>\n"
+        "❗ <b>Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.</b>\n\n"
+        "Напоминаем, что :\n"
+        f"1. Сбор гостей начинается за полчаса до начала шоу, старт в {time}\n"
+        "2. Рассадка осуществляется по мере прихода, чтобы занять лучшие места, "
+        "приходите вовремя ☝️ Возможна подсадка за один стол других гостей "
+        "для небольших компаний.\n"
+        "3. Обратите внимание, что при посещении шоу заказ минимум одной позиции "
+        "по меню является обязательным.\n"
+        f"4. <u>{address_display}</u>\n"
+        f"5. Количество гостей - {int(guests)} чел.\n"
+        "6. Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО ПРЕДУПРЕДИТЕ 😊"
+    )
+    if expandable:
+        return f"<blockquote expandable>{body}</blockquote>"
+    return body
+
+
+def raffle_reminder_24h_text(
+    *,
+    event_time: str,
+    location_line: str,
+    guests: int,
+    expandable: bool = True,
+) -> str:
+    """Текст напоминания за сутки для розыгрыша (как в TG)."""
+    details = reminder_details_cut(
+        event_time=event_time,
+        location_line=location_line,
+        guests=guests or 1,
+    )
+    if not expandable:
+        details = (
+            details.replace("<blockquote expandable>", "")
+            .replace("</blockquote>", "")
+        )
+    return (
+        "Привет! 😊 Пишу подтвердить бронь на завтрашнее ШОУ! 🎤\n\n"
+        "<b>Чтобы подтвердить бронь, нажми на кнопку «Получить билет»</b>\n"
+        "❗️ <b>Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.</b>\n\n"
+        f"{details}"
     )

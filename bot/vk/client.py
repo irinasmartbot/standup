@@ -3,6 +3,7 @@ import json
 import logging
 import random
 import ssl
+from io import BytesIO
 from typing import Any, AsyncIterator
 
 import aiohttp
@@ -10,6 +11,38 @@ import aiohttp
 from bot.vk.config import VKSettings
 
 logger = logging.getLogger(__name__)
+
+# VK upload часто отвечает photo="" / "[]" на «кривой» файл или слишком большой JPEG.
+_VK_PHOTO_MAX_SIDE = 2560
+_VK_PHOTO_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _prepare_vk_message_jpeg(image_bytes: bytes, *, quality: int = 85) -> bytes:
+    """Baseline JPEG, RGB — стабильнее для photos.saveMessagesPhoto."""
+    from PIL import Image
+
+    img = Image.open(BytesIO(image_bytes)).convert("RGB")
+    w, h = img.size
+    if max(w, h) > _VK_PHOTO_MAX_SIDE:
+        img.thumbnail((_VK_PHOTO_MAX_SIDE, _VK_PHOTO_MAX_SIDE), Image.Resampling.LANCZOS)
+    out = BytesIO()
+    img.save(out, format="JPEG", quality=int(quality), optimize=True, progressive=False)
+    data = out.getvalue()
+    # Если всё ещё тяжело — ещё сильнее жмём.
+    if len(data) > _VK_PHOTO_MAX_BYTES and quality > 60:
+        return _prepare_vk_message_jpeg(image_bytes, quality=max(55, quality - 20))
+    return data
+
+
+def _upload_photo_ok(uploaded: Any) -> bool:
+    if not isinstance(uploaded, dict):
+        return False
+    photo = uploaded.get("photo")
+    if photo is None or photo in {"", "[]", "null", "undefined"}:
+        return False
+    if uploaded.get("server") is None or not uploaded.get("hash"):
+        return False
+    return True
 
 
 class VKAPIError(RuntimeError):
@@ -130,7 +163,7 @@ class VKClient:
     async def edit_message(
         self,
         peer_id: int,
-        text: str,
+        text: str | None = None,
         *,
         message_id: int | None = None,
         conversation_message_id: int | None = None,
@@ -142,16 +175,19 @@ class VKClient:
 
         Prefer message_id when known; conversation_message_id works after bot restart
         (comes from message_event on the button that was clicked).
+        Pass text=None to keep body and only update keyboard/attachment when API allows.
         """
         if not message_id and not conversation_message_id:
             return False
         from bot.vk.formatting import prepare_vk_message
 
-        plain, auto_format = prepare_vk_message(text)
         params: dict[str, Any] = {
             "peer_id": int(peer_id),
-            "message": plain,
         }
+        auto_format = None
+        if text is not None:
+            plain, auto_format = prepare_vk_message(text)
+            params["message"] = plain
         if message_id:
             params["message_id"] = int(message_id)
         else:
@@ -313,38 +349,69 @@ class VKClient:
 
     async def upload_message_photo(self, peer_id: int, image_bytes: bytes, *, filename: str = "photo.jpg") -> str:
         """Upload image bytes and return VK attachment id for messages.send."""
-        server = await self.api("photos.getMessagesUploadServer", peer_id=peer_id)
-        upload_url = server["upload_url"]
-        lower = filename.lower()
-        if lower.endswith(".png"):
-            content_type = "image/png"
-        elif lower.endswith(".webp"):
-            content_type = "image/webp"
-        else:
-            content_type = "image/jpeg"
-        form = aiohttp.FormData()
-        form.add_field(
-            "photo",
-            image_bytes,
-            filename=filename,
-            content_type=content_type,
-        )
-        async with aiohttp.ClientSession(connector=_connector()) as session:
-            async with session.post(upload_url, data=form) as resp:
-                uploaded = await resp.json(content_type=None)
-        saved = await self.api(
-            "photos.saveMessagesPhoto",
-            photo=uploaded["photo"],
-            server=uploaded["server"],
-            hash=uploaded["hash"],
-        )
-        if not saved:
-            raise VKAPIError("VK did not return saved photo")
-        photo = saved[0]
-        attachment = f"photo{photo['owner_id']}_{photo['id']}"
-        if photo.get("access_key"):
-            attachment = f"{attachment}_{photo['access_key']}"
-        return attachment
+        if not image_bytes:
+            raise VKAPIError("empty image bytes for VK upload")
+
+        # Всегда прогоняем через Pillow→JPEG: сырой PNG/webp/битый буфер
+        # часто даёт photo=undefined на saveMessagesPhoto.
+        last_err = "VK photo upload failed"
+        for quality in (85, 70, 55):
+            try:
+                payload = _prepare_vk_message_jpeg(image_bytes, quality=quality)
+            except Exception as exc:
+                logger.warning("VK image normalize failed, using raw bytes: %s", exc)
+                payload = image_bytes
+                quality = 0  # only one attempt with raw
+
+            upload_name = "photo.jpg"
+            if filename and "." in filename:
+                upload_name = f"{filename.rsplit('.', 1)[0]}.jpg"
+
+            try:
+                server = await self.api("photos.getMessagesUploadServer", peer_id=int(peer_id))
+                upload_url = server["upload_url"]
+                form = aiohttp.FormData()
+                form.add_field(
+                    "photo",
+                    BytesIO(payload),
+                    filename=upload_name,
+                    content_type="image/jpeg",
+                )
+                async with aiohttp.ClientSession(connector=_connector()) as session:
+                    async with session.post(upload_url, data=form) as resp:
+                        uploaded = await resp.json(content_type=None)
+            except Exception as exc:
+                last_err = f"VK upload HTTP failed: {exc}"
+                logger.warning("%s peer_id=%s q=%s", last_err, peer_id, quality)
+                if quality == 0:
+                    break
+                continue
+
+            if not _upload_photo_ok(uploaded):
+                last_err = f"VK upload empty photo (size={len(payload)} resp={uploaded!r})"
+                logger.warning("%s peer_id=%s q=%s", last_err, peer_id, quality)
+                if quality == 0:
+                    break
+                continue
+
+            saved = await self.api(
+                "photos.saveMessagesPhoto",
+                photo=uploaded["photo"],
+                server=uploaded["server"],
+                hash=uploaded["hash"],
+            )
+            if not saved:
+                last_err = "VK did not return saved photo"
+                if quality == 0:
+                    break
+                continue
+            photo = saved[0]
+            attachment = f"photo{photo['owner_id']}_{photo['id']}"
+            if photo.get("access_key"):
+                attachment = f"{attachment}_{photo['access_key']}"
+            return attachment
+
+        raise VKAPIError(last_err)
 
     async def get_user_display_name(self, user_id: int) -> str:
         response = await self.api("users.get", user_ids=int(user_id))

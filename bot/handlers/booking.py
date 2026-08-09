@@ -1,3 +1,4 @@
+import logging
 import os
 import random
 from datetime import datetime
@@ -30,6 +31,10 @@ from bot.services.sheets import load_events, get_event
 from bot.utils.bot_commands import refresh_user_commands
 from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
 from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
+from bot.utils.tg_callback import message_text, reply_target
+
+logger = logging.getLogger(__name__)
+
 from bot.utils.ticket import (
     MONTHS,
     format_date,
@@ -110,12 +115,16 @@ async def _answer_with_check_photo(message, text: str, reply_markup=None, parse_
 
 
 async def _delete_previous_menu_message(call: CallbackQuery):
-    text = call.message.text or call.message.caption or ""
+    msg = call.message
+    if msg is None:
+        return
+    # Старое сообщение могли удалить / оно InaccessibleMessage — без .text/.caption.
+    text = message_text(msg)
     if WELCOME_MARKER in text:
         return
-    forget_booking_nav(call.message.chat.id, call.message.message_id)
+    forget_booking_nav(msg.chat.id, msg.message_id)
     try:
-        await call.message.delete()
+        await reply_target(call).delete()
     except Exception:
         pass
 
@@ -261,7 +270,7 @@ async def check_format_entry(message):
 @router.callback_query(lambda c: c.data == "check")
 async def check_format(call: CallbackQuery):
     await _delete_previous_menu_message(call)
-    await check_format_entry(call.message)
+    await check_format_entry(reply_target(call))
     await call.answer()
 
 
@@ -271,24 +280,26 @@ async def check_dates(call: CallbackQuery):
     await call.answer()
     kb = await check_dates_kb()
     text = "Выбирай дату 👇"
+    message = reply_target(call)
     # Быстрый путь: правим текущее сообщение (карточка «уже забронировали» — текст без фото).
     try:
-        if call.message.photo:
+        if getattr(call.message, "photo", None):
             await call.message.edit_caption(caption=text, reply_markup=kb)
         else:
             await call.message.edit_text(text, reply_markup=kb)
-        forget_booking_nav(call.message.chat.id, call.message.message_id)
-        remember_booking_nav(call.message.chat.id, call.message.message_id)
+        forget_booking_nav(message.chat.id, call.message.message_id)
+        remember_booking_nav(message.chat.id, call.message.message_id)
         return
     except Exception:
         pass
     await _delete_previous_menu_message(call)
-    await _answer_with_check_photo(call.message, text, reply_markup=kb, track_nav=True)
+    await _answer_with_check_photo(reply_target(call), text, reply_markup=kb, track_nav=True)
 
 
 @router.callback_query(lambda c: c.data == "by_venue")
 async def by_venue(call: CallbackQuery):
     await _delete_previous_menu_message(call)
+    message = reply_target(call)
     events = await load_events()
     venues = sorted(set(e["location"] for e in events))
     kb = InlineKeyboardBuilder()
@@ -298,7 +309,7 @@ async def by_venue(call: CallbackQuery):
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     # Площадки по 1 в ряд, служебные кнопки — отдельными строками
     kb.adjust(*([1] * len(venues)), 1, 1)
-    await _answer_with_check_photo(call.message, "Выбирай локацию 👇", reply_markup=kb.as_markup(), track_nav=True)
+    await _answer_with_check_photo(message, "Выбирай локацию 👇", reply_markup=kb.as_markup(), track_nav=True)
     await call.answer()
 
 
@@ -309,6 +320,7 @@ async def by_venue(call: CallbackQuery):
 )
 async def venue_events(call: CallbackQuery):
     await _delete_previous_menu_message(call)
+    message = reply_target(call)
     venue = call.data.replace("venue_", "")
     events = await load_events()
     filtered = sorted(
@@ -317,7 +329,7 @@ async def venue_events(call: CallbackQuery):
     )
     if len(filtered) == 1:
         await send_event_card(
-            call.message, filtered[0], back_callback="by_venue", telegram_id=call.from_user.id
+            message, filtered[0], back_callback="by_venue", telegram_id=call.from_user.id
         )
         await call.answer()
         return
@@ -337,14 +349,15 @@ async def venue_events(call: CallbackQuery):
         widths.append(1)
     widths.append(1)
     kb.adjust(*widths)
-    sent = await call.message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
-    remember_booking_nav(call.message.chat.id, sent.message_id)
+    sent = await message.answer(f"Мероприятия в {venue} 👇", reply_markup=kb.as_markup())
+    remember_booking_nav(message.chat.id, sent.message_id)
     await call.answer()
 
 
 @router.callback_query(F.data.startswith("venue_date_"))
 async def venue_date_events(call: CallbackQuery):
     await _delete_previous_menu_message(call)
+    message = reply_target(call)
     payload = call.data.replace("venue_date_", "", 1)
     date, venue = payload.split("_", 1)
     events = await load_events()
@@ -353,12 +366,12 @@ async def venue_date_events(call: CallbackQuery):
         key=lambda x: x["time"],
     )
     if not day_events:
-        await call.message.answer("Это мероприятие уже прошло 😊", reply_markup=await check_dates_kb())
+        await message.answer("Это мероприятие уже прошло 😊", reply_markup=await check_dates_kb())
         await call.answer()
         return
     if len(day_events) == 1:
         await send_event_card(
-            call.message,
+            message,
             day_events[0],
             back_callback=f"venue_{venue}",
             telegram_id=call.from_user.id,
@@ -374,45 +387,48 @@ async def venue_date_events(call: CallbackQuery):
         )
     kb.button(text="◀️ Назад", callback_data=f"venue_{venue}")
     kb.adjust(1)
-    await call.message.answer("На эту дату несколько мероприятий, выбери нужное 👇", reply_markup=kb.as_markup())
+    await message.answer("На эту дату несколько мероприятий, выбери нужное 👇", reply_markup=kb.as_markup())
     await call.answer()
 
 
 @router.callback_query(F.data.startswith("date_"))
 async def show_event(call: CallbackQuery):
     await _delete_previous_menu_message(call)
+    message = reply_target(call)
     date = call.data.replace("date_", "")
     events = await load_events()
     day_events = [e for e in events if e["date"] == date]
     if not day_events:
-        await call.message.answer("Это мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await check_dates_kb())
+        await message.answer("Это мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await check_dates_kb())
         await call.answer()
         return
     if len(day_events) == 1:
-        await send_event_card(call.message, day_events[0], telegram_id=call.from_user.id)
+        await send_event_card(message, day_events[0], telegram_id=call.from_user.id)
     else:
         kb = InlineKeyboardBuilder()
         for e in day_events:
             kb.button(text=f"🕐 {e['time']} — {e['location']}", callback_data=f"event_{e['date']}_{e['time']}")
         kb.adjust(1)
-        await call.message.answer("На эту дату несколько мероприятий, выбери нужное 👇", reply_markup=kb.as_markup())
+        await message.answer("На эту дату несколько мероприятий, выбери нужное 👇", reply_markup=kb.as_markup())
     await call.answer()
 
 
 @router.callback_query(F.data.startswith("event_"))
 async def show_specific_event(call: CallbackQuery):
     await _delete_previous_menu_message(call)
+    message = reply_target(call)
     event_date, event_time = call.data.replace("event_", "", 1).split("_", 1)
     events = await load_events()
     event = next((e for e in events if e["date"] == event_date and e["time"] == event_time), None)
     if event:
-        await send_event_card(call.message, event, telegram_id=call.from_user.id)
+        await send_event_card(message, event, telegram_id=call.from_user.id)
     await call.answer()
 
 
 @router.callback_query(F.data.startswith("venue_event_"))
 async def show_specific_venue_event(call: CallbackQuery):
     await _delete_previous_menu_message(call)
+    message = reply_target(call)
     venue, event_date, event_time = call.data.replace("venue_event_", "", 1).rsplit("_", 2)
     events = await load_events()
     event = next(
@@ -424,14 +440,14 @@ async def show_specific_venue_event(call: CallbackQuery):
     )
     if event:
         await send_event_card(
-            call.message, event, back_callback=f"venue_{venue}", telegram_id=call.from_user.id
+            message, event, back_callback=f"venue_{venue}", telegram_id=call.from_user.id
         )
     await call.answer()
 
 
 @router.callback_query(lambda c: c.data == "booking_rules")
 async def show_booking_rules(call: CallbackQuery):
-    await call.message.answer(BOOKING_RULES_TEXT, parse_mode="HTML")
+    await reply_target(call).answer(BOOKING_RULES_TEXT, parse_mode="HTML")
     await call.answer()
 
 
@@ -447,7 +463,7 @@ async def _ask_booking_name(call: CallbackQuery, state: FSMContext) -> None:
     kb.button(text="Все верно 👌", callback_data="name_confirm")
     kb.button(text="Изменить", callback_data="name_change")
     kb.adjust(2)
-    await call.message.answer(
+    await reply_target(call).answer(
         f"Для бронирования вам нужно заполнить некоторые данные\n\nВаше имя <b>{escape(name)}</b>, верно?",
         reply_markup=kb.as_markup(),
         parse_mode="HTML",
@@ -853,9 +869,7 @@ async def get_ticket(call: CallbackQuery):
             await call.message.answer("Бронь не найдена или уже отменена.")
             await call.answer()
             return
-        if booking[10] == "confirmed":
-            await call.answer("Билет уже был выдан ранее.", show_alert=True)
-            return
+        already_confirmed = booking[10] == "confirmed"
 
         name = booking[3]
         event_date = booking[5]
@@ -864,30 +878,31 @@ async def get_ticket(call: CallbackQuery):
         event_location = booking[8]
         guests = booking[9]
 
-        event = await get_event(event_date, event_time)
-        if event:
-            confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
-            if confirmed_guests + guests > event["max_seats"]:
-                available = max(0, event["max_seats"] - confirmed_guests)
-                kb = InlineKeyboardBuilder()
-                kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
-                kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
-                kb.adjust(1)
-                await call.message.answer(
-                    "К сожалению, на это мероприятие уже не осталось мест для подтверждения билета.\n\n"
-                    f"Сейчас свободно: {available}."
-                    " Вы можете выбрать другую дату или написать менеджеру.",
-                    reply_markup=kb.as_markup(),
-                )
-                await call.answer()
-                return
+        if not already_confirmed:
+            event = await get_event(event_date, event_time)
+            if event:
+                confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
+                if confirmed_guests + guests > event["max_seats"]:
+                    available = max(0, event["max_seats"] - confirmed_guests)
+                    kb = InlineKeyboardBuilder()
+                    kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
+                    kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+                    kb.adjust(1)
+                    await call.message.answer(
+                        "К сожалению, на это мероприятие уже не осталось мест для подтверждения билета.\n\n"
+                        f"Сейчас свободно: {available}."
+                        " Вы можете выбрать другую дату или написать менеджеру.",
+                        reply_markup=kb.as_markup(),
+                    )
+                    await call.answer()
+                    return
 
         place = format_ticket_place(event_location, event_address)
         ticket_buf = generate_ticket(name, event_date, event_time, place, guests)
-        update_booking_status(booking_id, "confirmed")
+        head = "Ваш билет ещё раз 👇\n\n" if already_confirmed else "Отлично!\n\n"
 
         caption = (
-            "Отлично!\n\n"
+            f"{head}"
             "<b>Данные по билету:</b>\n\n"
             f"<b>Ваше имя:</b> {escape(name or '')}\n"
             f"<b>Дата:</b> {escape(event_date or '')}\n"
@@ -901,13 +916,34 @@ async def get_ticket(call: CallbackQuery):
             f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
             "(там часто дарят бесплатные билеты на платные шоу😉)"
         )
-        ticket_msg = await call.message.answer_photo(
-            photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
-            caption=caption,
-            reply_markup=_manage_kb(booking_id),
-            parse_mode="HTML",
-        )
+        try:
+            ticket_msg = await call.message.answer_photo(
+                photo=BufferedInputFile(ticket_buf.getvalue(), filename=f"ticket_{booking_id}.jpg"),
+                caption=caption,
+                reply_markup=_manage_kb(booking_id),
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.exception("TG ticket send failed booking_id=%s", booking_id)
+            try:
+                from bot.utils.tech_alerts import alert_ticket_failure
+
+                alert_ticket_failure(
+                    channel="telegram",
+                    booking_id=booking_id,
+                    user_id=call.from_user.id if call.from_user else None,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+            await call.message.answer(
+                "Не удалось отправить билет картинкой. Напишите менеджеру — поможем вручную."
+            )
+            await call.answer()
+            return
         save_ticket_message_id(booking_id, ticket_msg.message_id)
+        if not already_confirmed:
+            update_booking_status(booking_id, "confirmed")
         await _remove_ticket_button(booking_id, call.from_user.id)
         await refresh_user_commands(call.message.bot, call.from_user.id)
         await call.answer()
@@ -1049,6 +1085,11 @@ async def change_date_do(call: CallbackQuery):
     await refresh_user_commands(call.message.bot, call.from_user.id)
     await delete_my_bookings_messages(call.message.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
+    track_event(
+        EVENT_BRANCH_PROVERKA,
+        telegram_id=call.from_user.id,
+        props={"via": "change_date"},
+    )
     await call.message.answer("Бронь отменена. Выбери новую дату 👇", reply_markup=await check_dates_kb())
     await call.answer()
 
@@ -1254,8 +1295,27 @@ async def _apply_new_guests(message: Message, state: FSMContext, guests: int) ->
 
     update_booking_guests(booking_id, guests)
     date_str = format_date(booking[5])
+    from bot.db.analytics import EVENT_BOOKING_GUESTS_CHANGED, track_event
+    from bot.utils.booking_texts import ticket_window_open
+
+    track_event(
+        EVENT_BOOKING_GUESTS_CHANGED,
+        telegram_id=message.chat.id,
+        booking_id=int(booking_id),
+        props={"guests": guests},
+    )
+    booking = get_active_booking_by_id(booking_id) or booking
+    status = (booking[10] if len(booking) > 10 else "") or ""
+    has_ticket = status == "confirmed"
+    offer_ticket = ticket_window_open(booking[5]) and not has_ticket
 
     kb = InlineKeyboardBuilder()
+    if offer_ticket:
+        kb.button(
+            text="🎟 Получить билет 🎟",
+            callback_data=f"get_ticket_{booking_id}",
+            style="success",
+        )
     kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
     kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
     kb.button(text="Изменить количество гостей", callback_data=f"change_guests_confirm_{booking_id}")
@@ -1266,6 +1326,18 @@ async def _apply_new_guests(message: Message, state: FSMContext, guests: int) ->
         reply_markup=kb.as_markup(),
     )
     await state.clear()
+    if has_ticket:
+        # Уже был билет — сразу перевыпустить с новым числом гостей.
+        class _FakeCall:
+            def __init__(self):
+                self.message = message
+                self.data = f"get_ticket_{booking_id}"
+                self.from_user = message.from_user
+
+            async def answer(self, *args, **kwargs):
+                return None
+
+        await get_ticket(_FakeCall())
 
 
 @router.callback_query(BookingState.waiting_new_guests, F.data.startswith("new_guests_"))
