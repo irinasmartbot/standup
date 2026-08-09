@@ -445,12 +445,21 @@ class VKBotApp:
         self.peer_venues_message_ids: dict[int, int] = {}
         self.peer_offline_gift_message_ids: dict[int, int] = {}
         self._vk_name_cache: dict[int, str] = {}
+        # Офлайн-розыгрыш: время запуска воронки и отложенные напоминания.
+        self._offline_gift_launch_at: dict[int, float] = {}
+        self._offline_gift_timer_tasks: dict[int, asyncio.Task] = {}
+        self._offline_gift_await_choice: set[int] = set()
         # cmid кнопки из текущего message_event — переживает рестарт бота.
         self._peer_event_cmid: dict[int, int] = {}
         self._seen_event_ids: dict[str, float] = {}
         self._seen_message_ids: dict[int, float] = {}
         self._peer_cmd_cooldown: dict[tuple[int, str], float] = {}
         self._peer_locks: dict[int, asyncio.Lock] = {}
+
+    _OFFLINE_GIFT_ANTIDUPE_SEC = 1800.0
+    _OFFLINE_GIFT_START_WINDOW_SEC = 3600.0
+    _OFFLINE_GIFT_CHOOSE_REMIND_SEC = 300.0
+    _OFFLINE_GIFT_SUB_CHECK_SEC = 120.0
 
     def _vk_id(self, message: dict[str, Any], peer_id: int) -> int:
         from_id = message.get("from_id")
@@ -1251,6 +1260,7 @@ class VKBotApp:
             update_booking_status(booking_id, "cancelled")
             vk_mb.clear_manage_session(self.manage_sessions, vk_id)
             self.peer_context[peer_id] = "check"
+            self._track(vk_id, EVENT_BRANCH_PROVERKA, props={"via": "change_date"})
             await self._send_text(
                 peer_id,
                 "Бронь отменена. Выбери новую дату 👇",
@@ -1330,11 +1340,7 @@ class VKBotApp:
                 )
                 return True
             vk_mb.clear_manage_session(self.manage_sessions, vk_id)
-            await self._send_text(
-                peer_id,
-                msg,
-                keyboard=vk_mb.change_guests_done_keyboard(booking_id),
-            )
+            await self._after_guests_changed(peer_id, vk_id, booking_id, msg)
             return True
 
         if manage and manage.get("step") == vk_mb.STEP_NEW_GUESTS and text:
@@ -1359,14 +1365,40 @@ class VKBotApp:
                 )
                 return True
             vk_mb.clear_manage_session(self.manage_sessions, vk_id)
-            await self._send_text(
-                peer_id,
-                msg,
-                keyboard=vk_mb.change_guests_done_keyboard(booking_id),
-            )
+            await self._after_guests_changed(peer_id, vk_id, booking_id, msg)
             return True
 
         return False
+
+    async def _after_guests_changed(
+        self,
+        peer_id: int,
+        vk_id: int,
+        booking_id: int,
+        msg: str,
+    ) -> None:
+        from bot.db.analytics import EVENT_BOOKING_GUESTS_CHANGED
+        from bot.db.crud import get_active_booking_by_id
+        from bot.utils.booking_texts import ticket_window_open
+
+        booking = get_active_booking_by_id(booking_id)
+        self._track(
+            vk_id,
+            EVENT_BOOKING_GUESTS_CHANGED,
+            booking_id=booking_id,
+            props={"guests": booking[9] if booking else None},
+        )
+        status = (booking[10] if booking else "") or ""
+        event_date = booking[5] if booking else ""
+        has_ticket = status == "confirmed"
+        offer_ticket = bool(event_date) and ticket_window_open(event_date) and not has_ticket
+        await self._send_text(
+            peer_id,
+            msg,
+            keyboard=vk_mb.change_guests_done_keyboard(booking_id, offer_ticket=offer_ticket),
+        )
+        if has_ticket:
+            await self._issue_ticket(peer_id, booking_id)
 
     async def _handle_booking_flow(
         self,
@@ -1832,6 +1864,10 @@ class VKBotApp:
                 "площадки проверки": "check_venues",
                 "в главное меню": "main_menu",
                 "⬅️ в главное меню": "main_menu",
+                "вернуться в меню": "main_menu",
+                "вернуться в меню ↩️": "main_menu",
+                "вернуться в меню 🔄": "main_menu",
+                "меню": "main_menu",
                 "мои брони": "my_bookings",
                 "розыгрыш": "raffle",
                 "подарок": "offline_gift",
@@ -1839,6 +1875,13 @@ class VKBotApp:
                 "чек-лист": "offline_gift",
                 "chek_list": "offline_gift",
                 "check_list": "offline_gift",
+                # Старые текстовые кнопки Salebot → наши сценарии
+                "отменить бронь": "my_bookings",
+                "изменить дату": "my_bookings",
+                "изменить количество гостей": "my_bookings",
+                "получить билет": "my_bookings",
+                "🎟 получить билет": "my_bookings",
+                "посмотреть анонсы": "channel",
             }
             cmd = text_commands.get(text_key)
             if not cmd and text_key in {"📅 выбрать по дате", "выбрать по дате"}:
@@ -1920,9 +1963,11 @@ class VKBotApp:
             )
             event_id = _offline_gift_event_id_from_ref(ref)
             if event_id:
+                self._cancel_offline_gift_timers(vk_id)
+                self._offline_gift_await_choice.discard(int(vk_id))
                 await self._join_offline_gift_event(peer_id, vk_id, event_id)
             else:
-                await self._send_offline_gift_events(peer_id)
+                await self._send_offline_gift_events(peer_id, vk_id=vk_id)
             return
 
         is_raffle_deeplink = ref in _RAFFLE_REF_VALUES and is_start_entry and not cmd
@@ -1964,6 +2009,17 @@ class VKBotApp:
             or cmd == "main_menu"
             or payload_command == "start"
         ):
+            # В первый час после запуска офлайн-розыгрыша «Начать» не сбивает в меню.
+            if (
+                cmd != "main_menu"
+                and self._offline_gift_in_start_window(vk_id)
+                and (
+                    text.lower() in {"/start", "start", "начать", "старт"}
+                    or payload_command == "start"
+                )
+            ):
+                await self._offline_gift_repeat_action(peer_id, vk_id)
+                return
             await self.send_menu(
                 peer_id,
                 vk_id=vk_id,
@@ -2175,7 +2231,7 @@ class VKBotApp:
             from bot.db.crud import clear_offline_gift_pending
 
             clear_offline_gift_pending(int(vk_id))
-            await self._send_offline_gift_events(peer_id)
+            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
             return True
 
         try:
@@ -2183,9 +2239,11 @@ class VKBotApp:
         except (TypeError, ValueError):
             event_id = 0
         if not event_id:
-            await self._send_offline_gift_events(peer_id)
+            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
             return True
 
+        self._cancel_offline_gift_timers(vk_id)
+        self._offline_gift_await_choice.discard(int(vk_id))
         await self._join_offline_gift_event(
             peer_id,
             vk_id,
@@ -2205,11 +2263,131 @@ class VKBotApp:
         kb.adjust(1)
         return kb.as_json()
 
-    async def _send_offline_gift_events(self, peer_id: int) -> None:
+    def _cancel_offline_gift_timers(self, vk_id: int) -> None:
+        task = self._offline_gift_timer_tasks.pop(int(vk_id), None)
+        if task and not task.done():
+            task.cancel()
+
+    def _offline_gift_in_start_window(self, vk_id: int) -> bool:
+        launched = self._offline_gift_launch_at.get(int(vk_id))
+        if launched and (time.time() - launched) < self._OFFLINE_GIFT_START_WINDOW_SEC:
+            return True
+        # Запуск мог прийти из admin/mini-app в другом процессе.
+        from bot.vk.entry_dedupe import recent_flow_send
+
+        return recent_flow_send(
+            int(vk_id),
+            "offline_gift",
+            within_sec=self._OFFLINE_GIFT_START_WINDOW_SEC,
+        )
+
+    async def _offline_gift_repeat_action(self, peer_id: int, vk_id: int) -> None:
+        """Повторный запуск / «Начать» в окне воронки: участвовать или выбрать шоу."""
         from bot.db.crud import get_offline_gift_today_events
+
+        events = get_offline_gift_today_events()
+        if not events:
+            await self._send_text(
+                peer_id,
+                (
+                    "🎁 <b>Розыгрыш подарка</b>\n\n"
+                    "На сегодня активных шоу не найдено. "
+                    "Покажи это сообщение администратору или попробуй позже."
+                ),
+                replace_nav=False,
+            )
+            return
+        if len(events) == 1:
+            await self._join_offline_gift_event(peer_id, vk_id, int(events[0]["id"]))
+            return
+        await self._send_text(
+            peer_id,
+            (
+                "🎁 Чтобы попасть в список участников, выберите мероприятие, "
+                "на котором вы сейчас находитесь 👇"
+            ),
+            keyboard=self._offline_gift_events_keyboard(events),
+            replace_nav=False,
+        )
+        self._offline_gift_await_choice.add(int(vk_id))
+        self._schedule_offline_gift_choose_remind(peer_id, vk_id)
+
+    def _schedule_offline_gift_choose_remind(self, peer_id: int, vk_id: int) -> None:
+        self._cancel_offline_gift_timers(vk_id)
+
+        async def _job() -> None:
+            try:
+                await asyncio.sleep(self._OFFLINE_GIFT_CHOOSE_REMIND_SEC)
+                if int(vk_id) not in self._offline_gift_await_choice:
+                    return
+                from bot.db.crud import get_offline_gift_today_events
+
+                events = get_offline_gift_today_events()
+                if len(events) <= 1:
+                    return
+                await self._send_text(
+                    peer_id,
+                    (
+                        "🎁 Напоминаем: выберите шоу, на котором вы сейчас находитесь, "
+                        "чтобы мы внесли вас в нужный список 👇"
+                    ),
+                    keyboard=self._offline_gift_events_keyboard(events),
+                    replace_nav=False,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Offline gift choose-remind failed vk_id=%s", vk_id)
+
+        self._offline_gift_timer_tasks[int(vk_id)] = asyncio.create_task(_job())
+
+    def _schedule_offline_gift_sub_check(self, peer_id: int, vk_id: int, event_id: int) -> None:
+        self._cancel_offline_gift_timers(vk_id)
+
+        async def _job() -> None:
+            try:
+                await asyncio.sleep(self._OFFLINE_GIFT_SUB_CHECK_SEC)
+                from bot.db.crud import has_offline_gift_entry
+
+                if has_offline_gift_entry(vk_id=int(vk_id), event_id=int(event_id)):
+                    return
+                # Как «не нажали участвовать»: проверка подписки → в список или задание ведущего.
+                await self._join_offline_gift_event(
+                    peer_id,
+                    vk_id,
+                    int(event_id),
+                    still_waiting=False,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Offline gift sub-check failed vk_id=%s", vk_id)
+
+        self._offline_gift_timer_tasks[int(vk_id)] = asyncio.create_task(_job())
+
+    async def _send_offline_gift_events(
+        self,
+        peer_id: int,
+        *,
+        vk_id: int | None = None,
+        force_new: bool = False,
+    ) -> None:
+        from bot.db.crud import get_offline_gift_today_events
+        from bot.vk.entry_dedupe import claim_flow_send
+
+        vid = int(vk_id or peer_id)
+        if not force_new and not claim_flow_send(
+            vid,
+            "offline_gift",
+            ttl_sec=self._OFFLINE_GIFT_ANTIDUPE_SEC,
+        ):
+            logger.info("Offline gift launch deduped → participate action vk_id=%s", vid)
+            await self._offline_gift_repeat_action(peer_id, vid)
+            return
 
         await self._delete_offline_gift_card(peer_id)
         events = get_offline_gift_today_events()
+        self._offline_gift_launch_at[vid] = time.time()
         if not events:
             await self._send_text(
                 peer_id,
@@ -2230,7 +2408,7 @@ class VKBotApp:
                 color="primary",
             )
             kb.adjust(1)
-            await self._send_text(
+            mid = await self._send_text(
                 peer_id,
                 (
                     "🎁 <b>Розыгрыш подарка на шоу</b>\n\n"
@@ -2240,8 +2418,12 @@ class VKBotApp:
                 keyboard=kb.as_json(),
                 replace_nav=False,
             )
+            if mid:
+                self.peer_offline_gift_message_ids[int(peer_id)] = int(mid)
+            self._offline_gift_await_choice.discard(vid)
+            self._schedule_offline_gift_sub_check(peer_id, vid, int(event["id"]))
             return
-        await self._send_text(
+        mid = await self._send_text(
             peer_id,
             (
                 "🎁 <b>Розыгрыш подарка на шоу</b>\n\n"
@@ -2251,6 +2433,10 @@ class VKBotApp:
             keyboard=self._offline_gift_events_keyboard(events),
             replace_nav=False,
         )
+        if mid:
+            self.peer_offline_gift_message_ids[int(peer_id)] = int(mid)
+        self._offline_gift_await_choice.add(vid)
+        self._schedule_offline_gift_choose_remind(peer_id, vid)
 
     async def _handle_group_join(self, update: dict[str, Any]) -> None:
         """После вступления в сообщество — автодобавление в офлайн-розыгрыш."""
@@ -2374,7 +2560,7 @@ class VKBotApp:
                 "Шоу не найдено или уже недоступно. Выбери актуальное шоу 👇",
                 replace_nav=False,
             )
-            await self._send_offline_gift_events(peer_id)
+            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
             return
 
         try:
@@ -2388,6 +2574,8 @@ class VKBotApp:
             full_name=full_name,
         )
         clear_offline_gift_pending(int(vk_id))
+        self._cancel_offline_gift_timers(vk_id)
+        self._offline_gift_await_choice.discard(int(vk_id))
         await self._delete_offline_gift_card(peer_id)
         if not result:
             await self._send_text(peer_id, "Не удалось добавить в список. Покажи это администратору.")
@@ -2429,7 +2617,7 @@ class VKBotApp:
                 "Шоу не найдено или уже недоступно. Выбери актуальное шоу 👇",
                 replace_nav=False,
             )
-            await self._send_offline_gift_events(peer_id)
+            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
             return
 
         try:
@@ -3064,9 +3252,15 @@ class VKBotApp:
 
         from bot.handlers.start import _help_card_text
 
+        try:
+            await self._ensure_user(int(vk_id))
+        except Exception:
+            pass
+        full_name = self._vk_name_cache.get(int(vk_id)) or ""
+
         body = _help_card_text(
             telegram_id=None,
-            full_name=None,
+            full_name=full_name or None,
             username=None,
             question=text.strip(),
             phone=phone or None,
@@ -3096,7 +3290,7 @@ class VKBotApp:
             create_help_request(
                 None,
                 None,
-                None,
+                full_name or None,
                 text.strip(),
                 help_chat_id,
                 int(message_id),

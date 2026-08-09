@@ -576,7 +576,36 @@ async def issue_ticket(
         attachment=attachment,
         keyboard=keyboard,
     )
+    # Билет ушёл — только теперь снимаем кнопки с прошлого сообщения (напоминание и т.п.).
+    confirm_message_id = booking[16] if len(booking) > 16 else None
+    if confirm_message_id:
+        try:
+            from bot.vk.keyboards import empty_inline_keyboard
+
+            await client.edit_message(
+                peer_id,
+                None,
+                message_id=int(confirm_message_id),
+                keyboard=empty_inline_keyboard(),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to clear confirm keyboard after ticket booking_id=%s",
+                booking_id,
+            )
     save_ticket_message_id(booking_id, msg_id)
+    try:
+        from bot.db.analytics import EVENT_BOOKING_TICKET_SENT, track_event
+
+        track_event(
+            EVENT_BOOKING_TICKET_SENT,
+            vk_id=int(peer_id),
+            channel="vkontakte",
+            booking_id=int(booking_id),
+            props={"resent": already_confirmed},
+        )
+    except Exception:
+        pass
     if not already_confirmed:
         update_booking_status(booking_id, "confirmed")
         if is_raffle:

@@ -87,3 +87,23 @@ def clear_flow_send(vk_id: int, flow: str) -> None:
         _path_for(key).unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def recent_flow_send(vk_id: int, flow: str, *, within_sec: float) -> bool:
+    """True if a claim for this flow was made less than within_sec ago (shared across processes)."""
+    if vk_id <= 0 or not flow or within_sec <= 0:
+        return False
+    key = _key(vk_id, flow)
+    now = time.time()
+    mem = _memory.get(key)
+    if mem is not None and (now - mem) < within_sec:
+        return True
+    path = _path_for(key)
+    try:
+        age = now - path.stat().st_mtime
+        if age < within_sec:
+            _memory[key] = now - age
+            return True
+    except OSError:
+        pass
+    return False

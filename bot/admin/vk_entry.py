@@ -247,8 +247,17 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
 
     flow = FLOWS.get(flow_key) or {}
     # Общий антидубль с VK-ботом (разные процессы / воркеры).
-    if not claim_flow_send(int(vk_id), flow_key):
+    # Офлайн-розыгрыш: 30 мин без дубля карточки; повтор = действие «участвовать/выбрать».
+    ttl = 1800.0 if flow_key == "offline_gift" else None
+    claimed = (
+        claim_flow_send(int(vk_id), flow_key, ttl_sec=ttl)
+        if ttl is not None
+        else claim_flow_send(int(vk_id), flow_key)
+    )
+    if not claimed:
         logger.info("VK entry deduped vk_id=%s flow=%s", vk_id, flow_key)
+        if flow_key == "offline_gift":
+            await _offline_gift_repeat_action(client, vk_id)
         return
 
     track_event(
@@ -267,6 +276,87 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
     except Exception:
         clear_flow_send(int(vk_id), flow_key)
         raise
+
+
+async def _offline_gift_repeat_action(client: VKClient, vk_id: int) -> None:
+    """Повторный запуск в окне 30 мин: как «участвовать» / «выберите шоу»."""
+    from bot.db.crud import (
+        get_offline_gift_today_events,
+        record_offline_gift_entry,
+        set_offline_gift_pending,
+    )
+
+    events = get_offline_gift_today_events()
+    if not events:
+        await client.send_message(
+            vk_id,
+            (
+                "🎁 <b>Розыгрыш подарка</b>\n\n"
+                "На сегодня активных шоу не найдено. "
+                "Покажи это сообщение администратору или попробуй позже."
+            ),
+        )
+        return
+    if len(events) == 1:
+        event = events[0]
+        event_id = int(event["id"])
+        try:
+            subscribed = await client.is_group_member(int(vk_id))
+        except Exception:
+            logger.exception("offline gift sub check failed vk_id=%s", vk_id)
+            subscribed = False
+        if subscribed:
+            try:
+                name = await client.get_user_display_name(int(vk_id))
+            except Exception:
+                name = ""
+            record_offline_gift_entry(event_id=event_id, vk_id=int(vk_id), full_name=name or "")
+            await client.send_message(
+                vk_id,
+                (
+                    "🎁 <b>Зафиксировал в списке участников ✅</b>\n\n"
+                    f"<b>Шоу:</b> {_gift_event_label(event)}\n\n"
+                    "Ведущий выберет победителя во время шоу. Удачи!"
+                ),
+            )
+            return
+        set_offline_gift_pending(vk_id=int(vk_id), event_id=event_id)
+        kb = VKKeyboardBuilder(inline=True)
+        settings = load_vk_settings()
+        if settings.community_link:
+            kb.button("Перейти в сообщество", link=settings.community_link)
+        kb.button(
+            "Готово",
+            {"cmd": "ogift_sub_check", "event_id": event_id},
+            color="primary",
+        )
+        kb.adjust(1)
+        await client.send_message(
+            vk_id,
+            (
+                "🎁 <b>Ты пока не в списке участников.</b>\n\n"
+                "Выполни задание ведущего — и будешь в списке.\n\n"
+                f"<b>Шоу:</b> {_gift_event_label(event)}"
+            ),
+            keyboard=kb.as_json(),
+        )
+        return
+    kb = VKKeyboardBuilder(inline=True)
+    for event in events[:8]:
+        kb.button(
+            _gift_event_label(event)[:40],
+            {"cmd": "ogift_event", "event_id": int(event["id"])},
+            color="primary",
+        )
+    kb.adjust(1)
+    await client.send_message(
+        vk_id,
+        (
+            "🎁 Чтобы попасть в список участников, выберите мероприятие, "
+            "на котором вы сейчас находитесь 👇"
+        ),
+        keyboard=kb.as_json(),
+    )
 
 
 async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id: int, vk_raffle) -> None:

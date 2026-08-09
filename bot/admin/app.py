@@ -64,6 +64,10 @@ ACTIVITY_SHORT_LABELS = {
     "booking_confirmed": "Билет получен",
     "booking_cancelled": "Бронь отменена",
     "booking_annulled": "Бронь аннулирована",
+    "booking_guests_changed": "Смена гостей",
+    "booking_reminder_24h": "Напоминание за сутки",
+    "booking_reminder_day": "Напоминание в день",
+    "booking_ticket_sent": "Билет отправлен",
     "help_open": "Help / FAQ",
     "help_question": "Обращение в поддержку",
     "bot_blocked": "Заблокировали бота",
@@ -357,9 +361,6 @@ def _fetch_sqlite_rows(config: AdminConfig, filters: dict, include_empty_events=
         if date_display:
             where.append("event_date = ?")
             params.append(date_display)
-        if filters.get("status"):
-            where.append("status = ?")
-            params.append(filters["status"])
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         annulled_expr = "annulled_at" if "annulled_at" in columns else "NULL"
         reminder_24h_expr = "reminder_24h_sent" if "reminder_24h_sent" in columns else "0"
@@ -417,9 +418,6 @@ def fetch_admin_rows(config: AdminConfig, filters: dict, include_empty_events=Fa
         rows = _fetch_postgres_rows(config, filters, include_empty_events)
     else:
         rows = _fetch_sqlite_rows(config, filters, include_empty_events)
-    status = filters.get("status")
-    if status:
-        rows = [row for row in rows if row.get("booking_id") is not None and row.get("status") == status]
     return rows
 
 
@@ -1015,6 +1013,20 @@ def _sort_header(label: str, key: str, filters: dict, sortable: bool) -> str:
     )
 
 
+def _bookings_for_display(bookings: list[dict], filters: dict) -> list[dict]:
+    status = filters.get("status")
+    if not status:
+        return bookings
+    return [b for b in bookings if b.get("status") == status]
+
+
+def _booking_is_past(booking: dict) -> bool:
+    event_date = _parse_date_for_db(booking.get("event_date") or "")
+    if not event_date:
+        return False
+    return event_date < datetime.now(MSK).date()
+
+
 def _sort_bookings(bookings: list[dict], filters: dict) -> list[dict]:
     sort_key = filters.get("sort") or ""
     if sort_key not in BOOKING_SORT_OPTIONS:
@@ -1096,7 +1108,7 @@ def _booking_table(
             "<tr>"
             f"<td>{uid_cell}</td>"
             f"<td>{status_cell}</td>"
-            f"<td>{client_cell}</td>"
+            f'<td class="client">{client_cell}</td>'
             f"<td>{contact}</td>"
             f"<td>{_h(booking['guests'])}</td>"
             f"{event_cols}"
@@ -1147,11 +1159,12 @@ def _event_format_badge(event: dict) -> str:
     return f'<span class="format{tone}">{_h(label)}</span>'
 
 
-def _event_card(event: dict) -> str:
+def _event_card(event: dict, filters: dict | None = None) -> str:
     counts = " ".join(
         f'<span class="counter">{_h(STATUS_LABELS[s])}: <b>{event["status_counts"].get(s, 0)}</b></span>'
         for s in STATUSES
     )
+    display_bookings = _bookings_for_display(event["bookings"], filters or {})
     return (
         '<section class="card">'
         '<div class="event-head">'
@@ -1162,7 +1175,7 @@ def _event_card(event: dict) -> str:
         f'{_seat_bar(event)}'
         f'{_status_bar(event)}'
         f'<div class="counters">{counts}</div>'
-        f'{_booking_table(event["bookings"], compact=True)}'
+        f'{_booking_table(display_bookings, compact=True)}'
         '</section>'
     )
 
@@ -2086,13 +2099,14 @@ def _date_tab(dashboard: dict, filters: dict) -> str:
         if filters.get("event"):
             return '<section class="card empty-state"><h2>На это шоу пока нет бронирований</h2><p>Выберите другое шоу или сбросьте фильтр.</p></section>'
         return '<section class="card empty-state"><h2>Пока нет бронирования на указанную дату</h2><p>На эту дату пока не создано ни одной брони.</p></section>'
-    return "".join(_event_card(event) for event in events_with_bookings)
+    return "".join(_event_card(event, filters) for event in events_with_bookings)
 
 
 def _bookings_tab(dashboard: dict, filters: dict) -> str:
     bookings = dashboard["bookings"]
     if filters.get("event"):
         bookings = [b for b in bookings if str(b.get("event_id")) == filters["event"]]
+    bookings = _bookings_for_display(bookings, filters)
     bookings = _sort_bookings(bookings, filters)
     by_format = defaultdict(list)
     for booking in bookings:
@@ -2101,9 +2115,22 @@ def _bookings_tab(dashboard: dict, filters: dict) -> str:
     for fmt, title in (("proverka", "Проверка материала"), ("rozygrysh", "Розыгрыш")):
         if filters.get("format") and filters["format"] != fmt:
             continue
+        fmt_bookings = by_format.get(fmt, [])
+        current = [b for b in fmt_bookings if not _booking_is_past(b)]
+        past = [b for b in fmt_bookings if _booking_is_past(b)]
+        past_block = ""
+        if past:
+            past_block = (
+                f'<details class="past-bookings">'
+                f'<summary>Прошедшие брони ({len(past)})</summary>'
+                f'{_booking_table(past, filters=filters, sortable=True)}'
+                f"</details>"
+            )
         sections.append(
             f'<section class="card"><h2>{title}</h2>'
-            f'{_booking_table(by_format.get(fmt, []), filters=filters, sortable=True)}</section>'
+            f'{_booking_table(current, filters=filters, sortable=True)}'
+            f"{past_block}"
+            f"</section>"
         )
     if not sections:
         return '<section class="card empty-state"><h2>Броней пока нет</h2></section>'
@@ -2254,6 +2281,10 @@ def _user_activity_html(activity_counts: list[dict], recent: list[dict] | None =
         "booking_confirmed",
         "booking_cancelled",
         "booking_annulled",
+        "booking_guests_changed",
+        "booking_reminder_24h",
+        "booking_reminder_day",
+        "booking_ticket_sent",
         "help_open",
         "help_question",
         "bot_blocked",
@@ -2789,6 +2820,8 @@ def _analytics_metric_card(
     href: str = "",
     *,
     mode: str = "people",
+    primary_caption: str = "",
+    events_label: str = "",
 ) -> str:
     """mode=people: крупно уники, мелко всего событий.
     mode=bookings: крупно разные брони (display/bookings), мелко N чел — без «всего событий».
@@ -2815,7 +2848,17 @@ def _analytics_metric_card(
         secondary = f'<small class="muted">{people} чел</small>' if people else ""
     else:
         primary = metric.get("uniques", 0)
-        secondary = f'<small class="muted">всего {metric.get("events", 0)}</small>'
+        secondary_parts = []
+        if primary_caption:
+            secondary_parts.append(f'<small class="muted">{_h(primary_caption)}</small>')
+        events_count = metric.get("events", 0)
+        if events_label:
+            secondary_parts.append(
+                f'<small class="muted">всего {events_count} {_h(events_label)}</small>'
+            )
+        else:
+            secondary_parts.append(f'<small class="muted">всего {events_count}</small>')
+        secondary = "".join(secondary_parts)
     return (
         f"{tag_open}"
         f"<span>{_h(title)}</span>"
@@ -2873,7 +2916,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         '<h3 class="analytics-section-title">Основные события за период</h3>'
         '<p class="muted">Нажмите карточку со «кто →», чтобы увидеть список людей и разбивку по дням.</p>'
         '<div class="summary analytics-summary">'
-        f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"), css_class="tone-bot-start", href=_ae_link("bot_start"))}'
+        f'{_analytics_metric_card("Зашли в бот", by_name.get("bot_start"), css_class="tone-bot-start", href=_ae_link("bot_start"), primary_caption="уникальных клиентов", events_label="действий")}'
         f'{_analytics_metric_card("Зашли · Проверка", by_name.get("branch_proverka"), css_class="tone-proverka", href=_ae_link("branch_proverka"))}'
         f'{_analytics_metric_card("Зашли · BEST", by_name.get("branch_best"), css_class="tone-best", href=_ae_link("branch_best"))}'
         f'{_analytics_metric_card("Зашли · Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto", href=_ae_link("branch_hitloto"))}'
@@ -2928,6 +2971,10 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "proverka_ticket": "Билет получен",
         "proverka_booking_cancelled": "Бронь отменена",
         "proverka_annulled": "Бронь аннулирована",
+        "booking_guests_changed": "Смена гостей",
+        "booking_reminder_24h": "Напоминание за сутки",
+        "booking_reminder_day": "Напоминание в день",
+        "booking_ticket_sent": "Билет отправлен",
         "bot_blocked": "Заблокировали бота",
         "bot_unblocked": "Разблокировали бота",
     }
@@ -3178,10 +3225,10 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             f'<div class="show-format-block {tone}">'
             f'<div class="show-format-title">{_h(title)}</div>'
             '<div class="show-format-stats">'
-            f'<div><span>По дате</span><b>{by_date_e}</b>'
-            f'<small class="muted">{by_date_u} уник.</small></div>'
-            f'<div><span>По площадке</span><b>{by_venue_e}</b>'
-            f'<small class="muted">{by_venue_u} уник.</small></div>'
+            f'<div><span>По дате</span><b>{by_date_u}</b>'
+            f'<small class="muted">всего {by_date_e}</small></div>'
+            f'<div><span>По площадке</span><b>{by_venue_u}</b>'
+            f'<small class="muted">всего {by_venue_e}</small></div>'
             "</div></div>"
         )
     cards_table = (
@@ -3221,8 +3268,8 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             f'<div class="command-block {tone}">'
             f"{cmd_html}"
             f'<div class="command-block-title">{_h(title)}</div>'
-            f'<b>{events}</b>'
-            f'<small class="muted">{uniques} уник.</small>'
+            f'<b>{uniques}</b>'
+            f'<small class="muted">всего {events}</small>'
             "</div>"
         )
     if is_vk_channel:
@@ -3272,35 +3319,42 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         *,
         drops: list[tuple[str, dict | None]] | None = None,
         drop_base: dict | None = None,
+        uniques_primary_steps: int = 0,
     ) -> str:
-        base = _metric_events(steps[0][1]) if steps else 0
+        def _step_value(metric: dict | None, idx: int) -> int:
+            if idx < uniques_primary_steps:
+                return _metric_uniques(metric)
+            return _metric_events(metric)
+
+        base = _step_value(steps[0][1], 0) if steps else 0
         prev = base
         book_base = _metric_events(drop_base) if drop_base is not None else 0
         rows = []
         for idx, (title, metric) in enumerate(steps):
             events = _metric_events(metric)
             uniques = _metric_uniques(metric)
-            pct_base = round(100 * events / base) if base else (100 if idx == 0 and events else 0)
+            value = _step_value(metric, idx)
+            pct_base = round(100 * value / base) if base else (100 if idx == 0 and value else 0)
             if idx == 0:
                 pct_note = "100% · начало воронки"
             elif prev:
-                pct_prev = round(100 * events / prev)
-                lost = max(prev - events, 0)
+                pct_prev = round(100 * value / prev)
+                lost = max(prev - value, 0)
                 pct_note = f"{pct_prev}% от прошлого шага · не перешли: {lost}"
             else:
                 pct_note = "—"
-            width = max(pct_base, 2 if events else 0)
+            width = max(pct_base, 2 if value else 0)
             rows.append(
                 '<div class="bar-funnel-row">'
                 f'<div class="bar-funnel-label">{_h(title)}</div>'
-                f'<div class="bar-funnel-nums"><b>{events}</b><span>{uniques} чел.</span></div>'
+                f'<div class="bar-funnel-nums"><b>{value}</b><span>{uniques} чел.</span></div>'
                 '<div class="bar-funnel-track">'
                 f'<div class="bar-funnel-fill" style="width:{width}%"></div>'
                 "</div>"
                 f'<div class="bar-funnel-pct">{_h(pct_note)}</div>'
                 "</div>"
             )
-            prev = events
+            prev = value
         for title, metric in drops or []:
             events = _metric_events(metric)
             uniques = _metric_uniques(metric)
@@ -3360,6 +3414,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
                 ("6. Бронь аннулирована", proverka_bot.get("annulled")),
             ],
             drop_base=proverka_bot.get("created"),
+            uniques_primary_steps=2,
         )
         + "</div></details></section>"
     )
@@ -4410,6 +4465,7 @@ def render_admin_html(
     table.bookings:not(.compact) th:nth-child(8), table.bookings:not(.compact) td:nth-child(8),
     table.bookings:not(.compact) th:nth-child(9), table.bookings:not(.compact) td:nth-child(9) {{ width:92px; }}
     th, td {{ padding:11px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; white-space:nowrap; }}
+    table.bookings td.client {{ white-space:normal; word-break:break-word; overflow-wrap:anywhere; }}
     td.loc {{ white-space:normal; word-break:break-word; overflow-wrap:anywhere; }}
     th {{ color:#475467; font-size:13px; background:#f8fafc; }}
     th.sortable a {{ color:inherit; text-decoration:none; }}

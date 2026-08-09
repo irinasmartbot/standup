@@ -163,8 +163,14 @@ def after_cancel_keyboard(community_link: str) -> str:
     return kb.as_json()
 
 
-def change_guests_done_keyboard(booking_id: int) -> str:
+def change_guests_done_keyboard(booking_id: int, *, offer_ticket: bool = False) -> str:
     kb = VKKeyboardBuilder(inline=True)
+    if offer_ticket:
+        kb.button(
+            "Получить билет",
+            _payload("booking_get_ticket", booking_id=booking_id),
+            color="primary",
+        )
     kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
     kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
     kb.button(

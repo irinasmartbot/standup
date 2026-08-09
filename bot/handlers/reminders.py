@@ -60,14 +60,17 @@ async def send_booking_reminder(row, reminder_type):
             f"Чтобы подтвердить бронь, нажми на «Получить билет» 👇"
         )
     else:
-        text = (
-            f"Напоминание о брони на Moscow StandUp Show:\n\n"
-            f"<b>Дата:</b> {date_str}\n"
-            f"<b>Время:</b> {event_time}\n"
-            f"<b>Адрес:</b> {event_address}\n"
-            f"<b>Количество гостей:</b> {guests} чел.\n\n"
-            f"Сбор гостей начинается за полчаса до начала шоу. "
-            f"Для подтверждения брони нажмите «Получить билет» 👇"
+        from bot.utils.booking_texts import proverka_reminder_24h_text
+
+        address_line = (event_address or "").strip()
+        if event_location:
+            address_line = f"{event_location}, {address_line}".strip(", ")
+        text = proverka_reminder_24h_text(
+            date_str=date_str,
+            event_time=event_time,
+            address_line=address_line,
+            guests=guests or 1,
+            expandable=False,
         )
 
     await _clear_prev_buttons(booking_id, telegram_id)
@@ -142,6 +145,17 @@ async def process_due_reminders():
             ):
                 await send_booking_reminder(row, "24h")
                 update_reminder_flag(booking_id, "reminder_24h_sent")
+                try:
+                    from bot.db.analytics import EVENT_BOOKING_REMINDER_24H, track_event
+
+                    track_event(
+                        EVENT_BOOKING_REMINDER_24H,
+                        telegram_id=int(row[1]) if row[1] else None,
+                        booking_id=int(booking_id),
+                        props={"format": "proverka"},
+                    )
+                except Exception:
+                    pass
 
             # Напоминание в день шоу
             if (
@@ -152,6 +166,17 @@ async def process_due_reminders():
             ):
                 await send_booking_reminder(row, "day")
                 update_reminder_flag(booking_id, "reminder_day_sent")
+                try:
+                    from bot.db.analytics import EVENT_BOOKING_REMINDER_DAY, track_event
+
+                    track_event(
+                        EVENT_BOOKING_REMINDER_DAY,
+                        telegram_id=int(row[1]) if row[1] else None,
+                        booking_id=int(booking_id),
+                        props={"format": "proverka"},
+                    )
+                except Exception:
+                    pass
 
             # Аннулирование (всегда после точки дневного напоминания + запас)
             if now >= annul_at:

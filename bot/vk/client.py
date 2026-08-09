@@ -163,7 +163,7 @@ class VKClient:
     async def edit_message(
         self,
         peer_id: int,
-        text: str,
+        text: str | None = None,
         *,
         message_id: int | None = None,
         conversation_message_id: int | None = None,
@@ -175,16 +175,19 @@ class VKClient:
 
         Prefer message_id when known; conversation_message_id works after bot restart
         (comes from message_event on the button that was clicked).
+        Pass text=None to keep body and only update keyboard/attachment when API allows.
         """
         if not message_id and not conversation_message_id:
             return False
         from bot.vk.formatting import prepare_vk_message
 
-        plain, auto_format = prepare_vk_message(text)
         params: dict[str, Any] = {
             "peer_id": int(peer_id),
-            "message": plain,
         }
+        auto_format = None
+        if text is not None:
+            plain, auto_format = prepare_vk_message(text)
+            params["message"] = plain
         if message_id:
             params["message_id"] = int(message_id)
         else:

@@ -1775,6 +1775,34 @@ def get_offline_gift_event(event_id: int) -> dict | None:
             return _offline_event_row(row) if row else None
 
 
+def has_offline_gift_entry(*, vk_id: int, event_id: int | None = None) -> bool:
+    """True if VK user already in offline-gift list (optionally for one event)."""
+    if not _use_postgres() or not vk_id:
+        return False
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            if event_id is not None:
+                cur.execute(
+                    """
+                    SELECT 1 FROM vk_offline_gift_entries
+                    WHERE vk_id = %s AND event_id = %s
+                    LIMIT 1
+                    """,
+                    (int(vk_id), int(event_id)),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT 1 FROM vk_offline_gift_entries
+                    WHERE vk_id = %s
+                    LIMIT 1
+                    """,
+                    (int(vk_id),),
+                )
+            return cur.fetchone() is not None
+
+
 def record_offline_gift_entry(*, event_id: int, vk_id: int, full_name: str = "") -> dict | None:
     """Добавить в список выбранного шоу; из остальных списков участника убрать."""
     if not _use_postgres():

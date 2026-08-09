@@ -38,6 +38,10 @@ EVENT_BOOKING_CONFIRMED = "booking_confirmed"
 EVENT_BOOKING_CANCELLED = "booking_cancelled"
 EVENT_BOOKING_ANNULLED = "booking_annulled"
 EVENT_BOOKING_START = "booking_start"
+EVENT_BOOKING_GUESTS_CHANGED = "booking_guests_changed"
+EVENT_BOOKING_REMINDER_24H = "booking_reminder_24h"
+EVENT_BOOKING_REMINDER_DAY = "booking_reminder_day"
+EVENT_BOOKING_TICKET_SENT = "booking_ticket_sent"
 EVENT_BROWSE_DATES = "browse_dates"
 EVENT_BROWSE_VENUES = "browse_venues"
 EVENT_BOT_BLOCKED = "bot_blocked"
@@ -591,6 +595,60 @@ def fetch_analytics_report(
                         "uniques": int(row.get("uniques") or 0),
                     }
 
+                def _proverka_browsed_metric() -> dict:
+                    """show_card proverka ∩ branch_proverka (same period/channel)."""
+                    period_filter = ""
+                    if "start" in params and "end" in params:
+                        period_filter = (
+                            " AND ae.created_at >= %(start)s AND ae.created_at < %(end)s"
+                        )
+                    channel_filter = ""
+                    if "channel" in params:
+                        channel_filter = " AND ae.channel = %(channel)s"
+                    cur.execute(
+                        f"""
+                        WITH show_people AS (
+                            SELECT DISTINCT {_PERSON_KEY_SQL} AS person_key
+                            FROM analytics_events ae
+                            WHERE ae.name = 'show_card'
+                              AND ae.props->>'format' = 'proverka'
+                              AND {_PERSON_KEY_SQL} IS NOT NULL
+                              {period_filter}
+                              {channel_filter}
+                        ),
+                        branch_people AS (
+                            SELECT DISTINCT {_PERSON_KEY_SQL} AS person_key
+                            FROM analytics_events ae
+                            WHERE ae.name = 'branch_proverka'
+                              AND {_PERSON_KEY_SQL} IS NOT NULL
+                              {period_filter}
+                              {channel_filter}
+                        ),
+                        matched AS (
+                            SELECT s.person_key
+                            FROM show_people s
+                            INNER JOIN branch_people b ON s.person_key = b.person_key
+                        )
+                        SELECT
+                            (SELECT COUNT(*)::int FROM matched) AS uniques,
+                            (
+                                SELECT COUNT(*)::int
+                                FROM analytics_events ae
+                                WHERE ae.name = 'show_card'
+                                  AND ae.props->>'format' = 'proverka'
+                                  AND {_PERSON_KEY_SQL} IN (SELECT person_key FROM matched)
+                                  {period_filter}
+                                  {channel_filter}
+                            ) AS events
+                        """,
+                        params,
+                    )
+                    row = cur.fetchone() or {}
+                    return {
+                        "events": int(row.get("events") or 0),
+                        "uniques": int(row.get("uniques") or 0),
+                    }
+
                 def _bookings_without_bot_event(booking_format: str) -> dict:
                     """Брони в БД за период без analytics booking_created (заливка и т.п.)."""
                     time_filter = ""
@@ -629,7 +687,7 @@ def fetch_analytics_report(
                 proverka_bookings["from_bot"] = {
                     "entered": by_name.get("branch_proverka")
                     or {"events": 0, "uniques": 0},
-                    "browsed": _show_card_format_metric("proverka"),
+                    "browsed": _proverka_browsed_metric(),
                     "created": _analytics_format_metric("booking_created", "proverka"),
                     "confirmed": _analytics_format_metric("booking_confirmed", "proverka"),
                     "cancelled": _analytics_format_metric("booking_cancelled", "proverka"),
@@ -1050,17 +1108,59 @@ def fetch_analytics_event_by_day(
     name = (name or "").strip()
     if not name or not _use_postgres():
         return []
-    _, _, where, params = _period_bounds(date_from, date_to)
-    where.insert(0, "ae.name = %(name)s")
-    params["name"] = name
+    day_from, day_to, where, params = _period_bounds(date_from, date_to)
     params["limit"] = max(1, min(int(limit), 366))
     if channel in ("telegram", "vkontakte"):
-        where.append("ae.channel = %(channel)s")
         params["channel"] = channel
-    where_sql = " AND ".join(where)
     try:
         with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
+                if name == "bot_start":
+                    channel_filter = ""
+                    if channel in ("telegram", "vkontakte"):
+                        channel_filter = " AND ae.channel = %(channel)s"
+                    first_day_filters = []
+                    if day_from:
+                        first_day_filters.append("fs.first_day >= %(day_from)s")
+                        params["day_from"] = day_from
+                    if day_to:
+                        first_day_filters.append("fs.first_day <= %(day_to)s")
+                        params["day_to"] = day_to
+                    first_day_where = (
+                        (" AND " + " AND ".join(first_day_filters)) if first_day_filters else ""
+                    )
+                    cur.execute(
+                        f"""
+                        WITH first_starts AS (
+                            SELECT
+                                {_PERSON_KEY_SQL} AS person_key,
+                                MIN((ae.created_at AT TIME ZONE 'Europe/Moscow')::date) AS first_day
+                            FROM analytics_events ae
+                            WHERE ae.name = 'bot_start'
+                              AND {_PERSON_KEY_SQL} IS NOT NULL
+                              {channel_filter}
+                            GROUP BY 1
+                        )
+                        SELECT
+                            fs.first_day AS day,
+                            COUNT(*)::int AS uniques,
+                            COUNT(*)::int AS events
+                        FROM first_starts fs
+                        WHERE fs.person_key IS NOT NULL
+                          {first_day_where}
+                        GROUP BY fs.first_day
+                        ORDER BY fs.first_day DESC
+                        LIMIT %(limit)s
+                        """,
+                        params,
+                    )
+                    return [dict(row) for row in cur.fetchall()]
+
+                where.insert(0, "ae.name = %(name)s")
+                params["name"] = name
+                if channel in ("telegram", "vkontakte"):
+                    where.append("ae.channel = %(channel)s")
+                where_sql = " AND ".join(where)
                 cur.execute(
                     f"""
                     SELECT

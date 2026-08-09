@@ -1085,6 +1085,11 @@ async def change_date_do(call: CallbackQuery):
     await refresh_user_commands(call.message.bot, call.from_user.id)
     await delete_my_bookings_messages(call.message.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
+    track_event(
+        EVENT_BRANCH_PROVERKA,
+        telegram_id=call.from_user.id,
+        props={"via": "change_date"},
+    )
     await call.message.answer("Бронь отменена. Выбери новую дату 👇", reply_markup=await check_dates_kb())
     await call.answer()
 
@@ -1290,8 +1295,27 @@ async def _apply_new_guests(message: Message, state: FSMContext, guests: int) ->
 
     update_booking_guests(booking_id, guests)
     date_str = format_date(booking[5])
+    from bot.db.analytics import EVENT_BOOKING_GUESTS_CHANGED, track_event
+    from bot.utils.booking_texts import ticket_window_open
+
+    track_event(
+        EVENT_BOOKING_GUESTS_CHANGED,
+        telegram_id=message.chat.id,
+        booking_id=int(booking_id),
+        props={"guests": guests},
+    )
+    booking = get_active_booking_by_id(booking_id) or booking
+    status = (booking[10] if len(booking) > 10 else "") or ""
+    has_ticket = status == "confirmed"
+    offer_ticket = ticket_window_open(booking[5]) and not has_ticket
 
     kb = InlineKeyboardBuilder()
+    if offer_ticket:
+        kb.button(
+            text="🎟 Получить билет 🎟",
+            callback_data=f"get_ticket_{booking_id}",
+            style="success",
+        )
     kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
     kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
     kb.button(text="Изменить количество гостей", callback_data=f"change_guests_confirm_{booking_id}")
@@ -1302,6 +1326,18 @@ async def _apply_new_guests(message: Message, state: FSMContext, guests: int) ->
         reply_markup=kb.as_markup(),
     )
     await state.clear()
+    if has_ticket:
+        # Уже был билет — сразу перевыпустить с новым числом гостей.
+        class _FakeCall:
+            def __init__(self):
+                self.message = message
+                self.data = f"get_ticket_{booking_id}"
+                self.from_user = message.from_user
+
+            async def answer(self, *args, **kwargs):
+                return None
+
+        await get_ticket(_FakeCall())
 
 
 @router.callback_query(BookingState.waiting_new_guests, F.data.startswith("new_guests_"))

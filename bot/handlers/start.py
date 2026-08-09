@@ -292,10 +292,13 @@ def _help_card_text(
 ) -> str:
     if vk_id is not None:
         title = "✅ Вопрос отвечен" if answer is not None else "❓ Вопрос из VK"
+        vk_link = f'<a href="https://vk.com/id{int(vk_id)}">vk.com/id{int(vk_id)}</a>'
+        name_line = escape((full_name or "").strip()) or "—"
         lines = [
             f"<b>{title}</b>",
             "",
-            f"VK id: <code>{int(vk_id)}</code>",
+            f"Клиент: {vk_link}",
+            f"Имя: {name_line}",
         ]
         if phone:
             lines.append(f"Телефон: {escape(phone)}")
