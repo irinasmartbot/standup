@@ -268,6 +268,7 @@ def render_mailing_tab(
       <legend>Фильтры аудитории</legend>
       <label><input type="checkbox" name="exclude_blocked" value="1" checked> Исключить заблокировавших TG-бота</label>
       <label><input type="checkbox" name="has_phone" value="1"> Только с телефоном</label>
+      <label><input type="checkbox" name="exclude_today_bookings" value="1"> Не слать тем, у кого сегодня шоу (активная бронь или билет)</label>
     </fieldset>
     <fieldset class="mailing-row">
       <legend>Статус брони</legend>
@@ -407,6 +408,7 @@ def render_mailing_tab(
     resetBtn.addEventListener('click', function(){
       form.querySelectorAll('input[name="booking_statuses"]').forEach(function(el){ el.checked = false; });
       form.querySelectorAll('input[name="has_phone"]').forEach(function(el){ el.checked = false; });
+      form.querySelectorAll('input[name="exclude_today_bookings"]').forEach(function(el){ el.checked = false; });
       form.querySelectorAll('input[name="exclude_blocked"]').forEach(function(el){ el.checked = true; });
       ['date_from','date_to','batch_limit'].forEach(function(name){
         var el = form.querySelector('[name="'+name+'"]');
@@ -474,7 +476,9 @@ def render_mailing_tab(
           '; в базе всего TG ' + (db.telegram||0) + ' · VK ' + (db.vkontakte||0) +
           ')</span><br>Примерное время: <b>' + eta + '</b> при интервале ' + interval + ' сек' +
           '<br><span class="muted">Считаем по: ' + statuses + ' · ' + dateLabel +
-          ' · exclude ' + (f.exclude_sent_days || 0) + ' дн.</span>' + hint;
+          ' · exclude ' + (f.exclude_sent_days || 0) + ' дн.' +
+          (f.exclude_today_bookings ? ' · без сегодняшних шоу' : '') +
+          '</span>' + hint;
         box.innerHTML = html;
         box.dataset.previewHtml = html;
         saveDraft();
