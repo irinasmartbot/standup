@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from urllib.parse import urlencode
 
 from bot.db.events_admin import AFISHA_FORMAT_LABELS, AFISHA_FORMATS
@@ -9,7 +10,7 @@ from bot.db.events_admin import AFISHA_FORMAT_LABELS, AFISHA_FORMATS
 TIME_PRESETS = ("19:00", "19:30", "20:00")
 LOCATION_PRESETS = (
     ("Escobar", "ESCOBAR, м. Площадь Ильича, ул. Сергия Радонежского, 15-17с17"),
-    ("Temple Bar", "Temple Bar, Москва"),
+    ("Temple Bar", "Temple Bar, м. Курская, Нижний Сусальный переулок, дом 5, стр. 4а"),
 )
 
 
@@ -433,6 +434,11 @@ def render_events_tab(
         "Убраны из бота · отметьте и нажмите «Вернуть»",
     )
 
+    location_addresses_json = json.dumps(
+        dict(LOCATION_PRESETS),
+        ensure_ascii=False,
+    ).replace("</", "<\\/")
+
     toolbar = (
         f'<div class="events-toolbar">'
         f'<button type="submit" form="events-save-form" class="events-update-btn">Обновить</button>'
@@ -490,6 +496,7 @@ def render_events_tab(
     </div>
     <script>
     (function () {{
+      var LOCATION_ADDRESSES = {location_addresses_json};
       var COMPACT = {{
         e_address: 200,
         e_payment: 180,
@@ -699,8 +706,11 @@ def render_events_tab(
           }}
           saveDraft(form);
         }});
-        form.addEventListener("change", function () {{
+        form.addEventListener("change", function (ev) {{
           showEditHint();
+          if (ev.target && ev.target.name === "e_location") {{
+            applyLocationPreset(ev.target);
+          }}
           saveDraft(form);
         }});
         form.addEventListener("click", function (ev) {{
@@ -716,18 +726,26 @@ def render_events_tab(
             if (timeInput) timeInput.value = btn.getAttribute("data-value") || "";
           }} else if (kind === "location") {{
             var locInput = cell.querySelector('input[name="e_location"]');
-            var row = cell.closest("tr");
-            var addrInput = row ? row.querySelector('input[name="e_address"]') : null;
-            if (locInput) locInput.value = btn.getAttribute("data-location") || "";
-            if (addrInput) {{
-              addrInput.value = btn.getAttribute("data-address") || "";
-              syncTitle(addrInput);
-              fitGrow(addrInput, document.activeElement === addrInput);
+            if (locInput) {{
+              locInput.value = btn.getAttribute("data-location") || "";
+              applyLocationPreset(locInput, btn.getAttribute("data-address") || "");
             }}
           }}
           saveDraft(form);
         }});
       }});
+
+      function applyLocationPreset(locInput, forcedAddress) {{
+        if (!locInput) return;
+        var row = locInput.closest("tr");
+        var addrInput = row ? row.querySelector('input[name="e_address"]') : null;
+        if (!addrInput) return;
+        var addr = forcedAddress || LOCATION_ADDRESSES[(locInput.value || "").trim()] || "";
+        if (!addr) return;
+        addrInput.value = addr;
+        syncTitle(addrInput);
+        fitGrow(addrInput, document.activeElement === addrInput);
+      }}
 
       document.querySelectorAll('a.pill[href*="tab=events"]').forEach(function (a) {{
         if ((a.textContent || "").indexOf("Отменить") === -1) return;
@@ -830,6 +848,23 @@ def render_events_tab(
         if (id) return "#" + id;
         return "новая строка " + index;
       }}
+      function rowHasContent(tr, paid) {{
+        var val = function (name) {{
+          var el = tr.querySelector('[name="' + name + '"]');
+          return el ? (el.value || "").trim() : "";
+        }};
+        if (val("e_date") || val("e_time") || val("e_location") || val("e_address")
+            || val("e_description") || val("e_image")) {{
+          return true;
+        }}
+        var seats = val("e_seats");
+        if (seats && seats !== "0") return true;
+        if (paid) {{
+          var price = val("e_price");
+          if (val("e_payment") || val("e_host") || (price && price !== "0")) return true;
+        }}
+        return false;
+      }}
       function validateEventsForm(form) {{
         var paid = form.getAttribute("data-events-paid") === "1";
         var errors = [];
@@ -843,6 +878,7 @@ def render_events_tab(
           var pur = tr.querySelector('input[name="e_purge"]');
           if ((del && del.checked) || (pur && pur.checked)) return;
           var id = val("e_id");
+          if (!id && !rowHasContent(tr, paid)) return;
           var date = val("e_date");
           var time = val("e_time");
           var loc = val("e_location");
@@ -852,8 +888,6 @@ def render_events_tab(
           var price = val("e_price");
           var pay = val("e_payment");
           var host = val("e_host");
-          var any = date || time || loc || addr || desc || image || pay || host || price;
-          if (!id && !any) return;
           var label = rowCaption(tr, idx + 1);
           var missing = [];
           if (!date) missing.push("дата");
