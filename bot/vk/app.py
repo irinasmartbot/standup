@@ -158,6 +158,13 @@ def _gift_event_label(event: dict[str, Any]) -> str:
         if part
     )
 
+
+def _offline_gift_success_keyboard() -> str:
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button("В главное меню", _payload("main_menu"))
+    kb.adjust(1)
+    return kb.as_json()
+
 # HTML с <b>/<i> — client.send_message сам соберёт VK format_data.
 WELCOME_TEXT = (
     "🎭 <b>Moscow StandUp Show</b>\n\n"
@@ -2595,6 +2602,7 @@ class VKBotApp:
                 f"<b>Участников сейчас:</b> {count}\n\n"
                 "Ведущий выберет победителя во время шоу. Удачи!"
             ),
+            keyboard=_offline_gift_success_keyboard(),
             replace_nav=False,
         )
         if mid:
