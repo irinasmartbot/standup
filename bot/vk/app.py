@@ -830,7 +830,14 @@ class VKBotApp:
             )
         return await load_events(event_format)
 
-    async def send_menu(self, peer_id: int, *, vk_id: int | None = None, is_start: bool = False) -> None:
+    async def send_menu(
+        self,
+        peer_id: int,
+        *,
+        vk_id: int | None = None,
+        is_start: bool = False,
+        replace_nav: bool = True,
+    ) -> None:
         user_id = vk_id or peer_id
         await self._ensure_user(user_id)
         vk_booking.clear_session(self.booking_sessions, user_id)
@@ -848,7 +855,30 @@ class VKBotApp:
             peer_id,
             WELCOME_TEXT,
             keyboard=self._main_menu_kb(user_id),
+            replace_nav=replace_nav,
         )
+
+    async def _leave_offline_gift_to_menu(self, peer_id: int, vk_id: int) -> None:
+        """Подтверждение участия оставляем в чате; меню — отдельным сообщением."""
+        peer = int(peer_id)
+        cmid = self._callback_cmid(peer)
+        if cmid:
+            try:
+                await self.client.edit_message(
+                    peer,
+                    None,
+                    conversation_message_id=int(cmid),
+                    keyboard=empty_inline_keyboard(),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to strip offline gift menu button peer_id=%s cmid=%s",
+                    peer,
+                    cmid,
+                )
+        self._peer_event_cmid.pop(peer, None)
+        self.peer_offline_gift_message_ids.pop(peer, None)
+        await self.send_menu(peer, vk_id=vk_id, replace_nav=False)
 
     async def _start_check_booking(self, peer_id: int, vk_id: int, event_id: Any) -> None:
         event = await vk_booking.find_event(event_id)
@@ -2026,6 +2056,9 @@ class VKBotApp:
                 )
             ):
                 await self._offline_gift_repeat_action(peer_id, vk_id)
+                return
+            if cmd == "main_menu" and int(peer_id) in self.peer_offline_gift_message_ids:
+                await self._leave_offline_gift_to_menu(peer_id, vk_id)
                 return
             await self.send_menu(
                 peer_id,
