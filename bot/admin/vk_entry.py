@@ -311,6 +311,9 @@ async def _offline_gift_repeat_action(client: VKClient, vk_id: int) -> None:
             except Exception:
                 name = ""
             record_offline_gift_entry(event_id=event_id, vk_id=int(vk_id), full_name=name or "")
+            kb = VKKeyboardBuilder(inline=True)
+            kb.button("В главное меню", {"cmd": "main_menu"})
+            kb.adjust(1)
             await client.send_message(
                 vk_id,
                 (
@@ -318,6 +321,7 @@ async def _offline_gift_repeat_action(client: VKClient, vk_id: int) -> None:
                     f"<b>Шоу:</b> {_gift_event_label(event)}\n\n"
                     "Ведущий выберет победителя во время шоу. Удачи!"
                 ),
+                keyboard=kb.as_json(),
             )
             return
         set_offline_gift_pending(vk_id=int(vk_id), event_id=event_id)
