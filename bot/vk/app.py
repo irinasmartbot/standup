@@ -63,7 +63,13 @@ from bot.vk.event_texts import best_event_text as _best_event_text_vk
 from bot.vk.event_texts import event_card_text as _event_text
 from bot.vk.event_texts import hitloto_event_text as _hitloto_event_text_vk
 from bot.vk.keyboards import VKKeyboardBuilder, empty_inline_keyboard, empty_keyboard
-from bot.vk.media import VKRemoteImageCache, VKSystemImageCache, resolve_image_attachment
+from bot.vk.media import (
+    VKRemoteImageCache,
+    VKSystemImageCache,
+    load_vk_system_images_cache,
+    resolve_image_attachment,
+    resolve_vk_system_images_cache_path,
+)
 
 import aiohttp
 
@@ -406,8 +412,10 @@ class VKBotApp:
     def __init__(self, client: VKClient, settings: VKSettings):
         self.client = client
         self.settings = settings
-        self.images = VKSystemImageCache(settings.system_images_cache)
-        remote_cache = Path(settings.system_images_cache).with_name("vk_event_images.json")
+        self.images = load_vk_system_images_cache(settings.system_images_cache)
+        remote_cache = resolve_vk_system_images_cache_path(settings.system_images_cache).with_name(
+            "vk_event_images.json"
+        )
         self.event_images = VKRemoteImageCache(str(remote_cache))
         self.peer_context: dict[int, str] = {}
         self.peer_browse: dict[int, str] = {}
