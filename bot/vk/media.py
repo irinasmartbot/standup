@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,74 @@ class VKSystemImageCache:
             VKSystemImage(key=key, path=value.get("path", ""), attachment=value["attachment"])
             for key, value in self._items.items()
         ]
+
+
+# Как в TG / VK-боте: не крутим в рандоме карточки площадок / хитлото / билет / отзывы.
+_EXCLUDED_RANDOM_COVER_KEYS = frozenset(
+    {
+        "temple_bar",
+        "escobar",
+        "nebar",
+        "hitloto_start",
+        "photo_2026-07-21_01-59-43",
+        "rozygrysh_otzyv_1",
+        "rozygrysh_otzyv_2",
+    }
+)
+_EXCLUDED_RANDOM_COVER_NAMES = frozenset(
+    {
+        "temple_bar.jpg",
+        "escobar.jpg",
+        "nebar.jpg",
+        "ticket_template.jpg",
+        "hitloto_start.png",
+        "photo_2026-07-21_01-59-43.jpg",
+    }
+)
+
+
+def system_cover_attachment(cache: VKSystemImageCache, *keys: str) -> str | None:
+    for key in keys:
+        attachment = cache.get(key)
+        if attachment:
+            return attachment
+    return None
+
+
+def random_show_cover_attachment(cache: VKSystemImageCache) -> str | None:
+    """Случайная обложка шоу из кэша VK (без площадок / хитлото / билета)."""
+    banned_keys = set(_EXCLUDED_RANDOM_COVER_KEYS)
+    banned_attachments = {(cache.get(key) or "").strip() for key in banned_keys}
+    banned_attachments.discard("")
+    pool: list[str] = []
+    for img in cache.all():
+        key = (img.key or "").strip().lower()
+        path = (img.path or "").replace("\\", "/").lower()
+        name = path.rsplit("/", 1)[-1] if path else key
+        attachment = (img.attachment or "").strip()
+        if not key or not attachment:
+            continue
+        if attachment in banned_attachments:
+            continue
+        if key in banned_keys or name in _EXCLUDED_RANDOM_COVER_NAMES:
+            continue
+        if (
+            key.startswith("hitloto")
+            or name.startswith("hitloto")
+            or "hitloto" in key
+            or "hitloto" in name
+            or "хитлото" in key
+            or "хитлото" in name
+            or key.startswith("rozygrysh_otzyv")
+            or name.startswith("rozygrysh_otzyv")
+        ):
+            continue
+        if "ticket" in key or "ticket" in name:
+            continue
+        pool.append(attachment)
+    if pool:
+        return random.choice(pool)
+    return None
 
 
 class VKRemoteImageCache:

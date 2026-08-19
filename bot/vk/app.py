@@ -2,7 +2,6 @@ import asyncio
 import html
 import json
 import logging
-import random
 import time
 from datetime import datetime
 from pathlib import Path
@@ -72,27 +71,6 @@ logger = logging.getLogger(__name__)
 
 DATES_PAGE_SIZE = 6
 VK_CHANNEL = "vkontakte"
-# Как в TG: не крутим в рандоме карточки площадок / хитлото / билет / отзывы.
-_EXCLUDED_RANDOM_COVER_KEYS = frozenset(
-    {
-        "temple_bar",
-        "escobar",
-        "nebar",
-        "hitloto_start",
-        # Дубликат арта хитлото под «обычным» именем файла (попадало в рандом).
-        "photo_2026-07-21_01-59-43",
-    }
-)
-_EXCLUDED_RANDOM_COVER_NAMES = frozenset(
-    {
-        "temple_bar.jpg",
-        "escobar.jpg",
-        "nebar.jpg",
-        "ticket_template.jpg",
-        "hitloto_start.png",
-        "photo_2026-07-21_01-59-43.jpg",
-    }
-)
 # Deep link: vk.com/write-{group_id}?ref=standup_rozygr или vk.me/{screen_name}?ref=...
 # (ссылка вида vk.com/club...?ref= НЕ передаёт ref в message_new).
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
@@ -513,44 +491,9 @@ class VKBotApp:
 
     def _random_cover_attachment(self) -> str | None:
         """Случайная обложка шоу (как в TG). Не трогает площадки / хитлото / билет."""
-        # Блокируем и по ключу/имени, и по самому attachment id —
-        # на случай если тот же файл попал в кэш под другим ключом.
-        banned_keys = _EXCLUDED_RANDOM_COVER_KEYS | {
-            "rozygrysh_otzyv_1",
-            "rozygrysh_otzyv_2",
-            "photo_2026-07-21_01-59-43",
-        }
-        banned_attachments = {(self.images.get(key) or "").strip() for key in banned_keys}
-        banned_attachments.discard("")
-        pool: list[str] = []
-        for img in self.images.all():
-            key = (img.key or "").strip().lower()
-            path = (img.path or "").replace("\\", "/").lower()
-            name = path.rsplit("/", 1)[-1] if path else key
-            attachment = (img.attachment or "").strip()
-            if not key or not attachment:
-                continue
-            if attachment in banned_attachments:
-                continue
-            if key in banned_keys or name in _EXCLUDED_RANDOM_COVER_NAMES:
-                continue
-            if (
-                key.startswith("hitloto")
-                or name.startswith("hitloto")
-                or "hitloto" in key
-                or "hitloto" in name
-                or "хитлото" in key
-                or "хитлото" in name
-                or key.startswith("rozygrysh_otzyv")
-                or name.startswith("rozygrysh_otzyv")
-            ):
-                continue
-            if "ticket" in key or "ticket" in name:
-                continue
-            pool.append(attachment)
-        if pool:
-            return random.choice(pool)
-        return self._cover_attachment("show_cover")
+        from bot.vk.media import random_show_cover_attachment
+
+        return random_show_cover_attachment(self.images) or self._cover_attachment("show_cover")
 
     async def _event_poster_attachment(self, peer_id: int, event: dict[str, Any]) -> str | None:
         poster = await resolve_image_attachment(
