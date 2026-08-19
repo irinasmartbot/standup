@@ -3521,6 +3521,10 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     <p class="muted">Период: <b>{_h(report.get("period_label") or "весь период")}</b>.
     В карточках: крупно — уникальные люди, мелко — всего заходов.
     Период задаётся кнопками «Сегодня» / «7 дней» или датами С–По.</p>
+    <p class="analytics-export">
+      <a class="pill active" href="/admin/analytics/site-funnel.docx">Скачать отчёт: воронка с сайта (TG, Word)</a>
+      <span class="muted">afisha_besplat + quick_booking, весь период.</span>
+    </p>
     """
 
     drill = report.get("drilldown") or {}
