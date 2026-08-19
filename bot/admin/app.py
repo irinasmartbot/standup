@@ -5643,6 +5643,37 @@ async def raffle_screen_page(request: web.Request) -> web.Response:
         await bot.session.close()
 
 
+async def site_funnel_export_page(request: web.Request) -> web.Response:
+    """Word-отчёт: TG-воронка afisha_besplat + quick_booking (без кнопки в UI)."""
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        raise web.HTTPFound("/admin")
+    if not _can_view_ops(request, config):
+        raise web.HTTPForbidden(text="Недостаточно прав")
+
+    from bot.reports.site_funnel import build_site_funnel_docx_bytes, fetch_site_funnel_report
+
+    report = await asyncio.get_running_loop().run_in_executor(None, fetch_site_funnel_report)
+    if not report.get("available"):
+        raise web.HTTPServiceUnavailable(text="Отчёт недоступен (нет Postgres)")
+    try:
+        body = await asyncio.get_running_loop().run_in_executor(
+            None, build_site_funnel_docx_bytes, report
+        )
+    except Exception as exc:
+        raise web.HTTPInternalServerError(text=f"Не удалось собрать Word: {exc}") from exc
+
+    filename = "site_funnel_tg.docx"
+    return web.Response(
+        body=body,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 async def ticket_preview_page(request: web.Request) -> web.Response:
     """Картинка билета как у гостя (пересобирается из текущих данных брони)."""
     config = request.app["config"]
@@ -6146,6 +6177,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_get("/admin", admin_page)
     app.router.add_get("/admin/raffle-screen/{submission_id}", raffle_screen_page)
     app.router.add_get("/admin/ticket-preview/{booking_id}", ticket_preview_page)
+    app.router.add_get("/admin/analytics/site-funnel.docx", site_funnel_export_page)
     app.router.add_get("/admin/events/hide-preview", events_hide_preview_page)
     app.router.add_post("/admin/events/save", events_save_page)
     app.router.add_post("/admin/events/restore", events_restore_page)
