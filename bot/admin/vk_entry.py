@@ -206,17 +206,6 @@ def _mini_start_bridge_html(flow_key: str, target_url: str) -> str:
 </html>"""
 
 
-def _formats_keyboard() -> str:
-    kb = VKKeyboardBuilder(inline=True)
-    kb.button("STANDUP BEST", {"cmd": "best"}, color="primary")
-    kb.button("Хитлото", {"cmd": "hitloto"}, color="primary")
-    kb.button("StandUp Проверка материала", {"cmd": "check"}, color="primary")
-    kb.button("В главное меню", {"cmd": "main_menu"})
-    kb.adjust(1)
-    return kb.as_json()
-
-
-
 def _gift_format_label(value: str) -> str:
     return {
         "proverka": "Проверка",
@@ -363,6 +352,14 @@ async def _offline_gift_repeat_action(client: VKClient, vk_id: int) -> None:
     )
 
 
+def _booking_cover_attachment(settings) -> str | None:
+    """Обложка «Проверка» — как в VK-боте при deep link booking."""
+    from bot.vk.media import VKSystemImageCache
+
+    cache = VKSystemImageCache(settings.system_images_cache)
+    return cache.get("show_cover")
+
+
 async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id: int, vk_raffle) -> None:
     from bot.db.analytics import EVENT_BRANCH_PROVERKA, track_event
 
@@ -389,9 +386,19 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
             channel="vkontakte",
             props={"via": "mini_app_flow"},
         )
-        from bot.handlers.formats import FORMATS_TEXT
+        from bot.vk.app import CHECK_ENTRY_TEXT, event_search_keyboard
 
-        await client.send_message(vk_id, FORMATS_TEXT, keyboard=_formats_keyboard())
+        await client.send_message(
+            vk_id,
+            CHECK_ENTRY_TEXT,
+            keyboard=event_search_keyboard(
+                "check_date_page",
+                "check_venues",
+                dates_label="📅 Выбрать по дате",
+                venues_label="📍 Выбор по площадке",
+            ),
+            attachment=_booking_cover_attachment(settings),
+        )
         return
 
     from bot.db.crud import get_offline_gift_today_events
