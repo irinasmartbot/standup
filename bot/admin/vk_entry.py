@@ -352,16 +352,11 @@ async def _offline_gift_repeat_action(client: VKClient, vk_id: int) -> None:
     )
 
 
-def _booking_cover_attachment(settings) -> str | None:
-    """Случайная обложка шоу — как в VK-боте при входе в Проверку."""
-    from bot.vk.media import (
-        VKSystemImageCache,
-        random_show_cover_attachment,
-        system_cover_attachment,
-    )
+async def _booking_cover_attachment(client: VKClient, vk_id: int, settings) -> str | None:
+    """Случайная обложка шоу — кэш VK или загрузка из фото/."""
+    from bot.vk.media import resolve_booking_cover_attachment
 
-    cache = VKSystemImageCache(settings.system_images_cache)
-    return random_show_cover_attachment(cache) or system_cover_attachment(cache, "show_cover")
+    return await resolve_booking_cover_attachment(client, vk_id, settings)
 
 
 async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id: int, vk_raffle) -> None:
@@ -392,6 +387,7 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
         )
         from bot.vk.app import CHECK_ENTRY_TEXT, event_search_keyboard
 
+        cover = await _booking_cover_attachment(client, vk_id, settings)
         await client.send_message(
             vk_id,
             CHECK_ENTRY_TEXT,
@@ -401,7 +397,7 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
                 dates_label="📅 Выбрать по дате",
                 venues_label="📍 Выбор по площадке",
             ),
-            attachment=_booking_cover_attachment(settings),
+            attachment=cover,
         )
         return
 

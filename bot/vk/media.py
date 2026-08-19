@@ -11,6 +11,30 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
+_MAX_RANDOM_PHOTO_SIZE = 5 * 1024 * 1024
+_DEFAULT_SHOW_COVER = "фото/IMG_20220511_201818.jpg"
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def resolve_vk_system_images_cache_path(cache_path: str) -> Path:
+    """Найти vk_system_images.json: app, cwd или соседний vk-app на VPS."""
+    raw = Path(cache_path or "data/storage/vk_system_images.json")
+    if raw.is_absolute():
+        return raw
+    root = _repo_root()
+    candidates = [
+        root / raw,
+        Path.cwd() / raw,
+        root.parent / "vk-app" / raw,
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return root / raw
+
 
 @dataclass(frozen=True)
 class VKSystemImage:
@@ -64,6 +88,13 @@ class VKSystemImageCache:
             VKSystemImage(key=key, path=value.get("path", ""), attachment=value["attachment"])
             for key, value in self._items.items()
         ]
+
+
+def load_vk_system_images_cache(cache_path: str) -> VKSystemImageCache:
+    resolved = resolve_vk_system_images_cache_path(cache_path)
+    cache = VKSystemImageCache(str(resolved))
+    logger.info("VK system images cache: %s (items=%s)", resolved, len(cache.all()))
+    return cache
 
 
 # Как в TG / VK-боте: не крутим в рандоме карточки площадок / хитлото / билет / отзывы.
@@ -132,6 +163,63 @@ def random_show_cover_attachment(cache: VKSystemImageCache) -> str | None:
     if pool:
         return random.choice(pool)
     return None
+
+
+def _is_random_cover_file(path: Path) -> bool:
+    name = path.name.lower()
+    if path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+        return False
+    if name in _EXCLUDED_RANDOM_COVER_NAMES:
+        return False
+    if name.startswith("hitloto") or name.startswith("rozygrysh_otzyv"):
+        return False
+    if "ticket" in name:
+        return False
+    try:
+        if path.stat().st_size > _MAX_RANDOM_PHOTO_SIZE:
+            return False
+    except OSError:
+        return False
+    return True
+
+
+def pick_random_cover_file(*, photos_dir: Path | None = None) -> Path | None:
+    directory = photos_dir or (_repo_root() / "фото")
+    if not directory.is_dir():
+        return None
+    pool = [path for path in sorted(directory.iterdir()) if path.is_file() and _is_random_cover_file(path)]
+    if pool:
+        return random.choice(pool)
+    fallback = _repo_root() / _DEFAULT_SHOW_COVER
+    return fallback if fallback.is_file() else None
+
+
+async def resolve_booking_cover_attachment(client, peer_id: int, settings) -> str | None:
+    """Случайная обложка из кэша VK; если кэша нет — загрузка из папки фото/."""
+    cache = load_vk_system_images_cache(settings.system_images_cache)
+    attachment = random_show_cover_attachment(cache) or system_cover_attachment(cache, "show_cover")
+    if attachment:
+        return attachment
+
+    cover_file = pick_random_cover_file()
+    if not cover_file:
+        logger.warning("VK booking cover: cache empty and no local photo in фото/")
+        return None
+    try:
+        attachment = await client.upload_message_photo(
+            int(peer_id),
+            cover_file.read_bytes(),
+            filename=cover_file.name,
+        )
+    except Exception:
+        logger.exception("VK booking cover upload failed file=%s", cover_file)
+        return None
+
+    try:
+        cache.set(cover_file.stem, os.path.relpath(cover_file, _repo_root()), attachment)
+    except Exception:
+        logger.exception("VK booking cover cache save failed path=%s", cache.cache_path)
+    return attachment
 
 
 class VKRemoteImageCache:
