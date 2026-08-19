@@ -353,11 +353,15 @@ async def _offline_gift_repeat_action(client: VKClient, vk_id: int) -> None:
 
 
 def _booking_cover_attachment(settings) -> str | None:
-    """Обложка «Проверка» — как в VK-боте при deep link booking."""
-    from bot.vk.media import VKSystemImageCache
+    """Случайная обложка шоу — как в VK-боте при входе в Проверку."""
+    from bot.vk.media import (
+        VKSystemImageCache,
+        random_show_cover_attachment,
+        system_cover_attachment,
+    )
 
     cache = VKSystemImageCache(settings.system_images_cache)
-    return cache.get("show_cover")
+    return random_show_cover_attachment(cache) or system_cover_attachment(cache, "show_cover")
 
 
 async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id: int, vk_raffle) -> None:
