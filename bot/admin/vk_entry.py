@@ -976,17 +976,39 @@ def _mini_app_html(default_flow: str = "") -> str:
     return flowLabels[aliased] ? aliased : "";
   }}
 
-  function parseFlowValue(value) {{
-    if (!value) return "";
+  function parseHashParams(value) {{
+    if (!value) return new URLSearchParams();
     var raw = String(value).replace(/^#/, "").replace(/^\\?/, "");
     try {{ raw = decodeURIComponent(raw); }} catch (_) {{}}
     raw = raw.replace(/^\\/+/, "").replace(/^\\?/, "");
-    var direct = normalizeFlow(raw);
+    // "booking&cid=1" / "flow=booking&cid=1"
+    if (raw && raw.indexOf("=") === -1 && raw.indexOf("&") === -1) {{
+      return new URLSearchParams("flow=" + raw);
+    }}
+    if (raw && raw.indexOf("=") === -1 && raw.indexOf("&") !== -1) {{
+      var parts = raw.split("&");
+      parts[0] = "flow=" + parts[0];
+      raw = parts.join("&");
+    }}
+    return new URLSearchParams(raw);
+  }}
+
+  function parseFlowValue(value) {{
+    if (!value) return "";
+    var params = parseHashParams(value);
+    var direct = normalizeFlow(String(value).replace(/^#/, "").replace(/^\\?/, "").split("&")[0]);
     if (direct) return direct;
-    var params = new URLSearchParams(raw);
     return normalizeFlow(
       params.get("flow") || params.get("start") || params.get("start_param") || ""
     );
+  }}
+
+  function parseCidValue(value) {{
+    if (!value) return "";
+    var params = parseHashParams(value);
+    return String(
+      params.get("cid") || params.get("client_id") || params.get("ym_cid") || ""
+    ).trim();
   }}
 
   function flowFromLocation() {{
@@ -1000,6 +1022,17 @@ def _mini_app_html(default_flow: str = "") -> str:
     );
   }}
 
+  function cidFromLocation() {{
+    var search = new URLSearchParams(window.location.search || "");
+    return (
+      parseCidValue(window.location.hash || "") ||
+      String(search.get("cid") || search.get("client_id") || "").trim() ||
+      parseCidValue(search.get("hash") || "") ||
+      parseCidValue(search.get("vk_hash") || "") ||
+      parseCidValue(search.get("start_param") || "")
+    );
+  }}
+
   function flowFromLaunchParams(data) {{
     if (!data) return "";
     return (
@@ -1010,13 +1043,52 @@ def _mini_app_html(default_flow: str = "") -> str:
     );
   }}
 
+  function cidFromLaunchParams(data) {{
+    if (!data) return "";
+    return (
+      parseCidValue(data.hash || "") ||
+      parseCidValue(data.vk_hash || "") ||
+      parseCidValue(data.start_param || "") ||
+      String(data.cid || data.client_id || "").trim()
+    );
+  }}
+
+  var detectedCid = "";
+
   function resolveFlow(launchData) {{
     // Приоритет: hash/launch params из VK, и только потом server handoff.
+    detectedCid = cidFromLaunchParams(launchData) || cidFromLocation() || detectedCid;
     return (
       flowFromLaunchParams(launchData) ||
       flowFromLocation() ||
       parseFlowValue(serverFlow)
     );
+  }}
+
+  function showCidDebug(source) {{
+    var search = new URLSearchParams(window.location.search || "");
+    var wantDebug =
+      !!detectedCid ||
+      (window.location.hash || "").indexOf("cid=") !== -1 ||
+      search.get("debug") === "1" ||
+      (window.location.hash || "").indexOf("debug=1") !== -1;
+    if (!wantDebug) return;
+    detectedCid = detectedCid || cidFromLocation();
+    var msg;
+    if (!detectedCid) {{
+      msg =
+        "DEBUG: cid не найден. hash=" + (window.location.hash || "(пусто)") +
+          " · src=" + (source || "");
+      if (leadEl) leadEl.textContent = msg;
+      setStatus(msg, false);
+      return;
+    }}
+    msg =
+      "DEBUG: cid=" + detectedCid +
+        " · hash=" + (window.location.hash || "(пусто)") +
+        " · src=" + (source || "location");
+    if (leadEl) leadEl.textContent = msg;
+    setStatus(msg, true);
   }}
 
   function showOnlyFlow(flow) {{
@@ -1218,6 +1290,8 @@ def _mini_app_html(default_flow: str = "") -> str:
       headers: {{ "Content-Type": "application/json" }},
       body: JSON.stringify({{
         flow: currentFlow,
+        cid: detectedCid || cidFromLocation() || "",
+        hash: window.location.hash || "",
         launch_params: launchParamsQuery
       }})
     }})
@@ -1341,7 +1415,12 @@ def _mini_app_html(default_flow: str = "") -> str:
     var data = raw.data || (raw.detail && raw.detail.data) || {{}};
     if (type !== "VKWebAppLocationChanged" && type !== "VKWebAppChangeFragment") return;
     var flow = parseFlowValue(data.location || data.hash || data.fragment || "");
-    if (flow) autoStart(flow);
+    var fragCid = parseCidValue(data.location || data.hash || data.fragment || "");
+    if (fragCid) detectedCid = fragCid;
+    if (flow) {{
+      showCidDebug("fragment");
+      autoStart(flow);
+    }}
   }}
 
   window.addEventListener("message", handleFragmentEvent);
@@ -1388,14 +1467,20 @@ def _mini_app_html(default_flow: str = "") -> str:
   // Не стартуем сразу из server handoff: в VK hash часто приходит чуть позже
   // через GetLaunchParams, иначе все ссылки уезжают в booking.
   var earlyFlow = flowFromLocation();
+  detectedCid = cidFromLocation();
   if (earlyFlow) {{
     setFlow(earlyFlow, true);
+    showCidDebug("early");
   }} else {{
     showAllFlows();
+    if (detectedCid || (window.location.hash || "").indexOf("cid=") !== -1) {{
+      showCidDebug("early-no-flow");
+    }}
   }}
   bridge.send("VKWebAppGetLaunchParams").then(function (data) {{
     rememberLaunchParams(data);
     var flow = resolveFlow(data) || currentFlow;
+    showCidDebug("launch");
     if (flow) {{
       autoStart(flow);
     }} else {{
@@ -1403,6 +1488,8 @@ def _mini_app_html(default_flow: str = "") -> str:
     }}
   }}).catch(function () {{
     var flow = flowFromLocation() || currentFlow || parseFlowValue(serverFlow);
+    detectedCid = detectedCid || cidFromLocation();
+    showCidDebug("launch-fallback");
     if (flow) autoStart(flow);
     else showAllFlows();
   }});
@@ -1654,7 +1741,15 @@ async def mini_entry_post(request: web.Request) -> web.Response:
         vk_id = int(params.get("vk_user_id") or 0)
     except (TypeError, ValueError):
         vk_id = 0
-    logger.info("VK mini entry request vk_id=%s flow=%s", vk_id, flow_key)
+    cid = str((data or {}).get("cid") or "").strip()
+    raw_hash = str((data or {}).get("hash") or "").strip()
+    logger.info(
+        "VK mini entry request vk_id=%s flow=%s cid=%s hash=%s",
+        vk_id,
+        flow_key,
+        cid or "-",
+        raw_hash or "-",
+    )
     if vk_id <= 0:
         return web.json_response({"ok": False, "error": "Не удалось определить VK id."}, status=400)
 
@@ -1698,8 +1793,8 @@ async def mini_entry_post(request: web.Request) -> web.Response:
             status=502,
         )
 
-    logger.info("VK mini entry ok vk_id=%s flow=%s", vk_id, flow_key)
-    return web.json_response({"ok": True})
+    logger.info("VK mini entry ok vk_id=%s flow=%s cid=%s", vk_id, flow_key, cid or "-")
+    return web.json_response({"ok": True, "cid": cid or None})
 
 
 def register_routes(app: web.Application) -> None:
