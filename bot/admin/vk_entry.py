@@ -108,16 +108,100 @@ def _mini_flow_from_handoff(request: web.Request) -> str:
     return flow_key if flow_key in FLOWS else ""
 
 
-def _mini_app_vk_url(settings, flow_key: str = "") -> str:
-    """Каноническая ссылка mini app внутри VK: vk.com/app{id}_-{group}#flow=…"""
-    app_id = _env_mini_app_id()
-    if not app_id:
-        app_id = "54704296"
-    group_suffix = f"_-{int(settings.group_id)}" if settings.group_id else ""
-    url = f"https://vk.com/app{app_id}{group_suffix}"
+def _mini_app_vk_url(
+    settings,
+    flow_key: str = "",
+    *,
+    short: bool = False,
+    cid: str = "",
+) -> str:
+    """Ссылка mini app внутри VK.
+
+    short=True → vk.ru/app{id}#flow=… (лучше на телефоне; без _-group).
+    short=False → vk.com/app{id}_-{group}#flow=… (канон, на ПК hash часто режется).
+    """
+    app_id = _env_mini_app_id() or "54704296"
+    if short:
+        host = "https://vk.ru"
+        group_suffix = ""
+    else:
+        host = "https://vk.com"
+        group_suffix = f"_-{int(settings.group_id)}" if settings.group_id else ""
+    url = f"{host}/app{app_id}{group_suffix}"
+    parts: list[str] = []
     if flow_key and flow_key in FLOWS:
-        url = f"{url}#flow={flow_key}"
+        parts.append(f"flow={flow_key}")
+    cid_value = (cid or "").strip()
+    if cid_value:
+        parts.append(f"cid={cid_value}")
+    if parts:
+        url = f"{url}#{'&'.join(parts)}"
     return url
+
+
+def _request_cid(request: web.Request) -> str:
+    return str(
+        request.query.get("cid")
+        or request.query.get("client_id")
+        or request.query.get("ym_cid")
+        or ""
+    ).strip()
+
+
+def _is_mobile_request(request: web.Request) -> bool:
+    ua = (request.headers.get("User-Agent") or "").lower()
+    return any(
+        token in ua
+        for token in ("android", "iphone", "ipad", "ipod", "mobile", "opera mini", "webos")
+    )
+
+
+def _mobile_vk_jump_html(flow_key: str, target_url: str) -> str:
+    """Быстрый уход с go-моста в рабочую короткую VK-ссылку (телефон)."""
+    flow = FLOWS.get(flow_key) or {}
+    headline = escape(str(flow.get("headline") or "Moscow StandUp Show"))
+    target = escape(target_url, quote=True)
+    target_js = json.dumps(target_url)
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+  <meta http-equiv="refresh" content="0; url={target}">
+  <title>VK · Moscow StandUp Show</title>
+  <style>
+    body {{
+      margin: 0; min-height: 100vh; color: #f7f3ea;
+      font-family: Manrope, system-ui, sans-serif;
+      background: linear-gradient(180deg, #12080c 0%, #070708 100%);
+    }}
+    main {{ width: min(440px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0; }}
+    h1 {{ font-size: 28px; margin: 0 0 12px; }}
+    .lead {{ color: #d2c4b0; line-height: 1.45; }}
+    .cta {{
+      display: block; margin-top: 20px; text-align: center; text-decoration: none;
+      padding: 14px 16px; border-radius: 14px; font-weight: 700; color: #1a1208;
+      background: linear-gradient(180deg, #f0d48a 0%, #c9a227 100%);
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>{headline}</h1>
+    <p class="lead">Открываем VK… Если не открылось — нажмите кнопку.</p>
+    <a class="cta" id="open" href="{target}">Открыть в VK</a>
+  </main>
+  <script>
+  (function () {{
+    var url = {target_js};
+    try {{ window.location.replace(url); }} catch (_) {{
+      window.location.href = url;
+    }}
+  }})();
+  </script>
+</body>
+</html>"""
 
 
 def _mini_start_bridge_html(flow_key: str, target_url: str) -> str:
@@ -453,12 +537,13 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
     )
 
 
-def _landing_html(flow_key: str) -> str:
+def _landing_html(flow_key: str, *, cid: str = "") -> str:
     flow = FLOWS[flow_key]
     settings = load_vk_settings()
     app_id = _env_app_id()
     group_id = settings.group_id or 0
     ready = bool(app_id and group_id and settings.group_token)
+    cid_value = (cid or "").strip()
 
     if not ready:
         body = """
@@ -482,6 +567,7 @@ def _landing_html(flow_key: str) -> str:
   var appId = {int(app_id)};
   var groupId = {int(group_id)};
   var ref = {json.dumps(ref_value)};
+  var cid = {json.dumps(cid_value)};
   var vkId = null;
   var sending = false;
   var statusEl = document.getElementById("status");
@@ -544,7 +630,7 @@ def _landing_html(flow_key: str) -> str:
     fetch("/vk/entry", {{
       method: "POST",
       headers: {{ "Content-Type": "application/json" }},
-      body: JSON.stringify({{ vk_id: Number(vkId), flow: flow }})
+      body: JSON.stringify({{ vk_id: Number(vkId), flow: flow, cid: cid || "" }})
     }})
       .then(function (r) {{
         return r.json().then(function (j) {{ return {{ ok: r.ok, status: r.status, j: j }}; }});
@@ -686,16 +772,32 @@ def _html_response(text: str) -> web.Response:
     )
 
 
-async def landing_booking(_: web.Request) -> web.Response:
-    return _html_response(_landing_html("booking"))
+async def landing_booking(request: web.Request) -> web.Response:
+    """Одна ссылка для сайта: телефон → короткая VK, ПК → виджет go."""
+    cid = _request_cid(request)
+    if _is_mobile_request(request):
+        settings = load_vk_settings()
+        target = _mini_app_vk_url(settings, "booking", short=True, cid=cid)
+        return _html_response(_mobile_vk_jump_html("booking", target))
+    return _html_response(_landing_html("booking", cid=cid))
 
 
-async def landing_raffle(_: web.Request) -> web.Response:
-    return _html_response(_landing_html("raffle"))
+async def landing_raffle(request: web.Request) -> web.Response:
+    cid = _request_cid(request)
+    if _is_mobile_request(request):
+        settings = load_vk_settings()
+        target = _mini_app_vk_url(settings, "raffle", short=True, cid=cid)
+        return _html_response(_mobile_vk_jump_html("raffle", target))
+    return _html_response(_landing_html("raffle", cid=cid))
 
 
-async def landing_offline_gift(_: web.Request) -> web.Response:
-    return _html_response(_landing_html("offline_gift"))
+async def landing_offline_gift(request: web.Request) -> web.Response:
+    cid = _request_cid(request)
+    if _is_mobile_request(request):
+        settings = load_vk_settings()
+        target = _mini_app_vk_url(settings, "offline_gift", short=True, cid=cid)
+        return _html_response(_mobile_vk_jump_html("offline_gift", target))
+    return _html_response(_landing_html("offline_gift", cid=cid))
 
 
 def _vk_me_path(community_link: str, group_id: int) -> str:
@@ -1582,10 +1684,15 @@ async def mini_app_start(request: web.Request) -> web.Response:
     flow_key = str(request.match_info.get("flow") or "").strip()
     if flow_key not in FLOWS:
         raise web.HTTPNotFound(text="Unknown VK Mini App flow")
+    cid = _request_cid(request)
     # Запасной handoff по IP, если клиент срежет #flow=.
     _remember_mini_flow(request, flow_key)
     settings = load_vk_settings()
-    target = _mini_app_vk_url(settings, flow_key)
+    # Телефон: короткая vk.ru/app#flow (лучше сохраняет hash).
+    # ПК: тоже короткая — полная с _-group на десктопе часто обрезается.
+    target = _mini_app_vk_url(settings, flow_key, short=True, cid=cid)
+    if _is_mobile_request(request):
+        return _html_response(_mobile_vk_jump_html(flow_key, target))
     # Не HTTP-редирект: на телефоне он часто даёт белый экран.
     return _html_response(_mini_start_bridge_html(flow_key, target))
 
@@ -1665,7 +1772,8 @@ async def entry_post(request: web.Request) -> web.Response:
         vk_id = int((data or {}).get("vk_id") or 0)
     except (TypeError, ValueError):
         vk_id = 0
-    logger.info("VK entry request vk_id=%s flow=%s", vk_id, flow_key)
+    cid = str((data or {}).get("cid") or "").strip()
+    logger.info("VK entry request vk_id=%s flow=%s cid=%s", vk_id, flow_key, cid or "-")
     if vk_id <= 0:
         return web.json_response({"ok": False, "error": "Не удалось определить VK id."}, status=400)
 
@@ -1713,8 +1821,8 @@ async def entry_post(request: web.Request) -> web.Response:
             status=502,
         )
 
-    logger.info("VK entry ok vk_id=%s flow=%s", vk_id, flow_key)
-    return web.json_response({"ok": True})
+    logger.info("VK entry ok vk_id=%s flow=%s cid=%s", vk_id, flow_key, cid or "-")
+    return web.json_response({"ok": True, "cid": cid or None})
 
 
 async def mini_entry_post(request: web.Request) -> web.Response:
