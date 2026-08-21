@@ -551,138 +551,65 @@ def _landing_html(flow_key: str, *, cid: str = "") -> str:
         """
         widget_js = ""
     else:
+        write_url = f"https://vk.com/write-{int(group_id)}?ref={flow['ref']}"
+        if cid_value:
+            # cid в ref для будущей Метрики; бот пока читает базовый standup_book*
+            write_url = f"{write_url}_c{cid_value}"
         body = f"""
-        <p class="lead">{escape(flow["lead"])}</p>
+        <p class="lead">Нажмите кнопку — откроется диалог VK, и бот пришлёт сценарий бронирования.</p>
+        <a class="cta" id="openChat" href="{escape(write_url, quote=True)}">Продолжить в VK</a>
+        <p class="hint">Если сообщество ещё не может писать вам — сначала нажмите виджет ниже и разрешите сообщения, затем снова «Продолжить в VK».</p>
         <div id="vk_allow_messages_from_community" class="widget"></div>
         <p id="status" class="status" hidden></p>
-        <button type="button" id="openApp" class="cta" hidden>Открыть приложение VK</button>
         """
         ref_value = str(flow["ref"])
         widget_js = f"""
 <script src="https://vk.com/js/api/openapi.js?169"></script>
-<script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
 <script>
 (function () {{
-  var flow = {json.dumps(flow_key)};
   var appId = {int(app_id)};
   var groupId = {int(group_id)};
-  var ref = {json.dumps(ref_value)};
-  var cid = {json.dumps(cid_value)};
-  var vkId = null;
-  var sending = false;
+  var writeUrl = {json.dumps(write_url)};
   var statusEl = document.getElementById("status");
-  var openAppBtn = document.getElementById("openApp");
+  var openChat = document.getElementById("openChat");
 
   function setStatus(text, ok) {{
+    if (!statusEl) return;
     statusEl.hidden = !text;
     statusEl.textContent = text || "";
     statusEl.className = "status " + (ok ? "ok" : "err");
   }}
 
-  function normalizeId(userId) {{
-    if (userId == null) return null;
-    if (typeof userId === "object") {{
-      if (userId.user_id != null) return String(userId.user_id);
-      if (userId.id != null) return String(userId.id);
-      if (userId.mid != null) return String(userId.mid);
-      return null;
-    }}
-    var s = String(userId).trim();
-    return s && s !== "0" && s !== "undefined" && s !== "null" ? s : null;
+  if (openChat) {{
+    openChat.addEventListener("click", function () {{
+      setStatus("Открываем диалог VK…", true);
+    }});
   }}
 
-  var allowedOnce = false;
+  // Автопереход на ПК — надёжнее, чем ждать колбэк виджета.
+  setTimeout(function () {{
+    try {{ window.location.href = writeUrl; }} catch (_) {{}}
+  }}, 600);
 
-  function openVkAppOnly() {{
-    // Без ?ref=: текст сценария уже отправили через /vk/entry.
-    // Иначе бот снова шлёт «Привет-привет» по deeplink.
-    var chatUrl = "https://vk.com/im?sel=-" + groupId;
-    var ua = navigator.userAgent || "";
-    if (/Android/i.test(ua)) {{
-      window.location.href =
-        "intent://vk.com/im?sel=-" + groupId +
-        "#Intent;scheme=https;package=com.vkontakte.android;end";
-      return;
-    }}
-    if (/iPhone|iPad|iPod/i.test(ua)) {{
-      window.location.href = "vk://vk.com/im?sel=-" + groupId;
-      return;
-    }}
-    window.location.href = chatUrl;
-  }}
-
-  function afterSendOk() {{
-    setStatus("Готово! Сообщение уже в приложении VK. Нажмите кнопку, если чат не открылся сам.", true);
-    openAppBtn.hidden = false;
-    setTimeout(openVkAppOnly, 400);
-  }}
-
-  openAppBtn.addEventListener("click", openVkAppOnly);
-
-  function sendEntry() {{
-    if (!vkId) {{
-      setStatus("Не получили id от VK. Нажмите «Запретить уведомления», затем снова разрешите.", false);
-      return;
-    }}
-    if (sending) return;
-    sending = true;
-    setStatus("Отправляем сценарий в VK…", true);
-    fetch("/vk/entry", {{
-      method: "POST",
-      headers: {{ "Content-Type": "application/json" }},
-      body: JSON.stringify({{ vk_id: Number(vkId), flow: flow, cid: cid || "" }})
-    }})
-      .then(function (r) {{
-        return r.json().then(function (j) {{ return {{ ok: r.ok, status: r.status, j: j }}; }});
-      }})
-      .then(function (res) {{
-        if (res.ok && res.j && res.j.ok) {{
-          afterSendOk();
-          return;
-        }}
-        sending = false;
-        allowedOnce = false;
-        var err = (res.j && res.j.error) ? res.j.error : "";
-        setStatus(err || "Не удалось отправить. Попробуйте ещё раз.", false);
-      }})
-      .catch(function () {{
-        sending = false;
-        allowedOnce = false;
-        setStatus("Сеть недоступна. Попробуйте ещё раз.", false);
+  try {{
+    VK.init({{ apiId: appId, onlyWidgets: true }});
+    if (VK.Observer && VK.Observer.subscribe) {{
+      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", function () {{
+        setStatus("Сообщения разрешены. Открываем диалог…", true);
+        window.location.href = writeUrl;
       }});
-  }}
-
-  function onAllowed(userId) {{
-    if (allowedOnce || sending) return;
-    var id = normalizeId(userId);
-    console.log("allow-messages allowed", userId, id);
-    if (!id) {{
-      setStatus("VK не передал id. Нажмите «Запретить», затем снова «Разрешить».", false);
-      return;
+      VK.Observer.subscribe("widgets.allowMessagesFromCommunity.denied", function () {{
+        setStatus("Разрешите сообщения сообществу, иначе бот не сможет написать.", false);
+      }});
     }}
-    allowedOnce = true;
-    vkId = id;
-    sendEntry();
+    VK.Widgets.AllowMessagesFromCommunity(
+      "vk_allow_messages_from_community",
+      {{ height: 30 }},
+      groupId
+    );
+  }} catch (e) {{
+    setStatus("Виджет VK не загрузился — используйте кнопку «Продолжить в VK».", false);
   }}
-
-  VK.init({{ apiId: appId, onlyWidgets: true }});
-  // Только один канал колбэка — иначе allowed срабатывает дважды.
-  if (VK.Observer && VK.Observer.subscribe) {{
-    VK.Observer.subscribe("widgets.allowMessagesFromCommunity.allowed", onAllowed);
-    VK.Observer.subscribe("widgets.allowMessagesFromCommunity.denied", function () {{
-      setStatus("Снова нажмите виджет и разрешите сообщения.", false);
-    }});
-    VK.Observer.subscribe("widgets.allowMessagesFromCommunity.declined", function () {{
-      setStatus("Снова нажмите виджет и разрешите сообщения.", false);
-    }});
-  }} else if (typeof VK.addCallback === "function") {{
-    VK.addCallback("widgets.allowMessagesFromCommunity.allowed", onAllowed);
-  }}
-  VK.Widgets.AllowMessagesFromCommunity(
-    "vk_allow_messages_from_community",
-    {{ height: 30 }},
-    groupId
-  );
 }})();
 </script>
 """
@@ -729,14 +656,19 @@ def _landing_html(flow_key: str, *, cid: str = "") -> str:
     .lead {{
       margin: 0 0 22px; font-size: 16px; line-height: 1.45; color: var(--muted);
     }}
+    .hint {{
+      margin: 0 0 14px; font-size: 13px; line-height: 1.4; color: #b9a994;
+    }}
     .widget {{ margin: 0 0 14px; min-height: 36px; }}
     .cta {{
       display: block; width: 100%; min-height: 52px; border: 0; border-radius: 14px;
-      margin: 0 0 12px; padding: 14px 16px; cursor: pointer;
+      margin: 0 0 12px; padding: 14px 16px; cursor: pointer; text-align: center;
+      text-decoration: none;
       background: linear-gradient(180deg, #f0d48a 0%, var(--gold-deep) 100%);
       color: #1a1208; font: 700 16px Manrope, sans-serif;
       box-shadow: 0 8px 28px rgba(201, 162, 39, .28);
     }}
+    [hidden] {{ display: none !important; }}
     .status {{
       font-size: 14px; margin: 0 0 14px; padding: 12px 14px; border-radius: 12px;
       background: rgba(255,255,255,.06); border: 1px solid rgba(232, 197, 106, .18);
