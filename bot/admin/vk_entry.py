@@ -705,31 +705,25 @@ def _html_response(text: str) -> web.Response:
 
 
 async def landing_booking(request: web.Request) -> web.Response:
-    """Одна ссылка для сайта: телефон → короткая VK, ПК → виджет go."""
+    """Одна простая ссылка: всегда уводим в рабочий mini app #flow=booking."""
     cid = _request_cid(request)
-    if _is_mobile_request(request):
-        settings = load_vk_settings()
-        target = _mini_app_vk_url(settings, "booking", short=True, cid=cid)
-        return _html_response(_mobile_vk_jump_html("booking", target))
-    return _html_response(_landing_html("booking", cid=cid))
+    settings = load_vk_settings()
+    target = _mini_app_vk_url(settings, "booking", short=True, cid=cid)
+    return _html_response(_mobile_vk_jump_html("booking", target))
 
 
 async def landing_raffle(request: web.Request) -> web.Response:
     cid = _request_cid(request)
-    if _is_mobile_request(request):
-        settings = load_vk_settings()
-        target = _mini_app_vk_url(settings, "raffle", short=True, cid=cid)
-        return _html_response(_mobile_vk_jump_html("raffle", target))
-    return _html_response(_landing_html("raffle", cid=cid))
+    settings = load_vk_settings()
+    target = _mini_app_vk_url(settings, "raffle", short=True, cid=cid)
+    return _html_response(_mobile_vk_jump_html("raffle", target))
 
 
 async def landing_offline_gift(request: web.Request) -> web.Response:
     cid = _request_cid(request)
-    if _is_mobile_request(request):
-        settings = load_vk_settings()
-        target = _mini_app_vk_url(settings, "offline_gift", short=True, cid=cid)
-        return _html_response(_mobile_vk_jump_html("offline_gift", target))
-    return _html_response(_landing_html("offline_gift", cid=cid))
+    settings = load_vk_settings()
+    target = _mini_app_vk_url(settings, "offline_gift", short=True, cid=cid)
+    return _html_response(_mobile_vk_jump_html("offline_gift", target))
 
 
 def _vk_me_path(community_link: str, group_id: int) -> str:
@@ -1102,8 +1096,6 @@ def _mini_app_html(default_flow: str = "") -> str:
   function showCidDebug(source) {{
     var search = new URLSearchParams(window.location.search || "");
     var wantDebug =
-      !!detectedCid ||
-      (window.location.hash || "").indexOf("cid=") !== -1 ||
       search.get("debug") === "1" ||
       (window.location.hash || "").indexOf("debug=1") !== -1;
     if (!wantDebug) return;
@@ -1617,16 +1609,10 @@ async def mini_app_start(request: web.Request) -> web.Response:
     if flow_key not in FLOWS:
         raise web.HTTPNotFound(text="Unknown VK Mini App flow")
     cid = _request_cid(request)
-    # Запасной handoff по IP, если клиент срежет #flow=.
     _remember_mini_flow(request, flow_key)
     settings = load_vk_settings()
-    # Телефон: короткая vk.ru/app#flow (лучше сохраняет hash).
-    # ПК: тоже короткая — полная с _-group на десктопе часто обрезается.
     target = _mini_app_vk_url(settings, flow_key, short=True, cid=cid)
-    if _is_mobile_request(request):
-        return _html_response(_mobile_vk_jump_html(flow_key, target))
-    # Не HTTP-редирект: на телефоне он часто даёт белый экран.
-    return _html_response(_mini_start_bridge_html(flow_key, target))
+    return _html_response(_mobile_vk_jump_html(flow_key, target))
 
 
 def _verify_mini_launch_params(raw_query: str) -> tuple[bool, dict[str, str], str]:
