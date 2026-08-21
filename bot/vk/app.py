@@ -84,6 +84,29 @@ _BOOKING_REF_VALUES = frozenset({"standup_book", "booking", "book", "бронь"
 _OFFLINE_GIFT_REF_VALUES = frozenset({"offline_gift", "gift", "chek_list", "check_list"})
 
 
+def _is_booking_ref(ref: str) -> bool:
+    value = (ref or "").strip().casefold()
+    if value in _BOOKING_REF_VALUES:
+        return True
+    # go-лендинг: write-?ref=standup_book_c{ClientID}
+    return value.startswith("standup_book_c") or value.startswith("booking_c")
+
+
+def _is_raffle_ref(ref: str) -> bool:
+    value = (ref or "").strip().casefold()
+    if value in _RAFFLE_REF_VALUES:
+        return True
+    return value.startswith("standup_rozygr_c") or value.startswith("raffle_c")
+
+
+def _metrika_cid_from_ref(ref: str) -> str:
+    value = (ref or "").strip()
+    for prefix in ("standup_book_c", "booking_c", "standup_rozygr_c", "raffle_c", "offline_gift_c"):
+        if value.casefold().startswith(prefix):
+            return value[len(prefix) :].strip()
+    return ""
+
+
 def raffle_entry_link(settings: VKSettings) -> str:
     """Рабочая ссылка входа в розыгрыш (ref доходит до бота только через write-/vk.me)."""
     if settings.group_id:
@@ -1958,24 +1981,24 @@ class VKBotApp:
                 await self._send_offline_gift_events(peer_id, vk_id=vk_id)
             return
 
-        is_raffle_deeplink = ref in _RAFFLE_REF_VALUES and is_start_entry and not cmd
+        is_raffle_deeplink = _is_raffle_ref(ref) and is_start_entry and not cmd
         if cmd == "raffle" or is_raffle_deeplink:
             self._track(
                 vk_id,
                 EVENT_BOT_START,
-                props={"payload": ref or "raffle", "via": "deeplink"},
+                props={"payload": ref or "raffle", "via": "deeplink", "cid": _metrika_cid_from_ref(ref) or None},
             )
             await self._send_raffle_start(peer_id, vk_id)
             return
 
-        is_booking_deeplink = ref in _BOOKING_REF_VALUES and is_start_entry and not cmd
+        is_booking_deeplink = _is_booking_ref(ref) and is_start_entry and not cmd
         if cmd == "book" or is_booking_deeplink:
             # Как в TG: бесплатная бронь сразу открывает Проверку материала
             # (deep link с лендинга /vk/booking — до общего Start-меню)
             self._track(
                 vk_id,
                 EVENT_BOT_START,
-                props={"payload": ref or "booking", "via": "deeplink"},
+                props={"payload": ref or "booking", "via": "deeplink", "cid": _metrika_cid_from_ref(ref) or None},
             )
             self.peer_context[peer_id] = "check"
             self._track(vk_id, EVENT_BRANCH_PROVERKA)
