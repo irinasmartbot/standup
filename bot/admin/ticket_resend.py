@@ -1,4 +1,4 @@
-"""Resend ticket images from admin (Telegram Bot API)."""
+"""Resend / issue ticket images from admin (Telegram + VK)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from html import escape
 import psycopg
 from psycopg.rows import dict_row
 
-from bot.config import BOOKINGS_SOURCE, DATABASE_URL
+from bot.config import BOOKINGS_SOURCE, CHANNEL_LINK, DATABASE_URL, MANAGER_LINK, MANAGER_PHONE
 from bot.utils.ticket import format_ticket_place, generate_ticket, guests_word
 
 logger = logging.getLogger(__name__)
@@ -322,6 +322,261 @@ async def resend_ticket_async(
 
 def resend_ticket(booking_id: int, *, updated: bool = True, extra_note: str = "") -> dict:
     return asyncio.run(resend_ticket_async(booking_id, updated=updated, extra_note=extra_note))
+
+
+def _is_raffle_booking(row: dict) -> bool:
+    return (row.get("booking_format") or "").strip().lower() == "rozygrysh"
+
+
+def _confirm_and_stop_reminders(booking_id: int, *, was_confirmed: bool) -> None:
+    """Confirmed + reminder flags: no day/24h reminders, no auto-annul (only booked)."""
+    from bot.db.crud import update_booking_status, update_reminder_flag
+
+    if not was_confirmed:
+        update_booking_status(booking_id, "confirmed")
+    update_reminder_flag(booking_id, "reminder_24h_sent")
+    update_reminder_flag(booking_id, "reminder_day_sent")
+
+
+def _usual_place(row: dict) -> str:
+    location = (row.get("location") or "").strip()
+    address = (row.get("address") or "").strip()
+    if location and address:
+        return f"{location}, {address}"
+    return location or address
+
+
+def _usual_caption_html(row: dict, *, already_confirmed: bool, channel: str) -> str:
+    """Same guest-facing ticket text as the bot (TG HTML or VK HTML before format_vk_text)."""
+    place = _usual_place(row)
+    guests = int(row.get("guests") or 1)
+    head = "Ваш билет ещё раз 👇\n\n" if already_confirmed else "Отлично!\n\n"
+    if channel == "vk":
+        head = (
+            "<b>Ваш билет ещё раз</b> 👇\n\n"
+            if already_confirmed
+            else "<b>Отлично!</b>\n\n"
+        )
+    body = (
+        f"{head}"
+        "<b>Данные по билету:</b>\n\n"
+        f"<b>Ваше имя:</b> {escape(row.get('name') or '')}\n"
+        f"<b>Дата:</b> {escape(row.get('event_date') or '')}\n"
+        f"<b>Время:</b> {escape(row.get('event_time') or '')}\n"
+        f"<b>Место:</b> {escape(place)}\n"
+        f"<b>Количество гостей:</b> {guests_word(guests)}\n\n"
+        "Ждем вас на мероприятии ❤️\n\n"
+    )
+    if _is_raffle_booking(row):
+        body += (
+            "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
+            "чтобы вас посадили вместе — нажмите кнопку «Что, если я хочу прийти не один?» "
+            "и узнайте информацию.\n\n"
+        )
+    if channel == "vk":
+        body += (
+            f"При вопросах — менеджеру ({escape(MANAGER_LINK)}). "
+            f"Если срочно — звоните {escape(MANAGER_PHONE)}.\n\n"
+            f"Канал анонсов: {escape(CHANNEL_LINK)}"
+        )
+    else:
+        body += (
+            "Если поменяются планы, пожалуйста, ОБЯЗАТЕЛЬНО НАЖМИТЕ КНОПКУ «Отменить бронь» 😊\n\n"
+            f"При возникновении вопросов - можно писать менеджеру @ccoverr "
+            f"(если срочно - звоните {escape(MANAGER_PHONE)})\n\n"
+            f"И не забудь заглянуть на наш <a href=\"{escape(CHANNEL_LINK)}\">канал анонсов</a> "
+            "(там часто дарят бесплатные билеты на платные шоу😉)"
+        )
+    return body
+
+
+def _tg_manage_markup(booking_id: int, *, raffle: bool = False):
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+    kb = InlineKeyboardBuilder()
+    if raffle:
+        kb.button(text="Отменить бронь", callback_data=f"rz_cancel_{booking_id}")
+        kb.button(
+            text="Что, если я хочу прийти не один?",
+            callback_data="rz_not_alone",
+        )
+    else:
+        kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
+        kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
+        kb.button(
+            text="Изменить количество гостей",
+            callback_data=f"change_guests_confirm_{booking_id}",
+        )
+        kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+async def _issue_ticket_telegram(row: dict, *, already_confirmed: bool) -> dict:
+    booking_id = int(row["booking_id"])
+    token = _bot_token()
+    if not token:
+        return {"ok": False, "error": "BOT_TOKEN не задан", "booking_id": booking_id}
+    telegram_id = row.get("telegram_id")
+    if not telegram_id:
+        return {"ok": False, "error": "нет telegram_id", "booking_id": booking_id}
+
+    from aiogram import Bot
+    from aiogram.types import BufferedInputFile
+    from bot.db.crud import save_ticket_message_id
+
+    bot = Bot(token=token)
+    try:
+        photo = BufferedInputFile(
+            _ticket_bytes(row),
+            filename=f"ticket_{booking_id}.jpg",
+        )
+        msg = await bot.send_photo(
+            chat_id=int(telegram_id),
+            photo=photo,
+            caption=_usual_caption_html(row, already_confirmed=already_confirmed, channel="tg"),
+            reply_markup=_tg_manage_markup(booking_id, raffle=_is_raffle_booking(row)),
+            parse_mode="HTML",
+        )
+        save_ticket_message_id(booking_id, msg.message_id)
+        return {"ok": True, "error": "", "booking_id": booking_id}
+    finally:
+        await bot.session.close()
+
+
+async def _issue_ticket_vk(row: dict, *, already_confirmed: bool) -> dict:
+    booking_id = int(row["booking_id"])
+    vk_id = row.get("vk_id")
+    if not vk_id:
+        return {"ok": False, "error": "нет vk_id", "booking_id": booking_id}
+
+    from bot.db.crud import save_ticket_message_id
+    from bot.vk.booking import manage_ticket_keyboard, raffle_ticket_manage_keyboard
+    from bot.vk.client import VKClient
+    from bot.vk.config import load_vk_settings
+    from bot.vk.formatting import format_vk_text
+
+    settings = load_vk_settings()
+    if not settings.is_configured:
+        return {
+            "ok": False,
+            "error": "VK_GROUP_TOKEN/VK_GROUP_ID не заданы в .env админки",
+            "booking_id": booking_id,
+        }
+
+    place = _usual_place(row)
+    guests = int(row.get("guests") or 1)
+    head = (
+        "<b>Ваш билет ещё раз</b> 👇\n\n"
+        if already_confirmed
+        else "<b>Отлично!</b>\n\n"
+    )
+    caption_src = (
+        f"{head}"
+        "<b>Данные по билету:</b>\n\n"
+        f"<b>Ваше имя:</b> {row.get('name') or ''}\n"
+        f"<b>Дата:</b> {row.get('event_date') or ''}\n"
+        f"<b>Время:</b> {row.get('event_time') or ''}\n"
+        f"<b>Место:</b> {place}\n"
+        f"<b>Количество гостей:</b> {guests_word(guests)}\n\n"
+        "Ждем вас на мероприятии ❤️\n\n"
+    )
+    if _is_raffle_booking(row):
+        caption_src += (
+            "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
+            "чтобы вас посадили вместе — нажмите кнопку «Что, если я хочу прийти не один?» "
+            "и узнайте информацию.\n\n"
+        )
+    vk_manager = (settings.manager_link or "").strip() or MANAGER_LINK
+    vk_community = (settings.community_link or "").strip() or CHANNEL_LINK
+    caption_src += (
+        f"При вопросах — менеджеру ({vk_manager}). "
+        f"Если срочно — звоните {MANAGER_PHONE}.\n\n"
+        f"Канал анонсов: {vk_community}"
+    )
+    caption = format_vk_text(caption_src)
+    if _is_raffle_booking(row):
+        keyboard = raffle_ticket_manage_keyboard(booking_id, manager_link=settings.manager_link)
+    else:
+        keyboard = manage_ticket_keyboard(booking_id, settings.manager_link)
+
+    client = VKClient(settings)
+    peer_id = int(vk_id)
+    attachment = await client.upload_message_photo(
+        peer_id,
+        _ticket_bytes(row),
+        filename=f"ticket_{booking_id}.jpg",
+    )
+    msg_id = await client.send_message(
+        peer_id, caption, attachment=attachment, keyboard=keyboard
+    )
+    save_ticket_message_id(booking_id, msg_id)
+    return {"ok": True, "error": "", "booking_id": booking_id}
+
+
+async def issue_ticket_from_admin_async(booking_id: int) -> dict:
+    """Send usual ticket for any booking: confirm, stop reminders/annul, deliver message."""
+    row = get_booking_for_ticket_resend(booking_id)
+    meta = _booking_audit_item(row, booking_id)
+    if not row:
+        return {"ok": False, "error": "бронь не найдена", **meta}
+
+    already_confirmed = (row.get("status") or "") == "confirmed"
+    status = (row.get("status") or "").strip()
+    if status not in {"booked", "confirmed"}:
+        return {
+            "ok": False,
+            "error": f"статус «{status}», нужна бронь или билет (booked/confirmed)",
+            **meta,
+        }
+    try:
+        _confirm_and_stop_reminders(int(booking_id), was_confirmed=already_confirmed)
+    except Exception as exc:
+        logger.exception("confirm/reminders failed for booking %s", booking_id)
+        return {"ok": False, "error": f"не удалось подтвердить: {exc}", **meta}
+
+    # Refresh after status change (format/name unchanged, status now confirmed).
+    row = get_booking_for_ticket_resend(booking_id) or row
+    meta = _booking_audit_item(row, booking_id)
+
+    try:
+        if _is_vk_booking(row):
+            result = await _issue_ticket_vk(row, already_confirmed=already_confirmed)
+        else:
+            result = await _issue_ticket_telegram(row, already_confirmed=already_confirmed)
+        result.update(meta)
+        result["confirmed"] = True
+        result["reminders_stopped"] = True
+        if not result.get("ok"):
+            result["error"] = (
+                (result.get("error") or "отправка не удалась")
+                + " (бронь уже confirmed, напоминания сняты)"
+            )
+        return result
+    except Exception as exc:
+        logger.exception("issue_ticket_from_admin failed for booking %s", booking_id)
+        try:
+            from bot.utils.tech_alerts import alert_ticket_failure
+
+            alert_ticket_failure(
+                channel="admin_issue",
+                booking_id=int(booking_id),
+                user_id=row.get("vk_id") or row.get("telegram_id"),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "error": f"{exc} (бронь уже confirmed, напоминания сняты)",
+            "confirmed": True,
+            "reminders_stopped": True,
+            **meta,
+        }
+
+
+def issue_ticket_from_admin(booking_id: int) -> dict:
+    return asyncio.run(issue_ticket_from_admin_async(booking_id))
 
 
 async def resend_tickets_for_event_async(

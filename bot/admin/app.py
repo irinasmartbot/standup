@@ -1300,6 +1300,7 @@ _AUDIT_ACTION_META = {
     "events_cancel_bookings": ("Отменил брони по скрытым датам", "cancel"),
     "resend_ticket": ("Переотправил билет", "ticket"),
     "resend_tickets_event": ("Массово переотправил билеты", "ticket"),
+    "send_ticket": ("Отправил билет", "ticket"),
     "user_anonymize": ("Обезличил данные гостя", "user"),
 }
 _AUDIT_AFISHA_LABELS = {
@@ -1668,6 +1669,26 @@ def _audit_friendly_detail_lines(action: str, details: dict) -> list[str]:
         else:
             line += "."
         return [line]
+    if action == "send_ticket":
+        guest = _audit_booking_line(details)
+        if details.get("ok"):
+            line = (
+                f"Отправил билет гостю {guest} (подтверждение + без напоминаний/аннуляции)."
+                if guest and guest != "бронь"
+                else "Отправил билет (подтверждение + без напоминаний/аннуляции)."
+            )
+            return [line]
+        err = str(details.get("error") or "").strip()
+        line = "Не удалось отправить билет"
+        if guest and guest != "бронь":
+            line += f" гостю {guest}"
+        if err:
+            line += f": {err}"
+        else:
+            line += "."
+        if details.get("confirmed"):
+            line += " Бронь уже подтверждена, напоминания сняты."
+        return [line]
     if action == "resend_tickets_event":
         ok = int(_audit_num(details, "ok") or 0)
         fail = int(_audit_num(details, "fail") or 0)
@@ -1866,6 +1887,23 @@ def _audit_friendly_title(
                 return f"{label}: {'; '.join(lines)}{more}"
 
     if action == "resend_ticket":
+        bits = [
+            f"#{entity_id}" if entity_id else "",
+            str(details.get("name") or "").strip(),
+            " · ".join(
+                p
+                for p in [
+                    str(details.get("date") or "").strip(),
+                    str(details.get("time") or "").strip(),
+                ]
+                if p
+            ),
+        ]
+        target = " · ".join(p for p in bits if p)
+        if target:
+            return f"{label}: {target}"
+
+    if action == "send_ticket":
         bits = [
             f"#{entity_id}" if entity_id else "",
             str(details.get("name") or "").strip(),
@@ -2457,6 +2495,64 @@ def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
     )
 
 
+def _user_send_ticket_html(
+    bookings: list[dict],
+    user_key: str = "",
+    *,
+    can_send: bool = True,
+) -> str:
+    """Select event/booking and send usual ticket (booked + confirmed only)."""
+    if not can_send:
+        return ""
+    eligible = [
+        b
+        for b in (bookings or [])
+        if (b.get("status") or "") in {"booked", "confirmed"} and b.get("id")
+    ]
+    if not eligible:
+        return ""
+
+    def _sort_key(b: dict):
+        return (
+            b.get("event_date") or "",
+            b.get("event_time") or "",
+            str(b.get("id") or ""),
+        )
+
+    eligible = sorted(eligible, key=_sort_key, reverse=True)
+    options = []
+    for b in eligible:
+        status = b.get("status") or ""
+        status_l = STATUS_LABELS.get(status, status)
+        fmt = FORMAT_LABELS.get(b.get("format"), b.get("format") or "")
+        fmt_bit = f" · {fmt}" if fmt else ""
+        loc = (b.get("location") or "").strip() or "—"
+        guests = b.get("guests") or 0
+        label = (
+            f"{b.get('event_date') or '—'} {b.get('event_time') or ''} · {loc}"
+            f"{fmt_bit} · {guests} гост. · {status_l} (#{b.get('id')})"
+        )
+        options.append(
+            f'<option value="{_h(str(b.get("id")))}">{_h(label)}</option>'
+        )
+    hint = (
+        "Выберите мероприятие и отправьте обычный билет. "
+        "Бронь станет подтверждённой, напоминания и автоаннуляция по ней отключатся."
+    )
+    return (
+        '<div class="user-send-ticket-box">'
+        "<b>Отправить билет</b>"
+        f'<p class="muted" style="margin:6px 0 10px">{_h(hint)}</p>'
+        '<form method="post" action="/admin/users/send-ticket" class="user-send-ticket-form">'
+        f'<input type="hidden" name="u" value="{_h(user_key)}">'
+        '<label class="events-note-label" for="send-ticket-booking">Мероприятие</label>'
+        f'<select id="send-ticket-booking" name="booking_id" required>{"".join(options)}</select>'
+        '<button type="submit">Отправить билет</button>'
+        "</form>"
+        "</div>"
+    )
+
+
 def _user_tickets_html(
     bookings: list[dict],
     user_key: str = "",
@@ -2531,19 +2627,7 @@ def _user_tickets_html(
                 f'<p class="ticket-card-note ticket-card-note--annul">'
                 f"<b>Билет аннулирован</b>{' · ' + _h(when) if when and when != '—' else ''}</p>"
             )
-        elif status == "confirmed" and can_resend_tickets:
-            resend = (
-                f'<form method="post" action="/admin/events/resend-ticket" class="ticket-resend-form">'
-                f'<input type="hidden" name="booking_id" value="{_h(str(row.get("id")))}">'
-                f'<input type="hidden" name="updated" value="0">'
-                f'<input type="hidden" name="back" value="user">'
-                f'<input type="hidden" name="u" value="{_h(user_key)}">'
-                '<label class="events-note-label">Сообщение с билетом <span class="muted">(необяз.)</span></label>'
-                '<textarea name="extra_note" class="events-extra-note" rows="2" '
-                'placeholder="Например: дата изменилась — актуальный билет"></textarea>'
-                '<button type="submit">Переотправить билет</button>'
-                "</form>"
-            )
+        # Отправка — отдельным блоком с выбором мероприятия на карточке пользователя.
         cards.append(
             f'<article class="screen-card ticket-card ticket-card--{status_mod}" data-idx="{idx}">'
             f'<div class="screen-card-top">'
@@ -2784,6 +2868,7 @@ def _users_tab(
             f'<p class="user-stage"><b>Где сейчас:</b> {_h(stage_text)}</p>'
             f"{empty_note}"
             f"{anonymize_block}"
+            f'{_user_send_ticket_html(user["bookings"], user_key=user["key"], can_send=can_resend_tickets)}'
             '<div class="user-extra-stack">'
             f'{_user_extra_details("Куда заходил", _user_activity_html(extras.get("activity_counts") or [], extras.get("activity_recent") or []), tone="activity")}'
             f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]), tone="reminders")}'
@@ -4204,6 +4289,27 @@ def render_admin_html(
     .inline-form {{ display:inline; }}
     .ticket-resend-form {{ margin-top:10px; }}
     .ticket-resend-form button {{ font-size:12px; padding:8px 10px; }}
+    .user-send-ticket-box {{
+      margin:12px 0 16px; padding:12px 14px; border-radius:10px;
+      background:#ecfdf5; border:1px solid #a7f3d0;
+    }}
+    .user-send-ticket-form {{
+      display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;
+    }}
+    .user-send-ticket-form select {{
+      flex:1 1 280px; min-width:0; width:100%; max-width:100%;
+      box-sizing:border-box; padding:10px 12px; border-radius:8px; border:1px solid #99f6e4;
+      background:#fff; font-size:16px; line-height:1.3;
+    }}
+    .user-send-ticket-form button {{
+      font-size:15px; padding:10px 14px; white-space:nowrap;
+      background:#0f766e; color:#fff; border:0; border-radius:8px; cursor:pointer;
+    }}
+    .user-send-ticket-form button:hover {{ background:#0d9488; }}
+    @media (max-width: 600px) {{
+      .user-send-ticket-form {{ flex-direction:column; align-items:stretch; }}
+      .user-send-ticket-form button {{ width:100%; }}
+    }}
     .user-anonymize-box {{
       margin:14px 0; padding:12px 14px; border-radius:12px;
       border:1px solid #fecaca; background:#fef2f2;
@@ -5049,6 +5155,19 @@ async def admin_page(request: web.Request) -> web.Response:
                 if ok == "1" and fail == "0"
                 else f"Не удалось переотправить билет{': ' + err[:200] if err else '.'}"
             )
+        elif saved_flag == "send_ticket":
+            ok = request.query.get("ok") or "0"
+            fail = request.query.get("fail") or "0"
+            err = (request.query.get("err") or "").strip()
+            if ok == "1" and fail == "0":
+                events_flash = (
+                    "Билет отправлен. Бронь подтверждена, напоминания сняты, "
+                    "автоаннуляция больше не сработает."
+                )
+            else:
+                events_flash = (
+                    f"Не удалось отправить билет{': ' + err[:200] if err else '.'}"
+                )
         elif saved_flag == "anonymize":
             ok = request.query.get("ok") or "0"
             already = request.query.get("already") or "0"
@@ -5365,6 +5484,62 @@ async def events_resend_ticket_page(request: web.Request) -> web.Response:
         raise web.HTTPFound(f"/admin?{urlencode(q)}")
 
     raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}")
+
+
+async def users_send_ticket_page(request: web.Request) -> web.Response:
+    """Issue usual ticket from user card: confirm + stop reminders + send message."""
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        return web.Response(text=render_login_html(), status=200, content_type="text/html")
+    if not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin?tab=users")
+    from bot.admin.ticket_resend import issue_ticket_from_admin_async
+    from urllib.parse import urlencode
+
+    post = await request.post()
+    booking_id_raw = (post.get("booking_id") or "").strip()
+    user_key = (post.get("u") or "").strip()
+    actor = _admin_role(request, config)
+
+    if not booking_id_raw.isdigit():
+        q = {"tab": "users", "saved": "send_ticket", "ok": "0", "fail": "1", "err": "нет booking_id"}
+        if user_key:
+            q["u"] = user_key
+        raise web.HTTPFound(f"/admin?{urlencode(q)}")
+
+    one = await issue_ticket_from_admin_async(int(booking_id_raw))
+    from bot.db.admin_audit import log_admin_action
+
+    log_admin_action(
+        actor_role=actor,
+        action="send_ticket",
+        entity_type="booking",
+        entity_id=booking_id_raw,
+        details={
+            "ok": bool(one.get("ok")),
+            "confirmed": bool(one.get("confirmed")),
+            "reminders_stopped": bool(one.get("reminders_stopped")),
+            "booking_id": one.get("booking_id") or int(booking_id_raw),
+            "name": one.get("name") or "",
+            "date": one.get("date") or "",
+            "time": one.get("time") or "",
+            "location": one.get("location") or "",
+            "event_id": one.get("event_id"),
+            "error": (one.get("error") or "")[:200],
+        },
+    )
+    err = (one.get("error") or "")[:200]
+    q = {
+        "tab": "users",
+        "saved": "send_ticket",
+        "ok": "1" if one.get("ok") else "0",
+        "fail": "0" if one.get("ok") else "1",
+    }
+    if user_key:
+        q["u"] = user_key
+    if err and not one.get("ok"):
+        q["err"] = err
+    raise web.HTTPFound(f"/admin?{urlencode(q)}")
 
 
 async def events_save_page(request: web.Request) -> web.Response:
@@ -6186,6 +6361,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_post("/admin/events/save", events_save_page)
     app.router.add_post("/admin/events/restore", events_restore_page)
     app.router.add_post("/admin/events/resend-ticket", events_resend_ticket_page)
+    app.router.add_post("/admin/users/send-ticket", users_send_ticket_page)
     app.router.add_post("/admin/users/anonymize", users_anonymize_page)
     app.router.add_post("/admin/mailing/preview", mailing_preview_page)
     app.router.add_post("/admin/mailing/create", mailing_create_page)
