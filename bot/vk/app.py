@@ -451,6 +451,7 @@ class VKBotApp:
         # Антиспам: несколько фото подряд после «кидай скрин».
         self._raffle_photo_burst: dict[int, float] = {}
         self._ticket_in_progress: set[int] = set()
+        self._ticket_retry_tasks: dict[int, asyncio.Task] = {}
         self.peer_nav_message_ids: dict[int, list[int]] = {}
         self._pending_delete_ids: dict[int, list[int]] = {}
         self.peer_carousel_message_ids: dict[int, int] = {}
@@ -1063,6 +1064,10 @@ class VKBotApp:
                 manager_link=self.settings.manager_link,
                 community_link=self.settings.community_link,
             )
+            # Успех — отменяем отложенные ретраи, если были.
+            task = self._ticket_retry_tasks.pop(int(booking_id), None)
+            if task and not task.done():
+                task.cancel()
         except Exception as exc:
             logger.exception("VK ticket issue failed booking_id=%s", booking_id)
             try:
@@ -1076,13 +1081,120 @@ class VKBotApp:
                 )
             except Exception:
                 pass
-            await self.client.send_message(
-                peer_id,
-                "Не удалось отправить билет картинкой. Напишите менеджеру — поможем вручную.",
-                keyboard=self._main_menu_kb(peer_id),
-            )
+            scheduled = self._schedule_ticket_retry(peer_id, booking_id)
+            if scheduled:
+                await self.client.send_message(
+                    peer_id,
+                    "Не удалось отправить билет картинкой с первого раза.\n\n"
+                    "Пробуем ещё раз автоматически — обычно билет приходит в течение пары минут.\n"
+                    "Можно также снова нажать «Получить билет».",
+                    keyboard=vk_booking.after_booking_keyboard(
+                        int(booking_id),
+                        offer_ticket=True,
+                        manager_link=self.settings.manager_link,
+                        community_link=self.settings.community_link,
+                    ),
+                )
+            else:
+                await self.client.send_message(
+                    peer_id,
+                    "Не удалось отправить билет картинкой. Напишите менеджеру — поможем вручную.",
+                    keyboard=self._main_menu_kb(peer_id),
+                )
         finally:
             self._ticket_in_progress.discard(booking_id)
+
+    def _schedule_ticket_retry(self, peer_id: int, booking_id: int) -> bool:
+        """Фоновые повторы выдачи билета после сбоя upload (empty photo и т.п.)."""
+        bid = int(booking_id)
+        existing = self._ticket_retry_tasks.get(bid)
+        if existing and not existing.done():
+            return True
+
+        delays = (20, 60, 180)
+
+        async def _runner() -> None:
+            try:
+                for attempt, delay in enumerate(delays, start=1):
+                    await asyncio.sleep(delay)
+                    # Уже подтвердили с билетом — не дублируем.
+                    try:
+                        from bot.db.crud import get_active_booking_by_id
+
+                        row = get_active_booking_by_id(bid)
+                        if not row:
+                            return
+                        status = row[10] if len(row) > 10 else ""
+                        ticket_mid = row[15] if len(row) > 15 else None
+                        if status == "confirmed" and ticket_mid:
+                            return
+                    except Exception:
+                        logger.exception(
+                            "VK ticket retry status check failed booking_id=%s", bid
+                        )
+                    if bid in self._ticket_in_progress:
+                        continue
+                    self._ticket_in_progress.add(bid)
+                    try:
+                        logger.info(
+                            "VK ticket auto-retry attempt=%s booking_id=%s peer_id=%s",
+                            attempt,
+                            bid,
+                            peer_id,
+                        )
+                        await vk_booking.issue_ticket(
+                            client=self.client,
+                            peer_id=int(peer_id),
+                            booking_id=bid,
+                            manager_link=self.settings.manager_link,
+                            community_link=self.settings.community_link,
+                        )
+                        logger.info(
+                            "VK ticket auto-retry succeeded booking_id=%s attempt=%s",
+                            bid,
+                            attempt,
+                        )
+                        return
+                    except Exception as exc:
+                        logger.warning(
+                            "VK ticket auto-retry failed booking_id=%s attempt=%s: %s",
+                            bid,
+                            attempt,
+                            exc,
+                        )
+                        if attempt == len(delays):
+                            try:
+                                from bot.utils.tech_alerts import alert_ticket_failure
+
+                                alert_ticket_failure(
+                                    channel="vk_retry",
+                                    booking_id=bid,
+                                    user_id=int(peer_id),
+                                    error=f"all retries failed: {type(exc).__name__}: {exc}",
+                                )
+                            except Exception:
+                                pass
+                            try:
+                                await self.client.send_message(
+                                    int(peer_id),
+                                    "Автоповтор не помог отправить билет картинкой. "
+                                    "Напишите менеджеру — выдадим вручную.",
+                                    keyboard=self._main_menu_kb(int(peer_id)),
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "VK ticket retry final notice failed booking_id=%s",
+                                    bid,
+                                )
+                    finally:
+                        self._ticket_in_progress.discard(bid)
+            finally:
+                self._ticket_retry_tasks.pop(bid, None)
+
+        self._ticket_retry_tasks[bid] = asyncio.create_task(
+            _runner(), name=f"vk-ticket-retry-{bid}"
+        )
+        return True
 
     async def _send_my_bookings(
         self,

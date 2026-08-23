@@ -17,20 +17,28 @@ _VK_PHOTO_MAX_SIDE = 2560
 _VK_PHOTO_MAX_BYTES = 4 * 1024 * 1024
 
 
-def _prepare_vk_message_jpeg(image_bytes: bytes, *, quality: int = 85) -> bytes:
+def _prepare_vk_message_jpeg(
+    image_bytes: bytes,
+    *,
+    quality: int = 85,
+    max_side: int = _VK_PHOTO_MAX_SIDE,
+) -> bytes:
     """Baseline JPEG, RGB — стабильнее для photos.saveMessagesPhoto."""
     from PIL import Image
 
     img = Image.open(BytesIO(image_bytes)).convert("RGB")
     w, h = img.size
-    if max(w, h) > _VK_PHOTO_MAX_SIDE:
-        img.thumbnail((_VK_PHOTO_MAX_SIDE, _VK_PHOTO_MAX_SIDE), Image.Resampling.LANCZOS)
+    side = max(320, int(max_side or _VK_PHOTO_MAX_SIDE))
+    if max(w, h) > side:
+        img.thumbnail((side, side), Image.Resampling.LANCZOS)
     out = BytesIO()
     img.save(out, format="JPEG", quality=int(quality), optimize=True, progressive=False)
     data = out.getvalue()
     # Если всё ещё тяжело — ещё сильнее жмём.
-    if len(data) > _VK_PHOTO_MAX_BYTES and quality > 60:
-        return _prepare_vk_message_jpeg(image_bytes, quality=max(55, quality - 20))
+    if len(data) > _VK_PHOTO_MAX_BYTES and quality > 40:
+        return _prepare_vk_message_jpeg(
+            image_bytes, quality=max(30, quality - 20), max_side=side
+        )
     return data
 
 
@@ -354,21 +362,41 @@ class VKClient:
 
         # Всегда прогоняем через Pillow→JPEG: сырой PNG/webp/битый буфер
         # часто даёт photo=undefined на saveMessagesPhoto.
+        # Пустой photo="" у VK бывает intermittent — жмём сильнее + паузы + без peer_id.
         last_err = "VK photo upload failed"
-        for quality in (85, 70, 55):
+        attempts: list[tuple[int, int, bool]] = [
+            # quality, max_side, use_peer_id
+            (85, 2560, True),
+            (70, 1920, True),
+            (55, 1600, True),
+            (45, 1280, True),
+            (35, 1024, True),
+            (55, 1280, False),
+            (35, 1024, False),
+        ]
+        for idx, (quality, max_side, use_peer) in enumerate(attempts):
+            if idx:
+                await asyncio.sleep(0.45 + 0.15 * idx)
             try:
-                payload = _prepare_vk_message_jpeg(image_bytes, quality=quality)
+                payload = _prepare_vk_message_jpeg(
+                    image_bytes, quality=quality, max_side=max_side
+                )
             except Exception as exc:
                 logger.warning("VK image normalize failed, using raw bytes: %s", exc)
                 payload = image_bytes
-                quality = 0  # only one attempt with raw
 
-            upload_name = "photo.jpg"
+            upload_name = f"photo_{idx}_{quality}.jpg"
             if filename and "." in filename:
-                upload_name = f"{filename.rsplit('.', 1)[0]}.jpg"
+                stem = filename.rsplit(".", 1)[0]
+                upload_name = f"{stem}_{idx}.jpg"
 
             try:
-                server = await self.api("photos.getMessagesUploadServer", peer_id=int(peer_id))
+                if use_peer and peer_id:
+                    server = await self.api(
+                        "photos.getMessagesUploadServer", peer_id=int(peer_id)
+                    )
+                else:
+                    server = await self.api("photos.getMessagesUploadServer")
                 upload_url = server["upload_url"]
                 form = aiohttp.FormData()
                 form.add_field(
@@ -382,16 +410,26 @@ class VKClient:
                         uploaded = await resp.json(content_type=None)
             except Exception as exc:
                 last_err = f"VK upload HTTP failed: {exc}"
-                logger.warning("%s peer_id=%s q=%s", last_err, peer_id, quality)
-                if quality == 0:
-                    break
+                logger.warning(
+                    "%s peer_id=%s q=%s side=%s peer=%s",
+                    last_err,
+                    peer_id,
+                    quality,
+                    max_side,
+                    use_peer,
+                )
                 continue
 
             if not _upload_photo_ok(uploaded):
                 last_err = f"VK upload empty photo (size={len(payload)} resp={uploaded!r})"
-                logger.warning("%s peer_id=%s q=%s", last_err, peer_id, quality)
-                if quality == 0:
-                    break
+                logger.warning(
+                    "%s peer_id=%s q=%s side=%s peer=%s",
+                    last_err,
+                    peer_id,
+                    quality,
+                    max_side,
+                    use_peer,
+                )
                 continue
 
             saved = await self.api(
@@ -402,8 +440,6 @@ class VKClient:
             )
             if not saved:
                 last_err = "VK did not return saved photo"
-                if quality == 0:
-                    break
                 continue
             photo = saved[0]
             attachment = f"photo{photo['owner_id']}_{photo['id']}"
