@@ -475,6 +475,7 @@ def render_mailing_tab(
           (d.batch_limit ? (', лимит ' + d.batch_limit) : '') +
           '; в базе всего TG ' + (db.telegram||0) + ' · VK ' + (db.vkontakte||0) +
           ')</span><br>Примерное время: <b>' + eta + '</b> при интервале ' + interval + ' сек' +
+          '<br><span class="muted">Время ≈ только паузы между сообщениями. Если Telegram попросит подождать (flood) — растянется. Картинка грузится один раз на всю рассылку.</span>' +
           '<br><span class="muted">Считаем по: ' + statuses + ' · ' + dateLabel +
           ' · exclude ' + (f.exclude_sent_days || 0) + ' дн.' +
           (f.exclude_today_bookings ? ' · без сегодняшних шоу' : '') +
