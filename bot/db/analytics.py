@@ -420,6 +420,7 @@ def fetch_analytics_report(
                     FROM (
                         SELECT
                             {BOT_START_PAYLOAD_CANON_SQL} AS payload,
+                            user_id,
                             telegram_id,
                             vk_id
                         FROM analytics_events
