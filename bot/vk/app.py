@@ -2107,15 +2107,22 @@ class VKBotApp:
                 "посмотреть анонсы": "channel",
             }
             cmd = text_commands.get(text_key)
-            if not cmd and text_key in {"📅 выбрать по дате", "выбрать по дате"}:
-                cmd = f"{context}_date_page" if context in {"best", "check", "hitloto"} else None
+            if not cmd and text_key in {
+                "📅 выбрать по дате",
+                "выбрать по дате",
+                "📅 выбор по дате",
+                "выбор по дате",
+                "выбор по датам",
+                "выбрать по датам",
+            }:
+                cmd = f"{context}_date_page" if context in {"best", "check", "hitloto"} else "check_date_page"
             if not cmd and text_key in {
                 "📍 выбор по площадке",
                 "выбор по площадке",
                 "📍 выбор по локации",
                 "выбор по локации",
             }:
-                cmd = f"{context}_venues" if context in {"best", "check"} else None
+                cmd = f"{context}_venues" if context in {"best", "check"} else "check_venues"
 
         if self._cmd_on_cooldown(peer_id, cmd):
             logger.info("Skip VK cmd cooldown peer_id=%s cmd=%s", peer_id, cmd)
