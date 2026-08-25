@@ -41,25 +41,36 @@ async def clear_inline_keyboard(
 ) -> bool:
     """Снять inline-кнопки, текст сообщения не трогать.
 
-    message_ref пробуем и как message_id, и как conversation_message_id —
-    messages.send в разных версиях API отдаёт разное.
+    Пробуем все переданные id (клик + сохранённый confirm/ticket):
+    messages.send в разных версиях API отдаёт message_id или cmid.
+    Не останавливаемся на первом успехе — иначе снимается только
+    диалог «подтвердите отмену», а кнопки на карточке брони остаются.
     """
     kb = empty_inline_keyboard()
     refs: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+
+    def _add(kind: str, value: int | None) -> None:
+        if not value:
+            return
+        item = (kind, int(value))
+        if item in seen:
+            return
+        seen.add(item)
+        refs.append(item)
+
+    _add("conversation_message_id", conversation_message_id)
     if message_ref:
         mid = int(message_ref)
-        if mid:
-            refs.append(("message_id", mid))
-            refs.append(("conversation_message_id", mid))
-    if conversation_message_id:
-        cmid = int(conversation_message_id)
-        if cmid and ("conversation_message_id", cmid) not in refs:
-            refs.insert(0, ("conversation_message_id", cmid))
+        _add("message_id", mid)
+        _add("conversation_message_id", mid)
+
+    ok = False
     for kind, value in refs:
         kwargs = {"message_id": value} if kind == "message_id" else {"conversation_message_id": value}
         try:
             if await client.edit_message(peer_id, None, keyboard=kb, **kwargs):
-                return True
+                ok = True
         except Exception:
             logger.exception(
                 "clear_inline_keyboard failed peer_id=%s %s=%s",
@@ -67,7 +78,7 @@ async def clear_inline_keyboard(
                 kind,
                 value,
             )
-    return False
+    return ok
 
 STEP_NAME = "waiting_name"
 STEP_PHONE = "waiting_phone"

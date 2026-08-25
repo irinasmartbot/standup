@@ -1378,8 +1378,12 @@ class VKBotApp:
             booking = await self._mb_actionable(peer_id, vk_id, booking_id)
             if not booking:
                 return True
-            # Сообщение с «Отменить бронь» / билетом — кнопки больше не нужны.
-            await self._strip_inline_keyboard(peer_id)
+            # Карточка брони / билет + текущий клик — убрать кнопки сразу.
+            confirm_mid = booking[16] if len(booking) > 16 else None
+            ticket_mid = booking[15] if len(booking) > 15 else None
+            await self._strip_inline_keyboard(peer_id, confirm_mid)
+            if ticket_mid and ticket_mid != confirm_mid:
+                await self._strip_inline_keyboard(peer_id, ticket_mid)
             date_label = f"{format_date(booking[5])} {booking[6]}"
             await self._send_text(
                 peer_id,
@@ -1394,6 +1398,7 @@ class VKBotApp:
             if not booking:
                 return True
             confirm_mid = booking[16] if len(booking) > 16 else None
+            ticket_mid = booking[15] if len(booking) > 15 else None
             await vk_mb.delete_ticket_message(self.client, peer_id, booking_id)
             from bot.db.crud import get_booking_format, clear_raffle_after_user_cancel
 
@@ -1405,7 +1410,10 @@ class VKBotApp:
                 except Exception:
                     logger.exception("Failed to clear raffle entitlement after cancel vk_id=%s", vk_id)
             vk_mb.clear_manage_session(self.manage_sessions, vk_id)
+            # Снимаем и диалог подтверждения (cmid клика), и карточку брони/билета.
             await self._strip_inline_keyboard(peer_id, confirm_mid)
+            if ticket_mid and ticket_mid != confirm_mid:
+                await self._strip_inline_keyboard(peer_id, ticket_mid)
             cancel_text = vk_mb.cancel_done_text(
                 community_link=self.settings.community_link,
                 manager_link=self.settings.manager_link,
@@ -1426,7 +1434,11 @@ class VKBotApp:
             booking = await self._mb_actionable(peer_id, vk_id, booking_id)
             if not booking:
                 return True
-            await self._strip_inline_keyboard(peer_id)
+            confirm_mid = booking[16] if len(booking) > 16 else None
+            ticket_mid = booking[15] if len(booking) > 15 else None
+            await self._strip_inline_keyboard(peer_id, confirm_mid)
+            if ticket_mid and ticket_mid != confirm_mid:
+                await self._strip_inline_keyboard(peer_id, ticket_mid)
             date_label = f"{format_date(booking[5])} {booking[6]}"
             await self._send_text(
                 peer_id,
@@ -1441,9 +1453,12 @@ class VKBotApp:
             if not booking:
                 return True
             confirm_mid = booking[16] if len(booking) > 16 else None
+            ticket_mid = booking[15] if len(booking) > 15 else None
             await vk_mb.delete_ticket_message(self.client, peer_id, booking_id)
             update_booking_status(booking_id, "cancelled")
             await self._strip_inline_keyboard(peer_id, confirm_mid)
+            if ticket_mid and ticket_mid != confirm_mid:
+                await self._strip_inline_keyboard(peer_id, ticket_mid)
             vk_mb.clear_manage_session(self.manage_sessions, vk_id)
             self.peer_context[peer_id] = "check"
             self._track(vk_id, EVENT_BRANCH_PROVERKA, props={"via": "change_date"})
