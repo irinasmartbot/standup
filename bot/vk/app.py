@@ -808,7 +808,11 @@ class VKBotApp:
             # Только явная ошибка VK API по вложению.
             if not isinstance(exc, VKAPIError):
                 raise
-            logger.exception("Failed to send VK message with attachment, retrying without it")
+            logger.exception(
+                "Failed to send VK message with attachment, retrying without it peer_id=%s att=%s",
+                peer_id,
+                attachment,
+            )
             message_id = await self.client.send_message(peer_id, text, keyboard=keyboard)
         if clear_id:
             try:
@@ -4002,44 +4006,36 @@ class VKBotApp:
                 (event.get("image") or "")[:120],
             )
         peer = int(peer_id)
-        existing_id = self.peer_carousel_message_ids.get(peer)
-
-        if edit and attachment and await self._edit_card(
-            peer_id,
-            text,
-            stored_message_id=existing_id,
-            keyboard=keyboard,
-            attachment=attachment,
-        ):
-            if existing_id:
-                self.peer_carousel_message_ids[peer] = int(existing_id)
-            return
-        if edit and (existing_id or self._callback_cmid(peer_id)):
-            # Не оставляем чужой постер от предыдущего слайда.
-            logger.warning(
-                "BEST carousel edit fallback peer_id=%s msg_id=%s cmid=%s has_poster=%s",
-                peer_id,
-                existing_id,
-                self._callback_cmid(peer_id),
-                bool(attachment),
-            )
+        # VK messages.edit с новым attachment почти никогда не подставляет постер
+        # (остаётся старое фото или текст без фото). Как у дат: удалить и send.
+        existing_id = self.peer_carousel_message_ids.pop(peer, None)
+        if existing_id:
             try:
-                if existing_id:
-                    await self.client.delete_messages(peer_id, [int(existing_id)])
-                elif self._callback_cmid(peer_id):
-                    await self.client.delete_by_cmids(peer_id, [int(self._callback_cmid(peer_id))])
+                await self.client.delete_messages(peer_id, [int(existing_id)])
             except Exception:
-                logger.exception("Failed to delete old BEST carousel card peer_id=%s", peer_id)
-            self.peer_carousel_message_ids.pop(peer, None)
-
+                logger.exception(
+                    "Failed to delete old BEST carousel card peer_id=%s id=%s",
+                    peer_id,
+                    existing_id,
+                )
         mid = await self._send_text(
             peer_id,
             text,
             keyboard=keyboard,
             attachment=attachment,
+            replace_nav=True,
         )
         if mid:
             self.peer_carousel_message_ids[peer] = int(mid)
+        elif attachment:
+            # send_text при replace_nav+edit может вернуть None — запомним cmid нельзя;
+            # главное что сообщение с фото ушло.
+            logger.warning(
+                "BEST carousel send returned no message_id peer_id=%s has_att=%s edit=%s",
+                peer_id,
+                bool(attachment),
+                edit,
+            )
 
     async def _send_best_date(self, peer_id: int, date: str, *, vk_id: int | None = None) -> None:
         events = [e for e in await self._load_events("best") if e["date"] == date]
