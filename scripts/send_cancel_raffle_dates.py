@@ -89,7 +89,6 @@ def _lookup_telegram_ids(usernames: list[str]) -> list[dict]:
 
 
 async def _send_one(bot, telegram_id: int) -> None:
-    from bot.db.crud import save_raffle_nav
     from bot.handlers.rozygrysh import _dates_kb
 
     await bot.send_message(chat_id=int(telegram_id), text=CANCEL_TEXT)
@@ -100,15 +99,13 @@ async def _send_one(bot, telegram_id: int) -> None:
             text="Пока нет доступных дат для выбора 😔",
         )
         return
-    sent = await bot.send_message(
+    # Не пишем в raffle_nav: cleanup после прошедших шоу удаляет dates_message_id
+    # и стирает только что отправленное меню (как у тестовой отправки).
+    await bot.send_message(
         chat_id=int(telegram_id),
         text=DATES_CAPTION,
         reply_markup=markup,
     )
-    try:
-        save_raffle_nav(int(telegram_id), dates_message_id=sent.message_id)
-    except Exception:
-        pass
 
 
 async def _run(usernames: list[str], *, dry_run: bool) -> int:
