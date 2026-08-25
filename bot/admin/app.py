@@ -954,10 +954,28 @@ def _status_badge(status: str) -> str:
     return f'<span class="badge" style="background:{color}">{_h(STATUS_LABELS.get(status, status))}</span>'
 
 
+def _status_scale_caption(event: dict) -> str:
+    """Подпись к цветной шкале: люди по всем статусам (не только активные)."""
+    guests = event.get("status_guests") or {}
+    booked = int(guests.get("booked") or 0)
+    confirmed = int(guests.get("confirmed") or 0)
+    cancelled = int(guests.get("cancelled") or 0)
+    annulled = int(guests.get("annulled") or 0)
+    return (
+        '<div class="status-scale-caption">'
+        f"всего: активные <b>{booked}</b> / подтверждено <b>{confirmed}</b> / "
+        f"отменено <b>{cancelled}</b> / аннулировано <b>{annulled}</b>"
+        "</div>"
+    )
+
+
 def _status_bar(event: dict) -> str:
     total = sum(event["status_counts"].values())
     if total <= 0:
-        return '<div class="status-bar empty"></div>'
+        return (
+            f"{_status_scale_caption(event)}"
+            '<div class="status-bar empty"></div>'
+        )
     parts = []
     for status in STATUSES:
         count = event["status_counts"].get(status, 0)
@@ -968,7 +986,10 @@ def _status_bar(event: dict) -> str:
             f'<span title="{_h(STATUS_LABELS[status])}: {count}" '
             f'style="width:{width:.1f}%;background:{STATUS_COLORS[status]}"></span>'
         )
-    return f'<div class="status-bar">{"".join(parts)}</div>'
+    return (
+        f"{_status_scale_caption(event)}"
+        f'<div class="status-bar">{"".join(parts)}</div>'
+    )
 
 
 def _tracks_seats(event: dict) -> bool:
@@ -977,21 +998,19 @@ def _tracks_seats(event: dict) -> bool:
 
 
 def _seat_bar(event: dict) -> str:
-    reserved = event["reserved_guests"]
     confirmed = event["confirmed_guests"]
     if not _tracks_seats(event):
-        # Розыгрыш / BEST / Hit Lotto — места не считаем
-        return f'<div class="active-bookings">Активные брони: <b>{reserved} чел</b></div>'
+        # Розыгрыш / BEST / Hit Lotto — места не считаем; статусы — у шкалы ниже.
+        return ""
     max_seats = event["max_seats"]
     if max_seats <= 0:
-        return f'<div class="capacity muted">Активные брони: {reserved} чел. Лимит мест не указан.</div>'
+        return '<div class="capacity muted">Лимит мест не указан.</div>'
     free = max(0, max_seats - confirmed)
     percent = min(100, confirmed / max_seats * 100)
     return (
         f'<div class="capacity-line"><span>Места заняты билетами: {confirmed}/{max_seats}</span>'
         f'<span>{free} свободно</span></div>'
         f'<div class="capacity-bar"><span style="width:{percent:.1f}%"></span></div>'
-        f'<div class="active-bookings">Активные брони: <b>{reserved} чел</b></div>'
     )
 
 
@@ -2946,22 +2965,25 @@ def _analytics_metric_card(
             primary = metric.get("events", 0)
         people = int(metric.get("uniques") or 0)
         secondary = f'<small class="muted">{people} чел</small>' if people else ""
+        caption_above = ""
     else:
         primary = metric.get("uniques", 0)
-        secondary_parts = []
-        if primary_caption:
-            secondary_parts.append(f'<small class="muted">{_h(primary_caption)}</small>')
+        caption_above = (
+            f'<small class="muted metric-caption">{_h(primary_caption)}</small>'
+            if primary_caption
+            else ""
+        )
         events_count = metric.get("events", 0)
         if events_label:
-            secondary_parts.append(
+            secondary = (
                 f'<small class="muted">всего {events_count} {_h(events_label)}</small>'
             )
         else:
-            secondary_parts.append(f'<small class="muted">всего {events_count}</small>')
-        secondary = "".join(secondary_parts)
+            secondary = f'<small class="muted">всего {events_count}</small>'
     return (
         f"{tag_open}"
         f"<span>{_h(title)}</span>"
+        f"{caption_above}"
         f"<b>{primary}</b>"
         f"{secondary}"
         f"{hint}"
@@ -4510,6 +4532,8 @@ def render_admin_html(
     .metric span {{ display:block; color:var(--muted); font-size:14px; }}
     .metric b {{ display:block; margin-top:8px; font-size:30px; }}
     .metric small {{ display:block; margin-top:6px; font-size:13px; }}
+    .metric small.metric-caption {{ margin-top:4px; margin-bottom:0; }}
+    .metric small.metric-caption + b {{ margin-top:4px; }}
     a.metric-link {{ display:block; text-decoration:none; color:inherit; transition:box-shadow .15s, transform .15s; }}
     a.metric-link:hover {{ box-shadow:0 10px 28px rgba(15,23,42,.12); transform:translateY(-1px); }}
     a.metric-link .metric-who {{ color:#2563eb; margin-top:4px; }}
@@ -4573,6 +4597,8 @@ def render_admin_html(
     .capacity-bar span {{ display:block; background:#22c55e; }}
     .status-bar span {{ display:block; }}
     .status-bar.empty {{ background:#eef2f7; }}
+    .status-scale-caption {{ margin-top:10px; color:#334155; font-size:14px; }}
+    .status-scale-caption b {{ font-weight:700; }}
     .active-bookings {{ margin-top:10px; color:#334155; }}
     .counters, .mini-metrics {{ display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; align-items:center; }}
     .counter, .mini-metrics span {{ background:#f8fafc; border:1px solid var(--line); border-radius:999px; padding:7px 10px; color:#334155; }}
