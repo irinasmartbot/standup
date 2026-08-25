@@ -114,6 +114,7 @@ SYSTEM_PHOTO_FILES = {
     "photo_2026-07-21_01-59-43.jpg",
 }
 RAFFLE_DATES_PAGE_SIZE = 10
+RAFFLE_DATES_CAPTION = "Выбирай дату мероприятия в рамках розыгрыша 👇"
 OTZYV_PHOTO_1 = os.path.join(PHOTOS_DIR, "rozygrysh_otzyv_1.jpg")
 OTZYV_PHOTO_2 = os.path.join(PHOTOS_DIR, "rozygrysh_otzyv_2.jpg")
 # запасные пути (локальная разработка, если ещё не скопировали в фото/)
@@ -1356,7 +1357,7 @@ async def rz_date(call: CallbackQuery, state: FSMContext):
     if not events:
         await call.answer("Эта дата уже недоступна", show_alert=True)
         markup, _ = await _dates_kb()
-        await call.message.answer("Выбери другую дату 👇", reply_markup=markup)
+        await call.message.answer(RAFFLE_DATES_CAPTION, reply_markup=markup)
         await call.answer()
         return
 
@@ -1388,7 +1389,11 @@ async def rz_dates(call: CallbackQuery):
     if not dates:
         await call.answer("Нет доступных дат", show_alert=True)
         return
-    sent = await call.message.answer("Выбирай дату 👇", reply_markup=markup)
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    sent = await call.message.answer(RAFFLE_DATES_CAPTION, reply_markup=markup)
     save_raffle_nav(call.from_user.id, dates_message_id=sent.message_id)
     await call.answer()
 
@@ -1405,7 +1410,7 @@ async def rz_dates_page(call: CallbackQuery):
     try:
         await call.message.edit_reply_markup(reply_markup=markup)
     except Exception:
-        sent = await call.message.answer("Выбирай дату 👇", reply_markup=markup)
+        sent = await call.message.answer(RAFFLE_DATES_CAPTION, reply_markup=markup)
         save_raffle_nav(call.from_user.id, dates_message_id=sent.message_id)
     await call.answer()
 
