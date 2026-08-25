@@ -476,6 +476,7 @@ class VKBotApp:
         self.peer_nav_message_ids: dict[int, list[int]] = {}
         self._pending_delete_ids: dict[int, list[int]] = {}
         self.peer_carousel_message_ids: dict[int, int] = {}
+        self.peer_best_poster_message_ids: dict[int, int] = {}
         self.peer_my_bookings_message_ids: dict[int, int] = {}
         self.peer_dates_message_ids: dict[int, int] = {}
         # Keep dates-card photo across page edits: VK strips attachment if omitted.
@@ -3974,6 +3975,34 @@ class VKBotApp:
             return
         await self._send_best_venue_carousel(peer_id, venue, 0, vk_id=vk_id, edit=False)
 
+    async def _send_best_poster_message(self, peer_id: int, attachment: str | None) -> int | None:
+        """BEST-постер отдельным сообщением: VK иногда съедает фото на карточке с link-кнопкой."""
+        peer = int(peer_id)
+        old_id = self.peer_best_poster_message_ids.pop(peer, None)
+        if old_id:
+            try:
+                await self.client.delete_messages(peer, [int(old_id)])
+            except Exception:
+                logger.exception(
+                    "Failed to delete old BEST poster peer_id=%s id=%s",
+                    peer_id,
+                    old_id,
+                )
+        if not attachment:
+            return None
+        try:
+            mid = await self.client.send_message(
+                peer_id,
+                "Постер шоу 👇",
+                attachment=attachment,
+            )
+        except Exception:
+            logger.exception("Failed to send separate BEST poster peer_id=%s", peer_id)
+            return None
+        if mid:
+            self.peer_best_poster_message_ids[peer] = int(mid)
+        return mid
+
     async def _send_best_venue_carousel(
         self,
         peer_id: int,
@@ -4049,18 +4078,20 @@ class VKBotApp:
                     peer_id,
                     existing_id,
                 )
+        poster_mid = await self._send_best_poster_message(peer_id, attachment)
         mid = await self._send_text(
             peer_id,
             text,
             keyboard=keyboard,
-            attachment=attachment,
+            attachment=None,
             replace_nav=True,
         )
+        if poster_mid:
+            self._remember_nav(peer_id, poster_mid)
         if mid:
             self.peer_carousel_message_ids[peer] = int(mid)
         elif attachment:
-            # send_text при replace_nav+edit может вернуть None — запомним cmid нельзя;
-            # главное что сообщение с фото ушло.
+            # send_text при replace_nav+edit может вернуть None — запомним cmid нельзя.
             logger.warning(
                 "BEST carousel send returned no message_id peer_id=%s has_att=%s edit=%s",
                 peer_id,
@@ -4111,12 +4142,15 @@ class VKBotApp:
         kb.button("Назад к датам", _payload("best_date_page"))
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)
+        poster_mid = await self._send_best_poster_message(peer_id, attachment)
         await self._send_text(
             peer_id,
             _best_event_text_vk(event),
             keyboard=kb.as_json(),
-            attachment=attachment,
+            attachment=None,
         )
+        if poster_mid:
+            self._remember_nav(peer_id, poster_mid)
 
     async def _send_hitloto_dates(
         self,
