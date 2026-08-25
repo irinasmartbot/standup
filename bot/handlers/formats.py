@@ -448,17 +448,15 @@ async def _send_best_event_card(message, event, back_callback="best_dates", *, t
     kb.button(text="◀️ Назад", callback_data=back_callback)
     kb.adjust(1)
     text = _best_event_text(event)
-    image = event.get("image") or ""
-    if image:
-        try:
-            await message.answer_photo(photo=image, caption=text, reply_markup=kb.as_markup(), parse_mode="HTML")
-            return
-        except Exception:
-            try:
-                await message.answer_photo(photo=image)
-            except Exception:
-                pass
-    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    from bot.utils.event_poster import tg_send_event_card
+
+    await tg_send_event_card(
+        message,
+        event.get("image"),
+        caption=text,
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
 
 
 def _best_location_carousel_kb(events, index: int):
@@ -490,36 +488,35 @@ async def _send_best_location_carousel(message, events, index: int = 0, *, teleg
     if telegram_id:
         _track_show_card(telegram_id, event, fmt="best", browse="venue")
     text = _best_event_text(event)
-    image = event.get("image") or ""
     markup = _best_location_carousel_kb(events, index)
-    if image:
-        try:
-            await message.answer_photo(photo=image, caption=text, reply_markup=markup, parse_mode="HTML")
-            return
-        except Exception:
-            try:
-                await message.answer_photo(photo=image)
-            except Exception:
-                pass
-    await message.answer(text, reply_markup=markup, parse_mode="HTML")
+    from bot.utils.event_poster import tg_send_event_card
+
+    await tg_send_event_card(
+        message,
+        event.get("image"),
+        caption=text,
+        reply_markup=markup,
+        parse_mode="HTML",
+    )
 
 
 async def _edit_best_location_carousel(call: CallbackQuery, events, index: int):
     event = events[index]
     _track_show_card(call.from_user.id, event, fmt="best", browse="venue")
     text = _best_event_text(event)
-    image = event.get("image") or ""
     markup = _best_location_carousel_kb(events, index)
+    from bot.utils.event_poster import tg_event_poster
 
-    if image:
+    photo = await tg_event_poster(event.get("image"))
+    if photo is not None:
         try:
             await call.message.edit_media(
-                media=InputMediaPhoto(media=image, caption=text, parse_mode="HTML"),
+                media=InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"),
                 reply_markup=markup,
             )
             return
         except Exception:
-            pass
+            logger.exception("Failed to edit BEST carousel media")
 
     try:
         if call.message.photo:
@@ -1018,17 +1015,15 @@ async def _send_hitloto_event_card(message, event, back_callback="hitloto_dates"
     kb.button(text="◀️ Назад", callback_data=back_callback)
     kb.adjust(1)
     text = _hitloto_event_text(event)
-    image = event.get("image") or ""
-    if image:
-        try:
-            await message.answer_photo(photo=image, caption=text, reply_markup=kb.as_markup(), parse_mode="HTML")
-            return
-        except Exception:
-            try:
-                await message.answer_photo(photo=image)
-            except Exception:
-                pass
-    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    from bot.utils.event_poster import tg_send_event_card
+
+    await tg_send_event_card(
+        message,
+        event.get("image"),
+        caption=text,
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
 
 
 async def hitloto_format_entry(message):

@@ -13,15 +13,61 @@ from bot.db.crud import (
     get_booking,
     get_last_phone,
     get_total_guests,
+    save_confirm_message_id,
     save_ticket_message_id,
     update_booking_status,
 )
 from bot.services.sheets import load_events
 from bot.utils.phone import normalize_phone
-from bot.utils.ticket import format_date, format_ticket_place, generate_ticket, guests_word, now_msk
-from bot.vk.keyboards import VKKeyboardBuilder
+from bot.utils.ticket import (
+    event_already_passed,
+    format_date,
+    format_ticket_place,
+    generate_ticket,
+    guests_word,
+    now_msk,
+)
+from bot.vk.keyboards import VKKeyboardBuilder, empty_inline_keyboard
 
 logger = logging.getLogger(__name__)
+
+
+async def clear_inline_keyboard(
+    client,
+    peer_id: int,
+    message_ref: int | None = None,
+    *,
+    conversation_message_id: int | None = None,
+) -> bool:
+    """Снять inline-кнопки, текст сообщения не трогать.
+
+    message_ref пробуем и как message_id, и как conversation_message_id —
+    messages.send в разных версиях API отдаёт разное.
+    """
+    kb = empty_inline_keyboard()
+    refs: list[tuple[str, int]] = []
+    if message_ref:
+        mid = int(message_ref)
+        if mid:
+            refs.append(("message_id", mid))
+            refs.append(("conversation_message_id", mid))
+    if conversation_message_id:
+        cmid = int(conversation_message_id)
+        if cmid and ("conversation_message_id", cmid) not in refs:
+            refs.insert(0, ("conversation_message_id", cmid))
+    for kind, value in refs:
+        kwargs = {"message_id": value} if kind == "message_id" else {"conversation_message_id": value}
+        try:
+            if await client.edit_message(peer_id, None, keyboard=kb, **kwargs):
+                return True
+        except Exception:
+            logger.exception(
+                "clear_inline_keyboard failed peer_id=%s %s=%s",
+                peer_id,
+                kind,
+                value,
+            )
+    return False
 
 STEP_NAME = "waiting_name"
 STEP_PHONE = "waiting_phone"
@@ -433,7 +479,9 @@ async def complete_booking(
         )
 
     try:
-        await client.send_message(peer_id, text, keyboard=keyboard)
+        msg_id = await client.send_message(peer_id, text, keyboard=keyboard)
+        if msg_id:
+            save_confirm_message_id(booking_id, msg_id)
     except Exception:
         # Бронь уже в БД — не роняем весь complete_booking (иначе «не удалось создать»).
         logger.exception(
@@ -450,11 +498,20 @@ async def complete_booking(
             )
         fallback.button("В главное меню", _payload("main_menu"))
         fallback.adjust(1)
-        await client.send_message(
-            peer_id,
-            text,
-            keyboard=fallback.as_json(),
-        )
+        try:
+            msg_id = await client.send_message(
+                peer_id,
+                text,
+                keyboard=fallback.as_json(),
+            )
+            if msg_id:
+                save_confirm_message_id(booking_id, msg_id)
+        except Exception:
+            logger.exception(
+                "VK after-booking fallback also failed booking_id=%s peer_id=%s",
+                booking_id,
+                peer_id,
+            )
     return booking_id
 
 
@@ -465,15 +522,22 @@ async def issue_ticket(
     booking_id: int,
     manager_link: str,
     community_link: str = "",
+    conversation_message_id: int | None = None,
 ) -> None:
     booking = get_active_booking_by_id(booking_id)
     if not booking:
+        await clear_inline_keyboard(
+            client,
+            peer_id,
+            conversation_message_id=conversation_message_id,
+        )
         await client.send_message(peer_id, "Бронь не найдена или уже отменена.")
         return
     status = booking[10]
     already_confirmed = status == "confirmed"
     # Индекс ticket_message_id в BOOKING_SELECT_SQL — 15.
     ticket_message_id = booking[15] if len(booking) > 15 else None
+    confirm_message_id = booking[16] if len(booking) > 16 else None
 
     name = booking[3]
     event_date = booking[5]
@@ -481,6 +545,20 @@ async def issue_ticket(
     event_address = booking[7] or ""
     event_location = booking[8] or ""
     guests = booking[9]
+
+    # Повтор «Получить билет» ок; по прошедшему шоу билет больше не шлём.
+    if event_already_passed(event_date, event_time):
+        await clear_inline_keyboard(
+            client,
+            peer_id,
+            confirm_message_id,
+            conversation_message_id=conversation_message_id,
+        )
+        await client.send_message(
+            peer_id,
+            "К сожалению, это мероприятие уже прошло. Посмотри актуальное расписание 😊",
+        )
+        return
 
     events = await load_events("proverka")
     event = next(
@@ -498,6 +576,12 @@ async def issue_ticket(
         confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
         if confirmed_guests + guests > event["max_seats"]:
             available = max(0, event["max_seats"] - confirmed_guests)
+            await clear_inline_keyboard(
+                client,
+                peer_id,
+                confirm_message_id,
+                conversation_message_id=conversation_message_id,
+            )
             await client.send_message(
                 peer_id,
                 "К сожалению, на это мероприятие уже не осталось мест для подтверждения билета.\n\n"
@@ -548,6 +632,8 @@ async def issue_ticket(
         )
         keyboard = raffle_ticket_manage_keyboard(booking_id, manager_link=manager_link)
     else:
+        from bot.utils.booking_texts import escobar_proverka_ticket_ps
+
         caption = (
             f"{head}"
             "<b>Данные по билету:</b>\n\n"
@@ -560,6 +646,7 @@ async def issue_ticket(
             f"При вопросах — менеджеру ({vk_manager}). "
             f"Если срочно — звоните {MANAGER_PHONE}.\n\n"
             f"Канал анонсов: {vk_community}"
+            f"{escobar_proverka_ticket_ps(location=event_location, address=event_address)}"
         )
         keyboard = manage_ticket_keyboard(booking_id, manager_link)
 
@@ -576,23 +663,13 @@ async def issue_ticket(
         attachment=attachment,
         keyboard=keyboard,
     )
-    # Билет ушёл — только теперь снимаем кнопки с прошлого сообщения (напоминание и т.п.).
-    confirm_message_id = booking[16] if len(booking) > 16 else None
-    if confirm_message_id:
-        try:
-            from bot.vk.keyboards import empty_inline_keyboard
-
-            await client.edit_message(
-                peer_id,
-                None,
-                message_id=int(confirm_message_id),
-                keyboard=empty_inline_keyboard(),
-            )
-        except Exception:
-            logger.exception(
-                "Failed to clear confirm keyboard after ticket booking_id=%s",
-                booking_id,
-            )
+    # Билет ушёл — снимаем кнопки с сообщения «Получить билет» (клик + сохранённый id).
+    await clear_inline_keyboard(
+        client,
+        peer_id,
+        confirm_message_id,
+        conversation_message_id=conversation_message_id,
+    )
     save_ticket_message_id(booking_id, msg_id)
     try:
         from bot.db.analytics import EVENT_BOOKING_TICKET_SENT, track_event

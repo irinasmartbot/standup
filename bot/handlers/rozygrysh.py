@@ -54,6 +54,7 @@ from bot.db.analytics import (
 )
 from bot.db.crud import (
     clear_raffle_awaiting_screenshot,
+    clear_raffle_after_user_cancel,
     clear_raffle_nav,
     create_booking,
     cancel_raffle_submission,
@@ -69,6 +70,7 @@ from bot.db.crud import (
     get_raffle_submission_by_mod_message,
     get_rozygrysh_used,
     get_total_guests,
+    has_raffle_screen_entitlement,
     reset_raffle_for_user,
     save_confirm_message_id,
     save_raffle_moderation_message,
@@ -372,6 +374,10 @@ TICKET_ISSUED_BLOCK_TEXT = (
     "Вы уже забронировали и получили билет по розыгрышу. "
     "Дождись шоу или отмени бронь, если планы поменялись 😊"
 )
+NEED_NEW_SCREEN_TEXT = (
+    "После отмены брони нужно снова отправить скрин на проверку — "
+    "кнопка «Забронировать» по старому одобрению больше не действует."
+)
 
 
 def _raffle_event_passed(booking_row) -> bool:
@@ -456,6 +462,16 @@ async def _guard_action(call: CallbackQuery) -> bool:
         await call.answer("Возможность уже использована", show_alert=True)
         return False
     return True
+
+
+async def _guard_screen_entitlement(call: CallbackQuery) -> bool:
+    """После отмены брони старый принятый скрин не даёт право бронировать снова."""
+    if not await _guard_action(call):
+        return False
+    if has_raffle_screen_entitlement(call.from_user.id):
+        return True
+    await call.answer(NEED_NEW_SCREEN_TEXT, show_alert=True)
+    return False
 
 
 async def _delete_call_message(call: CallbackQuery):
@@ -1338,7 +1354,7 @@ async def rz_channel_join(event: ChatMemberUpdated):
 
 @router.callback_query(F.data.startswith("rz_date_"))
 async def rz_date(call: CallbackQuery, state: FSMContext):
-    if not await _guard_action(call):
+    if not await _guard_screen_entitlement(call):
         return
     active = get_active_raffle_booking(call.from_user.id)
     if active:
@@ -1383,7 +1399,7 @@ async def rz_date(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "rz_dates")
 async def rz_dates(call: CallbackQuery):
-    if not await _guard_action(call):
+    if not await _guard_screen_entitlement(call):
         return
     markup, dates = await _dates_kb()
     if not dates:
@@ -1400,7 +1416,7 @@ async def rz_dates(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("rz_dates_page_"))
 async def rz_dates_page(call: CallbackQuery):
-    if not await _guard_action(call):
+    if not await _guard_screen_entitlement(call):
         return
     page = int(call.data.replace("rz_dates_page_", "", 1))
     markup, dates = await _dates_kb(page)
@@ -1417,7 +1433,7 @@ async def rz_dates_page(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("rz_event_"))
 async def rz_event(call: CallbackQuery):
-    if not await _guard_action(call):
+    if not await _guard_screen_entitlement(call):
         return
     event_id = int(call.data.replace("rz_event_", ""))
     event = next((e for e in await _future_best_events() if e["id"] == event_id), None)
@@ -1449,16 +1465,15 @@ async def _send_event_card(message, event, telegram_id: int):
     kb.button(text="◀️ Назад", callback_data="rz_dates")
     kb.adjust(1)
     image = event.get("image") or ""
-    sent = None
-    if image:
-        try:
-            sent = await message.answer_photo(
-                photo=image, caption=text, reply_markup=kb.as_markup(), parse_mode="HTML"
-            )
-        except Exception:
-            sent = None
-    if sent is None:
-        sent = await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    from bot.utils.event_poster import tg_send_event_card
+
+    sent = await tg_send_event_card(
+        message,
+        image,
+        caption=text,
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
     save_raffle_nav(telegram_id, card_message_id=sent.message_id)
 
 
@@ -1515,7 +1530,7 @@ async def _ask_raffle_name(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("rz_book_"))
 async def rz_book(call: CallbackQuery, state: FSMContext):
-    if not await _guard_action(call):
+    if not await _guard_screen_entitlement(call):
         return
     active = get_active_raffle_booking(call.from_user.id)
     if active:
@@ -2034,7 +2049,7 @@ async def rz_cancel_do(call: CallbackQuery):
     )
     await delete_my_bookings_messages(call.message.bot, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
-    set_rozygrysh_used(call.from_user.id, False)
+    clear_raffle_after_user_cancel(call.from_user.id)
     await refresh_user_commands(call.message.bot, call.from_user.id)
 
     kb = InlineKeyboardBuilder()
@@ -2043,6 +2058,7 @@ async def rz_cancel_do(call: CallbackQuery):
     await call.message.answer(
         f"Хорошо, спасибо, что предупредили 😊 Ждём Вас на других мероприятиях, "
         f"актуальная афиша всегда на нашем сайте: {SITE_URL.replace('https://', '')}\n\n"
+        f"Чтобы снова участвовать в розыгрыше — отправьте скрин заново.\n\n"
         f"При возникновении вопросов - можно писать менеджеру {_manager_username()}\n\n"
         f"И не забудь заглянуть на наш <a href='{CHANNEL_LINK}'>канал анонсов</a> "
         f"(там часто дарят бесплатные билеты на платные шоу 😉)",

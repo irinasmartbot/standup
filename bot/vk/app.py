@@ -183,6 +183,18 @@ WELCOME_TEXT = (
     "🎟 Забронировать места на <b>бесплатные шоу</b>\n"
     "⭐ Купить билеты на <b>StandUp BEST</b> и <b>Хитлото</b>"
 )
+# Вечернее окно шоу (МСК): «Начать» → подсказка; воронка розыгрыша → офлайн-подарок.
+_EVENING_GIFT_HINT_HOUR_START = 19
+_EVENING_GIFT_HINT_HOUR_END = 21  # exclusive
+EVENING_GIFT_HINT_TEXT = (
+    "Если вы хотели участвовать в розыгрыше, напишите слово <b>подарок</b>"
+)
+
+
+def in_evening_offline_gift_window(when: datetime | None = None) -> bool:
+    """True с 19:00 до 21:00 по Москве (час шоу / офлайн-розыгрыша)."""
+    dt = when or now_msk()
+    return _EVENING_GIFT_HINT_HOUR_START <= int(dt.hour) < _EVENING_GIFT_HINT_HOUR_END
 FORMATS_TEXT = TG_FORMATS_TEXT
 BUY_TICKET_TEXT = TG_BUY_TICKET_TEXT
 RULES_TEXT = TG_RULES_TEXT
@@ -227,11 +239,14 @@ def _date_label(date: str) -> str:
         return date
 
 
-def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) -> str:
+def main_menu_keyboard(
+    settings: VKSettings, *, show_my_bookings: bool = False, show_rules: bool = True
+) -> str:
     """Главное меню VK. Лимит API: max 6 рядов.
 
     Без «Мои брони» (6 рядов): бронь / купить / форматы / площадки|правила / канал / менеджер.
     С «Мои брони» (тоже 6 рядов): канал и менеджер в одном ряду — иначе не влезает.
+    В разделе «Правила» кнопку «Правила» не показываем (show_rules=False).
     """
     kb = VKKeyboardBuilder(inline=True)
     kb.button("Забронировать места", _payload("book"), color="primary")
@@ -240,7 +255,8 @@ def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) 
     if show_my_bookings:
         kb.button("Мои брони", _payload("my_bookings"))
     kb.button("Площадки", _payload("venues"))
-    kb.button("Правила", _payload("rules"))
+    if show_rules:
+        kb.button("Правила", _payload("rules"))
     # Callback + open_link в event answer — иначе клик по open_link бот не видит и аналитика пустая.
     kb.button("Канал анонсов", _payload("channel"))
     # В паре с каналом длинная подпись снова обрежется — короче только в этом случае.
@@ -248,10 +264,15 @@ def main_menu_keyboard(settings: VKSettings, *, show_my_bookings: bool = False) 
     kb.button(manager_label, _payload("manager"))
     # Розыгрыш — только по ссылке / слову «розыгрыш».
     if show_my_bookings:
-        # 1,1,1,1,2,2 — канал|менеджер рядом из‑за лимита 6 рядов
-        kb.adjust(1, 1, 1, 1, 2, 2)
-    else:
+        if show_rules:
+            # 1,1,1,1,2,2 — канал|менеджер рядом из‑за лимита 6 рядов
+            kb.adjust(1, 1, 1, 1, 2, 2)
+        else:
+            kb.adjust(1, 1, 1, 1, 1, 2)
+    elif show_rules:
         kb.adjust(1, 1, 1, 2, 1, 1)
+    else:
+        kb.adjust(1, 1, 1, 1, 1, 1)
     return kb.as_json()
 
 
@@ -505,14 +526,18 @@ class VKBotApp:
             source=VK_CHANNEL,
         )
 
-    def _main_menu_kb(self, vk_id: int | None = None) -> str:
+    def _main_menu_kb(self, vk_id: int | None = None, *, show_rules: bool = True) -> str:
         show_my_bookings = False
         if vk_id is not None:
             try:
                 show_my_bookings = bool(vk_mb.list_rows(int(vk_id)))
             except Exception:
                 logger.exception("Failed to check VK bookings for menu vk_id=%s", vk_id)
-        return main_menu_keyboard(self.settings, show_my_bookings=show_my_bookings)
+        return main_menu_keyboard(
+            self.settings,
+            show_my_bookings=show_my_bookings,
+            show_rules=show_rules,
+        )
 
     def _cover_attachment(self, *keys: str) -> str | None:
         for key in keys:
@@ -528,16 +553,13 @@ class VKBotApp:
         return random_show_cover_attachment(self.images) or self._cover_attachment("show_cover")
 
     async def _event_poster_attachment(self, peer_id: int, event: dict[str, Any]) -> str | None:
-        poster = await resolve_image_attachment(
+        """Только постер из image_url мероприятия — без случайных обложек."""
+        return await resolve_image_attachment(
             self.client,
             peer_id,
             event.get("image"),
             self.event_images,
         )
-        if poster:
-            return poster
-        # Никогда не подставляем hitloto в общий fallback — только show_cover / random.
-        return self._random_cover_attachment() or self._cover_attachment("show_cover")
 
     def _queue_delete(self, peer_id: int, *message_ids: Any) -> None:
         bucket = self._pending_delete_ids.setdefault(int(peer_id), [])
@@ -826,9 +848,12 @@ class VKBotApp:
             self._track(user_id, EVENT_BOT_START)
         else:
             self._track(user_id, EVENT_CMD_MAIN_MENU)
+        text = WELCOME_TEXT
+        if is_start and in_evening_offline_gift_window():
+            text = f"{WELCOME_TEXT}\n\n{EVENING_GIFT_HINT_TEXT}"
         await self._send_text(
             peer_id,
-            WELCOME_TEXT,
+            text,
             keyboard=self._main_menu_kb(user_id),
             replace_nav=replace_nav,
         )
@@ -1051,11 +1076,34 @@ class VKBotApp:
             )
         vk_booking.clear_session(self.booking_sessions, vk_id)
 
+    async def _strip_inline_keyboard(
+        self,
+        peer_id: int,
+        message_ref: int | None = None,
+        *,
+        conversation_message_id: int | None = None,
+    ) -> bool:
+        """Убрать inline-кнопки: по сохранённому id и/или по cmid клика."""
+        cmid = conversation_message_id
+        if cmid is None:
+            cmid = self._callback_cmid(peer_id)
+        try:
+            return await vk_booking.clear_inline_keyboard(
+                self.client,
+                peer_id,
+                message_ref,
+                conversation_message_id=cmid,
+            )
+        except Exception:
+            logger.exception("Failed to strip VK inline keyboard peer_id=%s", peer_id)
+            return False
+
     async def _issue_ticket(self, peer_id: int, booking_id: int) -> None:
         if booking_id in self._ticket_in_progress:
             await self.client.send_message(peer_id, "Билет уже формируется.")
             return
         self._ticket_in_progress.add(booking_id)
+        cmid = self._callback_cmid(peer_id)
         try:
             await vk_booking.issue_ticket(
                 client=self.client,
@@ -1063,6 +1111,7 @@ class VKBotApp:
                 booking_id=booking_id,
                 manager_link=self.settings.manager_link,
                 community_link=self.settings.community_link,
+                conversation_message_id=cmid,
             )
             # Успех — отменяем отложенные ретраи, если были.
             task = self._ticket_retry_tasks.pop(int(booking_id), None)
@@ -1273,6 +1322,7 @@ class VKBotApp:
     async def _mb_actionable(self, peer_id: int, vk_id: int, booking_id: int):
         booking, err = vk_mb.actionable_booking(booking_id, vk_id)
         if err == "past":
+            await self._strip_inline_keyboard(peer_id)
             kb = VKKeyboardBuilder(inline=True)
             kb.button("📅 Посмотреть актуальные даты", _payload("check_date_page"))
             kb.button("В главное меню", _payload("main_menu"))
@@ -1284,6 +1334,7 @@ class VKBotApp:
             )
             return None
         if err or not booking:
+            await self._strip_inline_keyboard(peer_id)
             await self.client.send_message(peer_id, err or "Эта бронь уже отменена или не найдена.")
             return None
         return booking
@@ -1327,6 +1378,8 @@ class VKBotApp:
             booking = await self._mb_actionable(peer_id, vk_id, booking_id)
             if not booking:
                 return True
+            # Сообщение с «Отменить бронь» / билетом — кнопки больше не нужны.
+            await self._strip_inline_keyboard(peer_id)
             date_label = f"{format_date(booking[5])} {booking[6]}"
             await self._send_text(
                 peer_id,
@@ -1340,23 +1393,30 @@ class VKBotApp:
             booking = await self._mb_actionable(peer_id, vk_id, booking_id)
             if not booking:
                 return True
+            confirm_mid = booking[16] if len(booking) > 16 else None
             await vk_mb.delete_ticket_message(self.client, peer_id, booking_id)
-            update_booking_status(booking_id, "cancelled")
-            try:
-                from bot.db.crud import get_active_raffle_booking, set_rozygrysh_used
+            from bot.db.crud import get_booking_format, clear_raffle_after_user_cancel
 
-                # Если отменили розыгрыш — снова можно участвовать.
-                if not get_active_raffle_booking(vk_id=vk_id):
-                    set_rozygrysh_used(vk_id=vk_id, used=False)
-            except Exception:
-                logger.exception("Failed to clear raffle flag after cancel vk_id=%s", vk_id)
+            was_raffle = (get_booking_format(booking_id) or "").strip().lower() == "rozygrysh"
+            update_booking_status(booking_id, "cancelled")
+            if was_raffle:
+                try:
+                    clear_raffle_after_user_cancel(vk_id=vk_id)
+                except Exception:
+                    logger.exception("Failed to clear raffle entitlement after cancel vk_id=%s", vk_id)
             vk_mb.clear_manage_session(self.manage_sessions, vk_id)
+            await self._strip_inline_keyboard(peer_id, confirm_mid)
+            cancel_text = vk_mb.cancel_done_text(
+                community_link=self.settings.community_link,
+                manager_link=self.settings.manager_link,
+            )
+            if was_raffle:
+                cancel_text += (
+                    "\n\nЧтобы снова участвовать в розыгрыше — отправьте скрин заново."
+                )
             await self._send_text(
                 peer_id,
-                vk_mb.cancel_done_text(
-                    community_link=self.settings.community_link,
-                    manager_link=self.settings.manager_link,
-                ),
+                cancel_text,
                 keyboard=vk_mb.after_cancel_keyboard(self.settings.community_link),
             )
             return True
@@ -1366,6 +1426,7 @@ class VKBotApp:
             booking = await self._mb_actionable(peer_id, vk_id, booking_id)
             if not booking:
                 return True
+            await self._strip_inline_keyboard(peer_id)
             date_label = f"{format_date(booking[5])} {booking[6]}"
             await self._send_text(
                 peer_id,
@@ -1379,8 +1440,10 @@ class VKBotApp:
             booking = await self._mb_actionable(peer_id, vk_id, booking_id)
             if not booking:
                 return True
+            confirm_mid = booking[16] if len(booking) > 16 else None
             await vk_mb.delete_ticket_message(self.client, peer_id, booking_id)
             update_booking_status(booking_id, "cancelled")
+            await self._strip_inline_keyboard(peer_id, confirm_mid)
             vk_mb.clear_manage_session(self.manage_sessions, vk_id)
             self.peer_context[peer_id] = "check"
             self._track(vk_id, EVENT_BRANCH_PROVERKA, props={"via": "change_date"})
@@ -1410,6 +1473,7 @@ class VKBotApp:
                     replace_nav=False,
                 )
                 return True
+            await self._strip_inline_keyboard(peer_id)
             date_label = f"{format_date(booking[5])} {booking[6]}"
             await self._send_text(
                 peer_id,
@@ -1948,7 +2012,7 @@ class VKBotApp:
         if cmd == "mail_fu":
             import asyncio
 
-            from bot.db.mailing import get_campaign_followup
+            from bot.db.mailing import claim_mail_followup_send, get_campaign_followup
 
             try:
                 cid = int(payload.get("cid") or 0)
@@ -1958,9 +2022,20 @@ class VKBotApp:
                 await asyncio.to_thread(get_campaign_followup, cid) if cid else None
             )
             if follow:
+                if not claim_mail_followup_send(user_id=int(vk_id), text=follow):
+                    logger.info(
+                        "Skip duplicate mailing followup peer_id=%s vk_id=%s cid=%s",
+                        peer_id,
+                        vk_id,
+                        cid,
+                    )
+                    return
                 await self._send_text(peer_id, follow, replace_nav=False)
             else:
-                await self.client.send_message(peer_id, "Сообщение недоступно.")
+                unavailable = "Сообщение недоступно."
+                if not claim_mail_followup_send(user_id=int(vk_id), text=unavailable):
+                    return
+                await self.client.send_message(peer_id, unavailable)
             return
         if not cmd:
             context = self.peer_context.get(peer_id)
@@ -1993,6 +2068,7 @@ class VKBotApp:
                 "меню": "main_menu",
                 "мои брони": "my_bookings",
                 "розыгрыш": "raffle",
+                "участвовать в розыгрыше": "raffle",
                 "подарок": "offline_gift",
                 "чек лист": "offline_gift",
                 "чек-лист": "offline_gift",
@@ -2164,7 +2240,7 @@ class VKBotApp:
             await self._send_text(
                 peer_id,
                 RULES_TEXT,
-                keyboard=self._main_menu_kb(peer_id),
+                keyboard=self._main_menu_kb(peer_id, show_rules=False),
             )
             return
         if cmd == "booking_rules":
@@ -2196,6 +2272,7 @@ class VKBotApp:
             page = int(payload.get("page") or 0)
             if cmd == "check":
                 self.peer_context[peer_id] = "check"
+                self.peer_browse[peer_id] = "date"
                 self._clear_dates_card(peer_id)
                 self._track(vk_id, EVENT_BRANCH_PROVERKA)
                 await self._send_text(
@@ -2210,6 +2287,7 @@ class VKBotApp:
                     attachment=self._random_cover_attachment(),
                 )
                 return
+            self.peer_browse[peer_id] = "date"
             await self._send_check_dates(peer_id, page, edit="page" in payload)
             return
         if cmd == "check_venues":
@@ -2393,6 +2471,12 @@ class VKBotApp:
         task = self._offline_gift_timer_tasks.pop(int(vk_id), None)
         if task and not task.done():
             task.cancel()
+        try:
+            from bot.db.crud import clear_offline_gift_timer
+
+            clear_offline_gift_timer(int(vk_id))
+        except Exception:
+            logger.exception("Failed to clear offline gift timer vk_id=%s", vk_id)
 
     def _offline_gift_in_start_window(self, vk_id: int) -> bool:
         launched = self._offline_gift_launch_at.get(int(vk_id))
@@ -2439,18 +2523,53 @@ class VKBotApp:
         self._schedule_offline_gift_choose_remind(peer_id, vk_id)
 
     def _schedule_offline_gift_choose_remind(self, peer_id: int, vk_id: int) -> None:
+        """~5 мин: напоминание выбрать шоу. Пишем в БД — переживает рестарт VK-бота."""
         self._cancel_offline_gift_timers(vk_id)
+        try:
+            from bot.db.crud import schedule_offline_gift_timer
 
-        async def _job() -> None:
-            try:
-                await asyncio.sleep(self._OFFLINE_GIFT_CHOOSE_REMIND_SEC)
-                if int(vk_id) not in self._offline_gift_await_choice:
-                    return
+            schedule_offline_gift_timer(
+                vk_id=int(vk_id),
+                kind="choose",
+                delay_sec=self._OFFLINE_GIFT_CHOOSE_REMIND_SEC,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist offline gift choose-remind vk_id=%s", vk_id
+            )
+
+    def _schedule_offline_gift_sub_check(self, peer_id: int, vk_id: int, event_id: int) -> None:
+        """~2 мин: если не нажали «Участвовать» — join / задание ведущего. В БД."""
+        self._cancel_offline_gift_timers(vk_id)
+        try:
+            from bot.db.crud import schedule_offline_gift_timer
+
+            schedule_offline_gift_timer(
+                vk_id=int(vk_id),
+                kind="sub_check",
+                delay_sec=self._OFFLINE_GIFT_SUB_CHECK_SEC,
+                event_id=int(event_id),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist offline gift sub-check vk_id=%s event_id=%s",
+                vk_id,
+                event_id,
+            )
+
+    async def _fire_offline_gift_timer(self, timer: dict) -> None:
+        vk_id = int(timer["vk_id"])
+        peer_id = vk_id  # личка = peer_id
+        kind = timer.get("kind")
+        event_id = timer.get("event_id")
+        try:
+            if kind == "choose":
                 from bot.db.crud import get_offline_gift_today_events
 
                 events = get_offline_gift_today_events()
                 if len(events) <= 1:
                     return
+                self._offline_gift_await_choice.add(int(vk_id))
                 await self._send_text(
                     peer_id,
                     (
@@ -2460,37 +2579,33 @@ class VKBotApp:
                     keyboard=self._offline_gift_events_keyboard(events),
                     replace_nav=False,
                 )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Offline gift choose-remind failed vk_id=%s", vk_id)
-
-        self._offline_gift_timer_tasks[int(vk_id)] = asyncio.create_task(_job())
-
-    def _schedule_offline_gift_sub_check(self, peer_id: int, vk_id: int, event_id: int) -> None:
-        self._cancel_offline_gift_timers(vk_id)
-
-        async def _job() -> None:
-            try:
-                await asyncio.sleep(self._OFFLINE_GIFT_SUB_CHECK_SEC)
+                return
+            if kind == "sub_check":
+                if not event_id:
+                    return
                 from bot.db.crud import has_offline_gift_entry
 
                 if has_offline_gift_entry(vk_id=int(vk_id), event_id=int(event_id)):
                     return
-                # Как «не нажали участвовать»: проверка подписки → в список или задание ведущего.
                 await self._join_offline_gift_event(
                     peer_id,
                     vk_id,
                     int(event_id),
                     still_waiting=False,
                 )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Offline gift sub-check failed vk_id=%s", vk_id)
+                return
+            logger.warning("Unknown offline gift timer kind=%s vk_id=%s", kind, vk_id)
+        except Exception:
+            logger.exception(
+                "Offline gift timer fire failed kind=%s vk_id=%s", kind, vk_id
+            )
 
-        self._offline_gift_timer_tasks[int(vk_id)] = asyncio.create_task(_job())
+    async def process_due_offline_gift_timers(self) -> None:
+        from bot.db.crud import pop_due_offline_gift_timers
 
+        due = pop_due_offline_gift_timers()
+        for timer in due:
+            await self._fire_offline_gift_timer(timer)
     async def _send_offline_gift_events(
         self,
         peer_id: int,
@@ -2584,7 +2699,7 @@ class VKBotApp:
         await self._complete_offline_gift_entry(vk_id, vk_id, event_id)
 
     async def _handle_group_leave(self, update: dict[str, Any]) -> None:
-        """Отписка до конца розыгрыша — выбывает из чек-листа."""
+        """Отписка до конца розыгрыша — тихо выбывает из чек-листа (без сообщения)."""
         from bot.db.crud import remove_offline_gift_entries_for_vk
 
         obj = update.get("object") or {}
@@ -2601,17 +2716,6 @@ class VKBotApp:
             return
         logger.info("Offline gift group_leave vk_id=%s removed_entries=%s", vk_id, deleted)
         await self._delete_offline_gift_card(vk_id)
-        try:
-            await self._send_text(
-                vk_id,
-                (
-                    "🎁 Ты выбыл из розыгрыша подарка — подписка на сообщество снята.\n\n"
-                    "Если снова подпишешься и нажмёшь «Участвовать», вернёшься в список."
-                ),
-                replace_nav=False,
-            )
-        except Exception:
-            logger.exception("Failed to notify offline gift leave vk_id=%s", vk_id)
 
     async def _delete_offline_gift_card(self, peer_id: int) -> None:
         peer = int(peer_id)
@@ -2798,6 +2902,7 @@ class VKBotApp:
 
         if cmd == "rz_not_alone":
             paid = getattr(self.settings, "paid_booking_link", "") or ""
+            # Не трогаем кнопки брони (билет/отмена) — только отвечаем поверх.
             await self._send_text(
                 peer_id,
                 vk_booking.raffle_not_alone_text(
@@ -2853,6 +2958,14 @@ class VKBotApp:
             return True
 
         if cmd in {"rz_dates", "rz_dates_page"}:
+            if not vk_raffle.guard_raffle_screen_entitlement(vk_id):
+                await self._send_text(
+                    peer_id,
+                    vk_raffle.NEED_NEW_SCREEN_TEXT
+                    if vk_raffle.guard_raffle_action(vk_id)
+                    else vk_raffle.USED_RAFFLE_TEXT,
+                )
+                return True
             # На листании не дёргаем groups.isMember каждый раз.
             if cmd == "rz_dates" and not await vk_raffle.is_community_member(vk_id):
                 await vk_raffle.continue_after_subscribe_check(vk_id)
@@ -2862,8 +2975,13 @@ class VKBotApp:
             return True
 
         if cmd == "rz_date":
-            if not vk_raffle.guard_raffle_action(vk_id):
-                await self._send_text(peer_id, vk_raffle.USED_RAFFLE_TEXT)
+            if not vk_raffle.guard_raffle_screen_entitlement(vk_id):
+                await self._send_text(
+                    peer_id,
+                    vk_raffle.NEED_NEW_SCREEN_TEXT
+                    if vk_raffle.guard_raffle_action(vk_id)
+                    else vk_raffle.USED_RAFFLE_TEXT,
+                )
                 return True
             if vk_raffle.get_active_raffle_booking_safe(vk_id):
                 await self._send_text(
@@ -2878,10 +2996,26 @@ class VKBotApp:
             return True
 
         if cmd == "rz_event":
+            if not vk_raffle.guard_raffle_screen_entitlement(vk_id):
+                await self._send_text(
+                    peer_id,
+                    vk_raffle.NEED_NEW_SCREEN_TEXT
+                    if vk_raffle.guard_raffle_action(vk_id)
+                    else vk_raffle.USED_RAFFLE_TEXT,
+                )
+                return True
             await self._send_raffle_event(peer_id, vk_id, payload.get("event_id"))
             return True
 
         if cmd == "rz_book":
+            if not vk_raffle.guard_raffle_screen_entitlement(vk_id):
+                await self._send_text(
+                    peer_id,
+                    vk_raffle.NEED_NEW_SCREEN_TEXT
+                    if vk_raffle.guard_raffle_action(vk_id)
+                    else vk_raffle.USED_RAFFLE_TEXT,
+                )
+                return True
             await self._start_raffle_booking(peer_id, vk_id, payload.get("event_id"))
             return True
 
@@ -3172,6 +3306,15 @@ class VKBotApp:
 
     async def _send_raffle_start(self, peer_id: int, vk_id: int) -> None:
         from bot.vk.entry_dedupe import claim_flow_send, clear_flow_send
+
+        # Вечером на шоу «розыгрыш» = офлайн-подарок, не онлайн-воронка.
+        if in_evening_offline_gift_window():
+            logger.info(
+                "Evening window: raffle start → offline gift vk_id=%s",
+                vk_id,
+            )
+            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
+            return
 
         # Тот же ключ, что у mini app / лендинга — не дублируем «Привет-привет».
         if not claim_flow_send(int(vk_id), "raffle"):
@@ -3614,7 +3757,13 @@ class VKBotApp:
         kb = VKKeyboardBuilder(inline=True)
         kb.button("Забронировать", _payload("check_booking_start", event_id=event["id"]), color="primary")
         kb.button("Правила бронирования", _payload("booking_rules", event_id=event["id"]))
-        kb.button("Назад к датам", _payload("check_date_page"))
+        browse = self.peer_browse.get(peer_id, "date")
+        venue = (event.get("location") or "").strip()
+        if browse == "venue" and venue:
+            # Путь «по площадкам» → список дат этой площадки, не общий календарь.
+            kb.button("Назад", _payload("check_venue", venue=venue))
+        else:
+            kb.button("Назад к датам", _payload("check_date_page"))
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(
@@ -3746,24 +3895,33 @@ class VKBotApp:
         peer = int(peer_id)
         existing_id = self.peer_carousel_message_ids.get(peer)
 
-        if edit and await self._edit_card(
+        if edit and attachment and await self._edit_card(
             peer_id,
             text,
             stored_message_id=existing_id,
             keyboard=keyboard,
-            # Пустой attachment снимает картинку и даёт мигание; None — не трогаем.
-            attachment=attachment or None,
+            attachment=attachment,
         ):
             if existing_id:
                 self.peer_carousel_message_ids[peer] = int(existing_id)
             return
         if edit and (existing_id or self._callback_cmid(peer_id)):
+            # Не оставляем чужой постер от предыдущего слайда.
             logger.warning(
-                "BEST carousel edit failed peer_id=%s msg_id=%s cmid=%s, falling back to send",
+                "BEST carousel edit fallback peer_id=%s msg_id=%s cmid=%s has_poster=%s",
                 peer_id,
                 existing_id,
                 self._callback_cmid(peer_id),
+                bool(attachment),
             )
+            try:
+                if existing_id:
+                    await self.client.delete_messages(peer_id, [int(existing_id)])
+                elif self._callback_cmid(peer_id):
+                    await self.client.delete_by_cmids(peer_id, [int(self._callback_cmid(peer_id))])
+            except Exception:
+                logger.exception("Failed to delete old BEST carousel card peer_id=%s", peer_id)
+            self.peer_carousel_message_ids.pop(peer, None)
 
         mid = await self._send_text(
             peer_id,
@@ -3919,18 +4077,31 @@ class VKBotApp:
             attachment=attachment,
         )
 
+    async def _offline_gift_timer_loop(self) -> None:
+        """Опрос due-таймеров офлайн-розыгрыша (напоминание / авто-join)."""
+        while True:
+            try:
+                await self.process_due_offline_gift_timers()
+            except Exception:
+                logger.exception("Offline gift timer loop iteration failed")
+            await asyncio.sleep(15)
+
     async def run(self) -> None:
         if EVENTS_SOURCE != "postgres" or not DATABASE_URL:
             raise RuntimeError(
                 "VK bot requires EVENTS_SOURCE=postgres and DATABASE_URL. "
                 "Google Sheets is not used for VK."
             )
+        from bot.db.crud import ensure_offline_gift_tables
+
+        ensure_offline_gift_tables()
         await self.client.ensure_long_poll_events()
         logger.info(
             "VK bot long polling started for group_id=%s events_source=%s",
             self.settings.group_id,
             EVENTS_SOURCE,
         )
+        asyncio.create_task(self._offline_gift_timer_loop())
         async for update in self.client.long_poll():
             try:
                 await self.handle_update(update)

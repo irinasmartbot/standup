@@ -272,7 +272,7 @@ def render_mailing_tab(
     </fieldset>
     <fieldset class="mailing-row">
       <legend>Статус брони</legend>
-      <p class="muted" style="margin:0 0 8px">Если ничего не выбрано — вся база канала (без фильтра по броням).</p>
+      <p class="muted" style="margin:0 0 8px">Если ничего не выбрано — вся база канала (без фильтра по броням). Брони <b>розыгрыша</b> в эти статусы не входят.</p>
       <label><input type="checkbox" name="booking_statuses" value="active"> Активная (бронь или билет)</label>
       <label><input type="checkbox" name="booking_statuses" value="booked"> Только бронь без билета</label>
       <label><input type="checkbox" name="booking_statuses" value="confirmed"> Только подтверждённый билет</label>

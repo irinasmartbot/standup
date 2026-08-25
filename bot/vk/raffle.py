@@ -14,6 +14,7 @@ from bot.db.crud import (
     get_active_raffle_booking,
     get_pending_raffle_submission,
     get_rozygrysh_used,
+    has_raffle_screen_entitlement,
 )
 from bot.utils.ticket import now_msk, parse_event_datetime
 from bot.vk.keyboards import VKKeyboardBuilder
@@ -30,6 +31,10 @@ ACTIVE_BOOKING_TEXT = (
 TICKET_ISSUED_BLOCK_TEXT = (
     "Вы уже забронировали и получили <b>билет по розыгрышу</b>. "
     "Дождись шоу или отмени бронь, если планы поменялись 😊"
+)
+NEED_NEW_SCREEN_TEXT = (
+    "После отмены брони нужно снова отправить <b>скрин на проверку</b> — "
+    "кнопка «Забронировать» по старому одобрению больше не действует."
 )
 PENDING_SCREEN_TEXT = "Ваш скрин <b>на модерации</b>, ожидайте ⏳"
 SCREEN_OK_TEXT = (
@@ -228,6 +233,13 @@ def guard_raffle_action(vk_id: int) -> bool:
     if get_rozygrysh_used(vk_id=vk_id) and not get_active_raffle_booking(vk_id=vk_id):
         return False
     return True
+
+
+def guard_raffle_screen_entitlement(vk_id: int) -> bool:
+    """После отмены брони старый принятый скрин не даёт право бронировать снова."""
+    if not guard_raffle_action(vk_id):
+        return False
+    return has_raffle_screen_entitlement(vk_id=vk_id)
 
 
 def largest_photo_url(photo: dict[str, Any]) -> str | None:

@@ -8,9 +8,9 @@ import logging
 from bot.config import CHANNEL_LINK
 from bot.db.crud import (
     annul_booking,
+    clear_raffle_after_user_cancel,
     get_booked_for_reminders,
     save_confirm_message_id,
-    set_rozygrysh_used,
     update_reminder_flag,
 )
 from bot.utils.booking_texts import proverka_reminder_24h_text, raffle_reminder_24h_text
@@ -155,9 +155,9 @@ async def send_vk_annulled_message(
     annul_booking(booking_id)
     if raffle:
         try:
-            set_rozygrysh_used(vk_id=int(vk_id), used=False)
+            clear_raffle_after_user_cancel(vk_id=int(vk_id), reason="booking_annulled")
         except Exception:
-            logger.exception("set_rozygrysh_used on annul failed booking=%s", booking_id)
+            logger.exception("clear raffle entitlement on annul failed booking=%s", booking_id)
 
 
 async def _process_format_reminders(

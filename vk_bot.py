@@ -33,6 +33,9 @@ async def main():
     ensure_help_tables()
     ensure_raffle_tables()
     ensure_mailing_tables()
+    from bot.db.crud import ensure_offline_gift_tables
+
+    ensure_offline_gift_tables()
     logger.info("VK events source=%s", EVENTS_SOURCE)
     client = VKClient(settings)
     asyncio.create_task(

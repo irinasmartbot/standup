@@ -38,6 +38,39 @@ EVENT_BOOKING_CONFIRMED = "booking_confirmed"
 EVENT_BOOKING_CANCELLED = "booking_cancelled"
 EVENT_BOOKING_ANNULLED = "booking_annulled"
 EVENT_BOOKING_START = "booking_start"
+
+# Канон payload для таблицы «Входы в бот по ссылкам»:
+# только старт / актуальные deeplink (дубли mini-app → одна строка).
+_BOT_START_PAYLOAD_RAW = "LOWER(TRIM(COALESCE(props->>'payload', '')))"
+BOT_START_PAYLOAD_CANON_SQL = f"""
+CASE
+  WHEN {_BOT_START_PAYLOAD_RAW} = '' THEN ''
+  WHEN {_BOT_START_PAYLOAD_RAW} IN (
+         'standup_rozygr', 'rozygrysh', 'raffle', 'розыгрыш'
+       )
+    OR {_BOT_START_PAYLOAD_RAW} LIKE 'standup_rozygr_c%%'
+    OR {_BOT_START_PAYLOAD_RAW} LIKE 'raffle_c%%'
+    THEN 'standup_rozygr'
+  WHEN {_BOT_START_PAYLOAD_RAW} IN (
+         'standup_book', 'booking', 'book', 'бронь', 'proverka'
+       )
+    OR {_BOT_START_PAYLOAD_RAW} LIKE 'standup_book_c%%'
+    OR {_BOT_START_PAYLOAD_RAW} LIKE 'booking_c%%'
+    THEN 'standup_book'
+  WHEN {_BOT_START_PAYLOAD_RAW} IN (
+         'offline_gift', 'gift', 'chek_list', 'check_list'
+       )
+    OR {_BOT_START_PAYLOAD_RAW} LIKE 'offline_gift_%%'
+    OR {_BOT_START_PAYLOAD_RAW} LIKE 'gift_%%'
+    OR {_BOT_START_PAYLOAD_RAW} LIKE 'chek_list_%%'
+    OR {_BOT_START_PAYLOAD_RAW} LIKE 'check_list_%%'
+    OR {_BOT_START_PAYLOAD_RAW} LIKE 'offline_gift_c%%'
+    THEN 'offline_gift'
+  WHEN {_BOT_START_PAYLOAD_RAW} = 'quick_booking' THEN 'quick_booking'
+  WHEN {_BOT_START_PAYLOAD_RAW} = 'afisha_plat' THEN 'afisha_plat'
+  ELSE NULL
+END
+""".strip()
 EVENT_BOOKING_GUESTS_CHANGED = "booking_guests_changed"
 EVENT_BOOKING_REMINDER_24H = "booking_reminder_24h"
 EVENT_BOOKING_REMINDER_DAY = "booking_reminder_day"
@@ -381,12 +414,19 @@ def fetch_analytics_report(
                 cur.execute(
                     f"""
                     SELECT
-                        COALESCE(props->>'payload', '') AS payload,
+                        payload,
                         COUNT(*)::int AS events,
                         {_UNIQUE_PERSON_SQL} AS uniques
-                    FROM analytics_events
-                    WHERE {where_sql} AND name = 'bot_start'
-                    GROUP BY 1
+                    FROM (
+                        SELECT
+                            {BOT_START_PAYLOAD_CANON_SQL} AS payload,
+                            telegram_id,
+                            vk_id
+                        FROM analytics_events
+                        WHERE {where_sql} AND name = 'bot_start'
+                    ) starts
+                    WHERE payload IS NOT NULL
+                    GROUP BY payload
                     ORDER BY events DESC
                     """,
                     params,

@@ -25,6 +25,24 @@ FOLLOWUP_EXPIRED_TEXT = (
     "Здравствуйте! Это предложение уже неактуально — мероприятие прошло 😊\n"
     "Следите за новостями в нашем сообществе: там появляются свежие анонсы и розыгрыши ☝️"
 )
+# Повтор того же текста после кнопки рассылки — не чаще чем раз в 30 мин.
+MAIL_FOLLOWUP_DEDUPE_SEC = 1800.0
+
+
+def claim_mail_followup_send(*, user_id: int, text: str) -> bool:
+    """True — можно отправить; False — такой же текст уже уходил этому user_id < 30 мин."""
+    if not user_id or not (text or "").strip():
+        return True
+    import hashlib
+
+    from bot.vk.entry_dedupe import claim_flow_send
+
+    digest = hashlib.sha1(text.strip().encode("utf-8")).hexdigest()[:20]
+    return claim_flow_send(
+        int(user_id),
+        f"mail_fu:{digest}",
+        ttl_sec=MAIL_FOLLOWUP_DEDUPE_SEC,
+    )
 
 
 def _use_postgres() -> bool:
@@ -242,7 +260,11 @@ def _audience_sql(channel: str, filters: dict) -> tuple[str, dict]:
     date_from = filters.get("date_from") or filters.get("booking_date_from")
     date_to = filters.get("date_to") or filters.get("booking_date_to")
     if statuses or date_from or date_to:
-        booking_where = ["b.user_id = u.id"]
+        booking_where = [
+            "b.user_id = u.id",
+            # Розыгрыш никогда не входит в аудиторию по статусу/дате брони.
+            "LOWER(TRIM(COALESCE(b.format, ''))) <> 'rozygrysh'",
+        ]
         if statuses:
             params["booking_statuses"] = list(statuses)
             booking_where.append("b.status = ANY(%(booking_statuses)s)")

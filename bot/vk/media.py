@@ -301,7 +301,9 @@ async def resolve_image_attachment(
     if cached:
         return cached
     try:
-        image_bytes = await download_image_bytes(url)
+        from bot.utils.event_poster import download_poster_bytes
+
+        image_bytes = await download_poster_bytes(url)
         attachment = await client.upload_message_photo(
             peer_id,
             image_bytes,
@@ -311,4 +313,5 @@ async def resolve_image_attachment(
         return attachment
     except Exception:
         logger.exception("Failed to prepare VK attachment for image %s", url)
+        # Сломанный кэш не оставляем — иначе будет «левая» картинка.
         return None
