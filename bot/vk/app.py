@@ -2300,14 +2300,21 @@ class VKBotApp:
             or cmd == "main_menu"
             or payload_command == "start"
         ):
-            # В первый час после запуска офлайн-розыгрыша «Начать» не сбивает в меню.
-            if (
+            is_start_text = (
+                text.lower() in {"/start", "start", "начать", "старт"}
+                or payload_command == "start"
+            )
+            # Вне 19–21 МСК хвост воронки не должен перехватывать «Начать».
+            if cmd != "main_menu" and is_start_text and not in_evening_offline_gift_window():
+                self._offline_gift_launch_at.pop(int(vk_id), None)
+                self._offline_gift_await_choice.discard(int(vk_id))
+                self._cancel_offline_gift_timers(vk_id)
+            # В первый час после запуска офлайн-розыгрыша «Начать» не сбивает в меню
+            # (только пока окно 19–21 ещё открыто).
+            elif (
                 cmd != "main_menu"
+                and is_start_text
                 and self._offline_gift_in_start_window(vk_id)
-                and (
-                    text.lower() in {"/start", "start", "начать", "старт"}
-                    or payload_command == "start"
-                )
             ):
                 await self._offline_gift_repeat_action(peer_id, vk_id)
                 return
@@ -2571,6 +2578,10 @@ class VKBotApp:
             logger.exception("Failed to clear offline gift timer vk_id=%s", vk_id)
 
     def _offline_gift_in_start_window(self, vk_id: int) -> bool:
+        # После 21:00 МСК «Начать» снова обычное меню, даже если воронку
+        # открывали раньше вечером.
+        if not in_evening_offline_gift_window():
+            return False
         launched = self._offline_gift_launch_at.get(int(vk_id))
         if launched and (time.time() - launched) < self._OFFLINE_GIFT_START_WINDOW_SEC:
             return True
@@ -2654,6 +2665,15 @@ class VKBotApp:
         peer_id = vk_id  # личка = peer_id
         kind = timer.get("kind")
         event_id = timer.get("event_id")
+        if not in_evening_offline_gift_window():
+            logger.info(
+                "Skip offline gift timer outside 19–21 MSK vk_id=%s kind=%s",
+                vk_id,
+                kind,
+            )
+            self._offline_gift_launch_at.pop(int(vk_id), None)
+            self._offline_gift_await_choice.discard(int(vk_id))
+            return
         try:
             if kind == "choose":
                 from bot.db.crud import get_offline_gift_today_events
