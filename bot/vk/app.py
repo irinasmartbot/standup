@@ -3619,7 +3619,15 @@ class VKBotApp:
         text = card.get("fallback_html") or ""
         keyboard = _venues_card_keyboard(index)
         key = _venue_card_attachment_key(card)
-        attachment = self.images.get(key) if key else None
+        from bot.vk.media import resolve_local_image_attachment
+
+        attachment = await resolve_local_image_attachment(
+            self.client,
+            peer_id,
+            key=key,
+            file_name=str(card.get("file") or ""),
+            cache=self.images,
+        )
         peer = int(peer_id)
         existing_id = self.peer_venues_message_ids.get(peer)
 

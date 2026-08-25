@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import ssl
 from io import BytesIO
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
@@ -67,11 +68,24 @@ def _looks_like_webp(data: bytes) -> bool:
     return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
 
 
+def _poster_connector() -> aiohttp.TCPConnector:
+    """Как у VK-клиента: без certifi на VPS часто падает SSL к tildacdn."""
+    try:
+        import certifi
+
+        context = ssl.create_default_context(cafile=certifi.where())
+        return aiohttp.TCPConnector(ssl=context)
+    except Exception:
+        return aiohttp.TCPConnector()
+
+
 def poster_bytes_to_jpeg(image_bytes: bytes, *, max_side: int = 2560, quality: int = 85) -> bytes:
     """Любой формат (webp/png/…) → JPEG. Иначе TG путает Content-Type и имя .png."""
     from PIL import Image
 
-    img = Image.open(BytesIO(image_bytes)).convert("RGB")
+    img = Image.open(BytesIO(image_bytes))
+    img.load()
+    img = img.convert("RGB")
     w, h = img.size
     if max(w, h) > max_side:
         img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
@@ -81,6 +95,17 @@ def poster_bytes_to_jpeg(image_bytes: bytes, *, max_side: int = 2560, quality: i
     if not data or not _looks_like_jpeg(data):
         raise RuntimeError("empty or non-JPEG after normalize")
     return data
+
+
+def _normalize_downloaded(data: bytes, candidate: str) -> bytes:
+    if not data:
+        raise RuntimeError(f"Empty image for {candidate}")
+    if _looks_like_jpeg(data) and not _looks_like_webp(data):
+        try:
+            return poster_bytes_to_jpeg(data)
+        except Exception:
+            return data
+    return poster_bytes_to_jpeg(data)
 
 
 async def download_poster_bytes(url: str) -> bytes:
@@ -97,24 +122,38 @@ async def download_poster_bytes(url: str) -> bytes:
     candidates = _poster_url_candidates(url)
 
     last_err: Exception | None = None
-    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+    async with aiohttp.ClientSession(
+        timeout=timeout,
+        headers=headers,
+        connector=_poster_connector(),
+    ) as session:
         for candidate in candidates:
             try:
                 async with session.get(candidate, allow_redirects=True) as resp:
                     if resp.status >= 400:
                         raise RuntimeError(f"HTTP {resp.status} for {candidate}")
                     data = await resp.read()
-                if not data:
-                    raise RuntimeError(f"Empty image for {candidate}")
-                if _looks_like_jpeg(data) and not _looks_like_webp(data):
-                    try:
-                        return poster_bytes_to_jpeg(data)
-                    except Exception:
-                        return data
-                return poster_bytes_to_jpeg(data)
+                return _normalize_downloaded(data, candidate)
             except Exception as exc:
                 last_err = exc
                 logger.warning("Poster download failed for %s: %s", candidate, exc)
+
+    # Fallback без aiohttp (на случай кривого SSL-стека в окружении).
+    try:
+        import urllib.request
+
+        for candidate in candidates:
+            try:
+                req = urllib.request.Request(candidate, headers=headers)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = resp.read()
+                return _normalize_downloaded(data, candidate)
+            except Exception as exc:
+                last_err = exc
+                logger.warning("Poster urllib failed for %s: %s", candidate, exc)
+    except Exception as exc:
+        last_err = exc
+
     raise RuntimeError(f"Failed to download poster {url}: {last_err}")
 
 
@@ -125,6 +164,8 @@ async def tg_event_poster(image_url: str | None):
     """
     url = (image_url or "").strip()
     if not url.startswith(("http://", "https://")):
+        if url:
+            logger.warning("Event poster URL is not http(s): %r", url[:120])
         return None
     from aiogram.types import BufferedInputFile, URLInputFile
 
@@ -133,6 +174,7 @@ async def tg_event_poster(image_url: str | None):
         name = _filename_from_url(url)
         if not name.lower().endswith((".jpg", ".jpeg")):
             name = (name.rsplit(".", 1)[0] if "." in name else name) + ".jpg"
+        logger.info("Event poster ready url=%s bytes=%s", url[:100], len(data))
         return BufferedInputFile(data, filename=name)
     except Exception:
         logger.warning("Failed to download event poster %s, trying URLInputFile", url, exc_info=True)

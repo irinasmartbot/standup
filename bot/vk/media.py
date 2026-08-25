@@ -296,15 +296,25 @@ async def resolve_image_attachment(
     """Download remote poster once, upload to VK, reuse cached attachment id."""
     url = (image_url or "").strip()
     if not url.startswith(("http://", "https://")):
+        if url:
+            logger.warning("VK event poster URL is not http(s): %r", url[:120])
         return None
     cached = cache.get(url)
     if cached:
         return cached
+    alt = None
     try:
         from bot.utils.event_poster import download_poster_bytes, normalize_poster_url
 
+        alt = normalize_poster_url(url)
+        if alt and alt != url:
+            cached_alt = cache.get(alt)
+            if cached_alt:
+                cache.set(url, cached_alt)
+                return cached_alt
+
         image_bytes = await download_poster_bytes(url)
-        filename = _filename_from_url(normalize_poster_url(url) or url)
+        filename = _filename_from_url(alt or url)
         if not filename.lower().endswith((".jpg", ".jpeg")):
             filename = (filename.rsplit(".", 1)[0] if "." in filename else filename) + ".jpg"
         attachment = await client.upload_message_photo(
@@ -313,12 +323,61 @@ async def resolve_image_attachment(
             filename=filename,
         )
         cache.set(url, attachment)
-        # Кладём и под jpg-URL, чтобы повторный заход не качал снова.
-        alt = normalize_poster_url(url)
         if alt and alt != url:
             cache.set(alt, attachment)
+        logger.info(
+            "VK event poster uploaded peer_id=%s bytes=%s att=%s url=%s",
+            peer_id,
+            len(image_bytes),
+            attachment,
+            url[:100],
+        )
         return attachment
     except Exception:
         logger.exception("Failed to prepare VK attachment for image %s", url)
-        # Сломанный кэш не оставляем — иначе будет «левая» картинка.
         return None
+
+
+async def resolve_local_image_attachment(
+    client: Any,
+    peer_id: int,
+    *,
+    key: str,
+    file_name: str,
+    cache: VKSystemImageCache,
+) -> str | None:
+    """Вложение из кэша system images; при промахе — upload из папки фото/."""
+    key = (key or "").strip()
+    if key:
+        cached = cache.get(key)
+        if cached:
+            return cached
+    root = _repo_root()
+    path = root / "фото" / file_name
+    if not path.is_file():
+        # На VPS иногда код в vk-app, а фото лежат в соседнем app/.
+        alt = root.parent / "app" / "фото" / file_name
+        if alt.is_file():
+            path = alt
+    if not path.is_file():
+        logger.warning("Local VK image missing key=%s file=%s", key, file_name)
+        return None
+    try:
+        attachment = await client.upload_message_photo(
+            int(peer_id),
+            path.read_bytes(),
+            filename=path.name,
+        )
+    except Exception:
+        logger.exception("Local VK image upload failed file=%s", path)
+        return None
+    try:
+        rel = os.path.relpath(path, root)
+    except ValueError:
+        rel = str(path)
+    cache_key = key or path.stem
+    try:
+        cache.set(cache_key, rel, attachment)
+    except Exception:
+        logger.exception("Local VK image cache save failed key=%s", cache_key)
+    return attachment
