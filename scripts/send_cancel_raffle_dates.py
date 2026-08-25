@@ -33,7 +33,7 @@ CANCEL_TEXT = (
     "Escobar 20:00 отменяется, Вы можете выбрать любую другую дату."
 )
 
-DATES_CAPTION = "Выбирай дату 👇"
+DATES_CAPTION = "Выбирай дату мероприятия в рамках розыгрыша 👇"
 
 
 def _lookup_telegram_ids(usernames: list[str]) -> list[dict]:
