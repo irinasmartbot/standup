@@ -301,10 +301,10 @@ async def resolve_image_attachment(
     if cached:
         return cached
     try:
-        from bot.utils.event_poster import download_poster_bytes
+        from bot.utils.event_poster import download_poster_bytes, normalize_poster_url
 
         image_bytes = await download_poster_bytes(url)
-        filename = _filename_from_url(url)
+        filename = _filename_from_url(normalize_poster_url(url) or url)
         if not filename.lower().endswith((".jpg", ".jpeg")):
             filename = (filename.rsplit(".", 1)[0] if "." in filename else filename) + ".jpg"
         attachment = await client.upload_message_photo(
@@ -313,6 +313,10 @@ async def resolve_image_attachment(
             filename=filename,
         )
         cache.set(url, attachment)
+        # Кладём и под jpg-URL, чтобы повторный заход не качал снова.
+        alt = normalize_poster_url(url)
+        if alt and alt != url:
+            cache.set(alt, attachment)
         return attachment
     except Exception:
         logger.exception("Failed to prepare VK attachment for image %s", url)

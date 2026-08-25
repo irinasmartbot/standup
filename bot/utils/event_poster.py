@@ -42,6 +42,31 @@ def normalize_poster_url(url: str) -> str:
     return fixed
 
 
+def _poster_url_candidates(url: str) -> list[str]:
+    """Варианты URL: jpg-формат, оригинал, без /-/format/…/, static вместо optim."""
+    primary = (url or "").strip()
+    if not primary:
+        return []
+    alt = normalize_poster_url(primary)
+    bare = re.sub(r"/-/format/[^/]+/", "/", primary, count=1, flags=re.IGNORECASE)
+    static = primary.replace("://optim.tildacdn.com/", "://static.tildacdn.com/", 1)
+    static_bare = bare.replace("://optim.tildacdn.com/", "://static.tildacdn.com/", 1)
+    out: list[str] = []
+    for candidate in (alt, primary, bare, static, static_bare):
+        c = (candidate or "").strip()
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
+def _looks_like_jpeg(data: bytes) -> bool:
+    return len(data) >= 3 and data[:3] == b"\xff\xd8\xff"
+
+
+def _looks_like_webp(data: bytes) -> bool:
+    return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+
+
 def poster_bytes_to_jpeg(image_bytes: bytes, *, max_side: int = 2560, quality: int = 85) -> bytes:
     """Любой формат (webp/png/…) → JPEG. Иначе TG путает Content-Type и имя .png."""
     from PIL import Image
@@ -53,28 +78,23 @@ def poster_bytes_to_jpeg(image_bytes: bytes, *, max_side: int = 2560, quality: i
     out = BytesIO()
     img.save(out, format="JPEG", quality=quality, optimize=True)
     data = out.getvalue()
-    if not data:
-        raise RuntimeError("empty JPEG after normalize")
+    if not data or not _looks_like_jpeg(data):
+        raise RuntimeError("empty or non-JPEG after normalize")
     return data
 
 
 async def download_poster_bytes(url: str) -> bytes:
     timeout = aiohttp.ClientTimeout(total=30)
+    # Не просим webp в Accept — Tilda иначе отдаёт webp даже на /format/jpg/.
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept": "image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5",
         "Referer": "https://tilda.cc/",
     }
-    candidates = []
-    primary = (url or "").strip()
-    alt = normalize_poster_url(primary)
-    if primary:
-        candidates.append(primary)
-    if alt and alt != primary:
-        candidates.append(alt)
+    candidates = _poster_url_candidates(url)
 
     last_err: Exception | None = None
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
@@ -86,16 +106,12 @@ async def download_poster_bytes(url: str) -> bytes:
                     data = await resp.read()
                 if not data:
                     raise RuntimeError(f"Empty image for {candidate}")
-                # Всегда JPEG: Tilda webp с Content-Type image/png ломает TG/VK по расширению.
-                try:
-                    return poster_bytes_to_jpeg(data)
-                except Exception as exc:
-                    logger.warning(
-                        "Poster normalize failed for %s (%s), using raw bytes",
-                        candidate,
-                        exc,
-                    )
-                    return data
+                if _looks_like_jpeg(data) and not _looks_like_webp(data):
+                    try:
+                        return poster_bytes_to_jpeg(data)
+                    except Exception:
+                        return data
+                return poster_bytes_to_jpeg(data)
             except Exception as exc:
                 last_err = exc
                 logger.warning("Poster download failed for %s: %s", candidate, exc)

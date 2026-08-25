@@ -1381,9 +1381,18 @@ class VKBotApp:
             # Карточка брони / билет + текущий клик — убрать кнопки сразу.
             confirm_mid = booking[16] if len(booking) > 16 else None
             ticket_mid = booking[15] if len(booking) > 15 else None
-            await self._strip_inline_keyboard(peer_id, confirm_mid)
+            click_cmid = self._callback_cmid(peer_id)
+            stripped = await self._strip_inline_keyboard(peer_id, confirm_mid)
             if ticket_mid and ticket_mid != confirm_mid:
                 await self._strip_inline_keyboard(peer_id, ticket_mid)
+            if not stripped and click_cmid:
+                logger.warning(
+                    "VK cancel strip missed peer_id=%s booking_id=%s confirm_mid=%s cmid=%s",
+                    peer_id,
+                    booking_id,
+                    confirm_mid,
+                    click_cmid,
+                )
             date_label = f"{format_date(booking[5])} {booking[6]}"
             await self._send_text(
                 peer_id,
@@ -3907,6 +3916,19 @@ class VKBotApp:
             manager_link=self.settings.manager_link,
         )
         attachment = await self._event_poster_attachment(peer_id, event)
+        if not attachment and not (event.get("image") or "").strip():
+            logger.warning(
+                "BEST event has empty image_url event_id=%s date=%s location=%s",
+                event.get("id"),
+                event.get("date"),
+                event.get("location"),
+            )
+        elif not attachment:
+            logger.warning(
+                "BEST poster attach failed event_id=%s image=%s",
+                event.get("id"),
+                (event.get("image") or "")[:120],
+            )
         peer = int(peer_id)
         existing_id = self.peer_carousel_message_ids.get(peer)
 

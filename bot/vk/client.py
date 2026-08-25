@@ -133,6 +133,93 @@ class VKClient:
         item = items[0]
         return item if isinstance(item, dict) else None
 
+    async def get_message_by_cmid(
+        self, peer_id: int, conversation_message_id: int
+    ) -> dict[str, Any] | None:
+        """Сообщение по conversation_message_id в диалоге peer_id."""
+        try:
+            cmid = int(conversation_message_id)
+            peer = int(peer_id)
+        except (TypeError, ValueError):
+            return None
+        if cmid <= 0 or peer <= 0:
+            return None
+        params: dict[str, Any] = {
+            "peer_id": peer,
+            "conversation_message_ids": str(cmid),
+        }
+        if self.settings.group_id:
+            params["group_id"] = self.settings.group_id
+        try:
+            resp = await self.api("messages.getByConversationMessageId", **params)
+        except VKAPIError:
+            logger.exception(
+                "messages.getByConversationMessageId failed peer_id=%s cmid=%s",
+                peer,
+                cmid,
+            )
+            return None
+        items = resp.get("items") if isinstance(resp, dict) else None
+        if not items:
+            return None
+        item = items[0]
+        return item if isinstance(item, dict) else None
+
+    async def edit_keyboard_only(
+        self,
+        peer_id: int,
+        keyboard: str,
+        *,
+        message_id: int | None = None,
+        conversation_message_id: int | None = None,
+    ) -> bool:
+        """Снять/заменить inline-кнопки, сохранив текст (и вложения).
+
+        VK messages.edit без поля message часто падает или не трогает клавиатуру —
+        поэтому подтягиваем текст сообщения и шлём его вместе с keyboard.
+        """
+        if not message_id and not conversation_message_id:
+            return False
+        item: dict[str, Any] | None = None
+        if message_id:
+            item = await self.get_message_by_id(int(message_id))
+        if item is None and conversation_message_id:
+            item = await self.get_message_by_cmid(peer_id, int(conversation_message_id))
+        mid = message_id
+        cmid = conversation_message_id
+        text: str | None = None
+        if item:
+            text = str(item.get("text") or "")
+            try:
+                if item.get("id"):
+                    mid = int(item["id"])
+            except (TypeError, ValueError):
+                pass
+            try:
+                if item.get("conversation_message_id"):
+                    cmid = int(item["conversation_message_id"])
+            except (TypeError, ValueError):
+                pass
+
+        async def _try(*, use_text: bool) -> bool:
+            body = text if use_text else None
+            if cmid and await self.edit_message(
+                peer_id, body, conversation_message_id=int(cmid), keyboard=keyboard
+            ):
+                return True
+            if mid and await self.edit_message(
+                peer_id, body, message_id=int(mid), keyboard=keyboard
+            ):
+                return True
+            return False
+
+        # С текстом (предпочтительно). Без текста — только если сообщение не нашли,
+        # чтобы не затереть caption пустой строкой.
+        if item is not None:
+            if await _try(use_text=True):
+                return True
+        return await _try(use_text=False)
+
     async def send_message(
         self,
         peer_id: int,
@@ -204,6 +291,9 @@ class VKClient:
             params["group_id"] = self.settings.group_id
         if keyboard is not None:
             params["keyboard"] = keyboard
+            # Иначе VK иногда игнорирует смену только keyboard / рвёт вложения.
+            params["keep_forward_messages"] = 1
+            params["keep_snippets"] = 1
         if attachment is not None:
             params["attachment"] = attachment
         fd = format_data if format_data is not None else auto_format
@@ -382,8 +472,13 @@ class VKClient:
                     image_bytes, quality=quality, max_side=max_side
                 )
             except Exception as exc:
-                logger.warning("VK image normalize failed, using raw bytes: %s", exc)
-                payload = image_bytes
+                # Сырой webp/png под именем .jpg ломает saveMessagesPhoto —
+                # не шлём «как есть», пробуем следующий quality/side или падаем.
+                last_err = f"VK image normalize failed: {exc}"
+                logger.warning("%s peer_id=%s", last_err, peer_id)
+                if idx + 1 < len(attempts):
+                    continue
+                raise VKAPIError(last_err) from exc
 
             upload_name = f"photo_{idx}_{quality}.jpg"
             if filename and "." in filename:
