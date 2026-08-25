@@ -598,7 +598,13 @@ class VKBotApp:
             )
         return att
 
-    async def _event_poster_attachment(self, peer_id: int, event: dict[str, Any]) -> str | None:
+    async def _event_poster_attachment(
+        self,
+        peer_id: int,
+        event: dict[str, Any],
+        *,
+        force_refresh: bool = False,
+    ) -> str | None:
         """Только постер из image_url мероприятия — без случайных обложек."""
         url = (event.get("image") or "").strip()
         attachment = await resolve_image_attachment(
@@ -606,6 +612,7 @@ class VKBotApp:
             peer_id,
             url,
             self.event_images,
+            force_refresh=force_refresh,
         )
         logger.warning(
             "event_poster peer_id=%s event_id=%s has_att=%s url=%s",
@@ -3993,7 +4000,7 @@ class VKBotApp:
         try:
             mid = await self.client.send_message(
                 peer_id,
-                "Постер шоу 👇",
+                "\u2060",
                 attachment=attachment,
             )
         except Exception:
@@ -4051,7 +4058,11 @@ class VKBotApp:
             payment_url=payment_url,
             manager_link=self.settings.manager_link,
         )
-        attachment = await self._event_poster_attachment(peer_id, event)
+        attachment = await self._event_poster_attachment(
+            peer_id,
+            event,
+            force_refresh=True,
+        )
         if not attachment and not (event.get("image") or "").strip():
             logger.warning(
                 "BEST event has empty image_url event_id=%s date=%s location=%s",
@@ -4141,7 +4152,11 @@ class VKBotApp:
             kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
         kb.button("Назад к датам", _payload("best_date_page"))
         kb.adjust(1)
-        attachment = await self._event_poster_attachment(peer_id, event)
+        attachment = await self._event_poster_attachment(
+            peer_id,
+            event,
+            force_refresh=True,
+        )
         poster_mid = await self._send_best_poster_message(peer_id, attachment)
         await self._send_text(
             peer_id,

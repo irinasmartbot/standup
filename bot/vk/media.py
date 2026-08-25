@@ -324,6 +324,8 @@ async def resolve_image_attachment(
     peer_id: int,
     image_url: str | None,
     cache: VKRemoteImageCache,
+    *,
+    force_refresh: bool = False,
 ) -> str | None:
     """Download remote poster once, upload to VK, reuse cached attachment id."""
     url = (image_url or "").strip()
@@ -332,7 +334,7 @@ async def resolve_image_attachment(
             logger.warning("VK event poster URL is not http(s): %r", url[:120])
         return None
     cached = cache.get(url)
-    if cached:
+    if cached and not force_refresh:
         return cached
     alt = None
     try:
@@ -341,7 +343,7 @@ async def resolve_image_attachment(
         alt = normalize_poster_url(url)
         if alt and alt != url:
             cached_alt = cache.get(alt)
-            if cached_alt:
+            if cached_alt and not force_refresh:
                 cache.set(url, cached_alt)
                 return cached_alt
 
