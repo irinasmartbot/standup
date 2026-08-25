@@ -1437,6 +1437,11 @@ async def unknown_message(message: Message, state: FSMContext):
     if await state.get_state() is not None:
         return
 
+    # Текстовые подписи кнопок (Salebot / reply-клавиатура / копипаст)
+    # не считаем «вопросом в хелп» — ведём в сценарий.
+    if await _dispatch_ui_text_command(message, state, text):
+        return
+
     from bot.handlers.start import _is_meaningful_free_text, submit_help_question
 
     # Короткий спам / абракадабра — молчим и меню не показываем
@@ -1445,3 +1450,146 @@ async def unknown_message(message: Message, state: FSMContext):
 
     # Осмысленный текст (≥10 символов) — в хелп-чат без отбивки клиенту.
     await submit_help_question(message, thank_you=False)
+
+
+def _normalize_ui_phrase(text: str) -> str:
+    import re
+
+    raw = (text or "").casefold().strip()
+    # Убираем эмодзи/знаки, оставляем слова (чтобы «📅 Выбор по датам» == «выбор по датам»).
+    cleaned = re.sub(r"[^\w\sё+-]+", " ", raw, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+async def _dispatch_ui_text_command(
+    message: Message, state: FSMContext, text: str
+) -> bool:
+    """True если текст распознан как UI-фраза и обработан."""
+    key = _normalize_ui_phrase(text)
+    if not key:
+        return False
+
+    dates_keys = {
+        "выбор по датам",
+        "выбор по дате",
+        "выбрать по дате",
+        "выбрать по датам",
+        "посмотреть актуальные даты",
+        "актуальные даты",
+    }
+    venues_keys = {
+        "выбор по площадке",
+        "выбор по локации",
+        "выбрать по площадке",
+        "выбрать по локации",
+    }
+    menu_keys = {
+        "в главное меню",
+        "главное меню",
+        "вернуться в меню",
+        "назад в меню",
+        "меню",
+    }
+    book_keys = {
+        "забронировать места",
+        "забронировать",
+        "проверка материала",
+        "standup проверка материала",
+    }
+    cancel_keys = {"отменить бронь", "отмена брони"}
+    change_date_keys = {"изменить дату", "смена даты"}
+    ticket_keys = {"получить билет"}
+
+    if key in dates_keys:
+        kb = await check_dates_kb()
+        await message.answer("Выбирай дату 👇", reply_markup=kb)
+        return True
+
+    if key in venues_keys:
+        events = await load_events()
+        venues = sorted(set(e["location"] for e in events))
+        kb = InlineKeyboardBuilder()
+        for venue in venues:
+            kb.button(text=venue, callback_data=f"venue_{venue}")
+        kb.button(text="📅 Выбор по дате", callback_data="check_dates")
+        kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+        kb.adjust(*([1] * len(venues)), 1, 1)
+        await message.answer("Выбирай локацию 👇", reply_markup=kb.as_markup())
+        return True
+
+    if key in book_keys:
+        await check_format_entry(message)
+        return True
+
+    if key in menu_keys:
+        await state.clear()
+        from bot.handlers.start import _send_welcome
+        from bot.utils.bot_commands import refresh_user_commands
+
+        await refresh_user_commands(message.bot, message.from_user.id)
+        await _send_welcome(message)
+        return True
+
+    if key in cancel_keys:
+        bookings = get_active_bookings_by_user(message.from_user.id)
+        if not bookings:
+            await message.answer("Активных броней не найдено.")
+            return True
+        if len(bookings) == 1:
+            booking_id = bookings[0][0]
+            date_label = f"{format_date(bookings[0][5])} {bookings[0][6]}"
+            kb = InlineKeyboardBuilder()
+            kb.button(text="Подтверждаю", callback_data=f"cancel_do_{booking_id}")
+            kb.adjust(1)
+            await message.answer(
+                f"Для подтверждения отмены брони на <b>{date_label}</b> нажмите кнопку ниже",
+                reply_markup=kb.as_markup(),
+                parse_mode="HTML",
+            )
+            return True
+        kb = InlineKeyboardBuilder()
+        for b in bookings:
+            label = f"❌ {format_date(b[5])} {b[6]}"
+            kb.button(text=label, callback_data=f"cancel_select_{b[0]}")
+        kb.adjust(1)
+        await message.answer(
+            _multi_booking_text(bookings, "Уточните, какую бронь вы бы хотели отменить?"),
+            reply_markup=kb.as_markup(),
+        )
+        return True
+
+    if key in change_date_keys:
+        bookings = get_active_bookings_by_user(message.from_user.id)
+        if not bookings:
+            await message.answer("Активных броней не найдено.")
+            return True
+        if len(bookings) == 1:
+            booking_id = bookings[0][0]
+            date_label = f"{format_date(bookings[0][5])} {bookings[0][6]}"
+            kb = InlineKeyboardBuilder()
+            kb.button(text="Подтверждаю", callback_data=f"change_date_do_{booking_id}")
+            kb.adjust(1)
+            await message.answer(
+                f"Для подтверждения изменения даты брони на <b>{date_label}</b> нажмите кнопку ниже",
+                reply_markup=kb.as_markup(),
+                parse_mode="HTML",
+            )
+            return True
+        kb = InlineKeyboardBuilder()
+        for b in bookings:
+            label = f"📅 {format_date(b[5])} {b[6]}"
+            kb.button(text=label, callback_data=f"change_date_select_{b[0]}")
+        kb.adjust(1)
+        await message.answer(
+            _multi_booking_text(bookings, "Уточните, для какой брони изменить дату?"),
+            reply_markup=kb.as_markup(),
+        )
+        return True
+
+    if key in ticket_keys:
+        from bot.handlers.start import my_bookings_command
+
+        await my_bookings_command(message, state)
+        return True
+
+    return False
