@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Разовая отправка: отмена шоу + меню дат розыгрыша (TG).
+"""Разовая отправка: отмена шоу + меню дат BEST для розыгрыша (без сегодня).
+
+Перед отправкой сбрасывает флаг/активные брони розыгрыша у получателя,
+чтобы можно было сразу выбрать новую дату без алертов.
 
 Примеры на сервере из /home/standup/app:
 
-  # только тест
   venv/bin/python scripts/send_cancel_raffle_dates.py --test theastarta
-
-  # троим после ок
   venv/bin/python scripts/send_cancel_raffle_dates.py --send LuzzettaA LynitaAd catemood
 """
 
@@ -88,8 +88,21 @@ def _lookup_telegram_ids(usernames: list[str]) -> list[dict]:
     return rows
 
 
+def _prepare_raffle_rebook(telegram_id: int) -> dict:
+    """Снять активные брони розыгрыша и флаг used — чтобы выбрать новую дату."""
+    from bot.db.crud import reset_raffle_for_user
+
+    return reset_raffle_for_user(int(telegram_id))
+
+
 async def _send_one(bot, telegram_id: int) -> None:
     from bot.handlers.rozygrysh import _dates_kb
+
+    prep = _prepare_raffle_rebook(telegram_id)
+    print(
+        f"    raffle reset: used_cleared={prep.get('rozygrysh_used_cleared')} "
+        f"bookings_cancelled={prep.get('bookings_cancelled')}"
+    )
 
     await bot.send_message(chat_id=int(telegram_id), text=CANCEL_TEXT)
     markup, dates = await _dates_kb()
@@ -99,8 +112,7 @@ async def _send_one(bot, telegram_id: int) -> None:
             text="Пока нет доступных дат для выбора 😔",
         )
         return
-    # Не пишем в raffle_nav: cleanup после прошедших шоу удаляет dates_message_id
-    # и стирает только что отправленное меню (как у тестовой отправки).
+    # Не пишем raffle_nav — cleanup после шоу иначе сотрёт меню.
     await bot.send_message(
         chat_id=int(telegram_id),
         text=DATES_CAPTION,
