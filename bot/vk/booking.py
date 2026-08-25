@@ -84,8 +84,8 @@ async def clear_inline_keyboard(
                 if await edit_kb(peer_id, kb, **kwargs):
                     ok = True
                     continue
-            # Fallback: старый путь (если клиент без edit_keyboard_only).
-            if await client.edit_message(peer_id, None, keyboard=kb, **kwargs):
+            # Без непустого message VK отвечает «message is empty or invalid».
+            if await client.edit_message(peer_id, "\u200b", keyboard=kb, **kwargs):
                 ok = True
         except Exception:
             logger.exception(

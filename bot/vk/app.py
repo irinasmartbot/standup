@@ -864,11 +864,10 @@ class VKBotApp:
         cmid = self._callback_cmid(peer)
         if cmid:
             try:
-                await self.client.edit_message(
+                await self.client.edit_keyboard_only(
                     peer,
-                    None,
+                    empty_inline_keyboard(),
                     conversation_message_id=int(cmid),
-                    keyboard=empty_inline_keyboard(),
                 )
             except Exception:
                 logger.exception(

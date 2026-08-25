@@ -159,11 +159,39 @@ class VKClient:
                 cmid,
             )
             return None
-        items = resp.get("items") if isinstance(resp, dict) else None
+        items = None
+        if isinstance(resp, dict):
+            items = resp.get("items")
+        elif isinstance(resp, list):
+            items = resp
         if not items:
             return None
         item = items[0]
         return item if isinstance(item, dict) else None
+
+    @staticmethod
+    def _attachment_string_from_message(item: dict[str, Any]) -> str | None:
+        """Собрать attachment=photo-123_456_key из объекта сообщения VK."""
+        parts: list[str] = []
+        for att in item.get("attachments") or []:
+            if not isinstance(att, dict):
+                continue
+            kind = att.get("type")
+            if not kind:
+                continue
+            obj = att.get(kind)
+            if not isinstance(obj, dict):
+                continue
+            owner = obj.get("owner_id")
+            oid = obj.get("id")
+            if owner is None or oid is None:
+                continue
+            token = f"{kind}{owner}_{oid}"
+            access = obj.get("access_key")
+            if access:
+                token = f"{token}_{access}"
+            parts.append(token)
+        return ",".join(parts) if parts else None
 
     async def edit_keyboard_only(
         self,
@@ -175,8 +203,9 @@ class VKClient:
     ) -> bool:
         """Снять/заменить inline-кнопки, сохранив текст (и вложения).
 
-        VK messages.edit без поля message часто падает или не трогает клавиатуру —
-        поэтому подтягиваем текст сообщения и шлём его вместе с keyboard.
+        VK messages.edit без непустого message падает:
+        «message is empty or invalid» — поэтому всегда передаём текст
+        (из сообщения или zero-width space) вместе с keyboard.
         """
         if not message_id and not conversation_message_id:
             return False
@@ -185,11 +214,16 @@ class VKClient:
             item = await self.get_message_by_id(int(message_id))
         if item is None and conversation_message_id:
             item = await self.get_message_by_cmid(peer_id, int(conversation_message_id))
+
         mid = message_id
         cmid = conversation_message_id
-        text: str | None = None
+        # VK не принимает пустой message при edit — минимум невидимый символ.
+        body = "\u200b"
+        attachment: str | None = None
         if item:
-            text = str(item.get("text") or "")
+            raw_text = str(item.get("text") or "").strip()
+            body = raw_text or "\u200b"
+            attachment = self._attachment_string_from_message(item)
             try:
                 if item.get("id"):
                     mid = int(item["id"])
@@ -201,24 +235,24 @@ class VKClient:
             except (TypeError, ValueError):
                 pass
 
-        async def _try(*, use_text: bool) -> bool:
-            body = text if use_text else None
-            if cmid and await self.edit_message(
-                peer_id, body, conversation_message_id=int(cmid), keyboard=keyboard
-            ):
-                return True
-            if mid and await self.edit_message(
-                peer_id, body, message_id=int(mid), keyboard=keyboard
-            ):
-                return True
-            return False
-
-        # С текстом (предпочтительно). Без текста — только если сообщение не нашли,
-        # чтобы не затереть caption пустой строкой.
-        if item is not None:
-            if await _try(use_text=True):
-                return True
-        return await _try(use_text=False)
+        # Сначала cmid (клик), потом global message_id.
+        if cmid and await self.edit_message(
+            peer_id,
+            body,
+            conversation_message_id=int(cmid),
+            keyboard=keyboard,
+            attachment=attachment,
+        ):
+            return True
+        if mid and await self.edit_message(
+            peer_id,
+            body,
+            message_id=int(mid),
+            keyboard=keyboard,
+            attachment=attachment,
+        ):
+            return True
+        return False
 
     async def send_message(
         self,
@@ -282,7 +316,8 @@ class VKClient:
         auto_format = None
         if text is not None:
             plain, auto_format = prepare_vk_message(text)
-            params["message"] = plain
+            # VK: «message is empty or invalid» — пустую строку не принимаем.
+            params["message"] = plain if (plain or "").strip() else "\u200b"
         if message_id:
             params["message_id"] = int(message_id)
         else:
