@@ -2246,29 +2246,37 @@ class VKBotApp:
                 message.get("id"),
             )
         is_gift_deeplink = _is_offline_gift_ref(ref) and is_start_entry and not cmd
+        # «Начать» текстом + липкий gift-ref больше не открывает розыгрыш.
+        # Настоящий deeplink: пустой текст и payload command=start (синяя кнопка / write-).
+        typed_start = text_key in {"/start", "start", "начать", "старт"}
+        if is_gift_deeplink and typed_start:
+            logger.info(
+                "Ignore typed start with offline_gift ref vk_id=%s ref=%r",
+                vk_id,
+                ref,
+            )
+            is_gift_deeplink = False
+        elif is_gift_deeplink and not in_evening_offline_gift_window():
+            logger.info(
+                "Ignore offline_gift deeplink outside 19–21 MSK vk_id=%s ref=%r",
+                vk_id,
+                ref,
+            )
+            is_gift_deeplink = False
         if cmd == "offline_gift" or is_gift_deeplink:
-            # VK липко таскает ref: «начать» после окна 19–21 не должно снова
-            # писать в список участников. Явное слово «подарок» (cmd) — как было.
-            if is_gift_deeplink and not in_evening_offline_gift_window():
-                logger.info(
-                    "Ignore sticky offline_gift ref outside 19–21 MSK vk_id=%s ref=%r",
-                    vk_id,
-                    ref,
-                )
+            self._track(
+                vk_id,
+                EVENT_BOT_START,
+                props={"payload": ref or "offline_gift", "via": "deeplink"},
+            )
+            event_id = _offline_gift_event_id_from_ref(ref)
+            if event_id:
+                self._cancel_offline_gift_timers(vk_id)
+                self._offline_gift_await_choice.discard(int(vk_id))
+                await self._join_offline_gift_event(peer_id, vk_id, event_id)
             else:
-                self._track(
-                    vk_id,
-                    EVENT_BOT_START,
-                    props={"payload": ref or "offline_gift", "via": "deeplink"},
-                )
-                event_id = _offline_gift_event_id_from_ref(ref)
-                if event_id:
-                    self._cancel_offline_gift_timers(vk_id)
-                    self._offline_gift_await_choice.discard(int(vk_id))
-                    await self._join_offline_gift_event(peer_id, vk_id, event_id)
-                else:
-                    await self._send_offline_gift_events(peer_id, vk_id=vk_id)
-                return
+                await self._send_offline_gift_events(peer_id, vk_id=vk_id)
+            return
 
         is_raffle_deeplink = _is_raffle_ref(ref) and is_start_entry and not cmd
         if cmd == "raffle" or is_raffle_deeplink:
@@ -2309,24 +2317,18 @@ class VKBotApp:
             or cmd == "main_menu"
             or payload_command == "start"
         ):
-            is_start_text = (
-                text.lower() in {"/start", "start", "начать", "старт"}
-                or payload_command == "start"
-            )
-            # Вне 19–21 МСК хвост воронки не должен перехватывать «Начать».
-            if cmd != "main_menu" and is_start_text and not in_evening_offline_gift_window():
+            # «Начать» всегда меню. Участие в офлайн-подарке — только «подарок» /
+            # кнопки / свежий deeplink, не повторный Start.
+            if (
+                cmd != "main_menu"
+                and (
+                    text.lower() in {"/start", "start", "начать", "старт"}
+                    or payload_command == "start"
+                )
+            ):
                 self._offline_gift_launch_at.pop(int(vk_id), None)
                 self._offline_gift_await_choice.discard(int(vk_id))
                 self._cancel_offline_gift_timers(vk_id)
-            # В первый час после запуска офлайн-розыгрыша «Начать» не сбивает в меню
-            # (только пока окно 19–21 ещё открыто).
-            elif (
-                cmd != "main_menu"
-                and is_start_text
-                and self._offline_gift_in_start_window(vk_id)
-            ):
-                await self._offline_gift_repeat_action(peer_id, vk_id)
-                return
             if cmd == "main_menu" and int(peer_id) in self.peer_offline_gift_message_ids:
                 await self._leave_offline_gift_to_menu(peer_id, vk_id)
                 return
