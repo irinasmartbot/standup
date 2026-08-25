@@ -183,13 +183,45 @@ def _is_random_cover_file(path: Path) -> bool:
     return True
 
 
+def _photos_dirs() -> list[Path]:
+    root = _repo_root()
+    candidates = [
+        root / "фото",
+        root.parent / "app" / "фото",
+        root.parent / "vk-app" / "фото",
+        Path.cwd() / "фото",
+    ]
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in candidates:
+        key = str(path.resolve()) if path.exists() else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.is_dir():
+            out.append(path)
+    return out
+
+
 def pick_random_cover_file(*, photos_dir: Path | None = None) -> Path | None:
-    directory = photos_dir or (_repo_root() / "фото")
-    if not directory.is_dir():
-        return None
-    pool = [path for path in sorted(directory.iterdir()) if path.is_file() and _is_random_cover_file(path)]
-    if pool:
-        return random.choice(pool)
+    directories = [photos_dir] if photos_dir is not None else _photos_dirs()
+    for directory in directories:
+        if not directory or not directory.is_dir():
+            continue
+        pool = [
+            path
+            for path in sorted(directory.iterdir())
+            if path.is_file() and _is_random_cover_file(path)
+        ]
+        if pool:
+            return random.choice(pool)
+        fallback = directory / Path(_DEFAULT_SHOW_COVER).name
+        if fallback.is_file():
+            return fallback
+    for directory in directories or [_repo_root() / "фото"]:
+        fallback = directory / Path(_DEFAULT_SHOW_COVER).name if directory else None
+        if fallback and fallback.is_file():
+            return fallback
     fallback = _repo_root() / _DEFAULT_SHOW_COVER
     return fallback if fallback.is_file() else None
 

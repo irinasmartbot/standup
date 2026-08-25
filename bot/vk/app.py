@@ -547,19 +547,73 @@ class VKBotApp:
         return None
 
     def _random_cover_attachment(self) -> str | None:
-        """Случайная обложка шоу (как в TG). Не трогает площадки / хитлото / билет."""
+        """Случайная обложка шоу из кэша (без upload)."""
         from bot.vk.media import random_show_cover_attachment
 
         return random_show_cover_attachment(self.images) or self._cover_attachment("show_cover")
 
+    async def _ensure_cover_attachment(
+        self,
+        peer_id: int,
+        *keys: str,
+    ) -> str | None:
+        """Кэш → upload из фото/ (app или vk-app) → случайная обложка."""
+        from bot.vk.media import resolve_booking_cover_attachment, resolve_local_image_attachment
+
+        cached = self._cover_attachment(*keys) if keys else self._random_cover_attachment()
+        if cached:
+            return cached
+        file_map = {
+            "hitloto_start": "hitloto_start.png",
+            "show_cover": "IMG_20220511_201818.jpg",
+            "temple_bar": "temple_bar.jpg",
+            "escobar": "escobar.jpg",
+            "nebar": "nebar.jpg",
+        }
+        for key in keys:
+            file_name = file_map.get(key) or f"{key}.jpg"
+            uploaded = await resolve_local_image_attachment(
+                self.client,
+                peer_id,
+                key=key,
+                file_name=file_name,
+                cache=self.images,
+            )
+            if uploaded:
+                logger.warning(
+                    "VK cover uploaded on demand peer_id=%s key=%s file=%s",
+                    peer_id,
+                    key,
+                    file_name,
+                )
+                return uploaded
+        att = await resolve_booking_cover_attachment(self.client, peer_id, self.settings)
+        if not att:
+            logger.warning(
+                "VK cover missing peer_id=%s keys=%s cache_items=%s",
+                peer_id,
+                keys,
+                len(self.images.all()),
+            )
+        return att
+
     async def _event_poster_attachment(self, peer_id: int, event: dict[str, Any]) -> str | None:
         """Только постер из image_url мероприятия — без случайных обложек."""
-        return await resolve_image_attachment(
+        url = (event.get("image") or "").strip()
+        attachment = await resolve_image_attachment(
             self.client,
             peer_id,
-            event.get("image"),
+            url,
             self.event_images,
         )
+        logger.warning(
+            "event_poster peer_id=%s event_id=%s has_att=%s url=%s",
+            peer_id,
+            event.get("id"),
+            bool(attachment),
+            url[:100],
+        )
+        return attachment
 
     def _queue_delete(self, peer_id: int, *message_ids: Any) -> None:
         bucket = self._pending_delete_ids.setdefault(int(peer_id), [])
@@ -796,8 +850,12 @@ class VKBotApp:
         del edit  # листание больше не через in-place edit
         peer = int(peer_id)
         keep_att = attachment or self._random_cover_attachment()
+        if not keep_att:
+            keep_att = await self._ensure_cover_attachment(peer_id)
         if keep_att:
             self._remember_dates_attachment(peer, keep_att)
+        else:
+            logger.warning("dates card without photo peer_id=%s", peer_id)
 
         # Явно убираем предыдущую dates-карточку, если помним message_id
         # (кнопочный cmid дополнительно чистит _send_text).
@@ -2229,7 +2287,7 @@ class VKBotApp:
                     dates_label="📅 Выбрать по дате",
                     venues_label="📍 Выбор по площадке",
                 ),
-                attachment=self._random_cover_attachment(),
+                attachment=await self._ensure_cover_attachment(peer_id),
             )
             return
 
@@ -2314,7 +2372,7 @@ class VKBotApp:
                         dates_label="📅 Выбрать по дате",
                         venues_label="📍 Выбор по площадке",
                     ),
-                    attachment=self._random_cover_attachment(),
+                    attachment=await self._ensure_cover_attachment(peer_id),
                 )
                 return
             self.peer_browse[peer_id] = "date"
@@ -2361,7 +2419,7 @@ class VKBotApp:
                         dates_label="📅 Выбрать по дате",
                         venues_label="📍 Выбор по площадке",
                     ),
-                    attachment=self._random_cover_attachment(),
+                    attachment=await self._ensure_cover_attachment(peer_id),
                 )
                 return
             await self._send_best_dates(peer_id, page, edit="page" in payload)
@@ -3072,7 +3130,7 @@ class VKBotApp:
                 peer_id,
                 vk_raffle.start_text(self.settings.community_link),
             )
-            post_att = self._random_cover_attachment()
+            post_att = await self._ensure_cover_attachment(peer_id)
             self._remember_raffle_attachment(peer_id, post_att)
             await self._send_text(
                 peer_id,
@@ -3361,7 +3419,7 @@ class VKBotApp:
             )
             return
         self._clear_raffle_screenshot_wait(vk_id)
-        start_att = self._random_cover_attachment()
+        start_att = await self._ensure_cover_attachment(peer_id)
         self._remember_raffle_attachment(peer_id, start_att)
         try:
             await self._send_text(
@@ -3690,7 +3748,7 @@ class VKBotApp:
             peer_id,
             "Проверка материала. Выбирай дату:",
             keyboard=keyboard,
-            attachment=self._random_cover_attachment(),
+            attachment=await self._ensure_cover_attachment(peer_id),
             edit=edit,
         )
         logger.info("Sent check dates: %s items page=%s", len(dates), page)
@@ -3706,7 +3764,7 @@ class VKBotApp:
             peer_id,
             "Выбирай площадку:",
             keyboard=_venues_keyboard(venues, "check_venue", "check_date_page"),
-            attachment=self._random_cover_attachment(),
+            attachment=await self._ensure_cover_attachment(peer_id),
         )
         self._track(peer_id, EVENT_BROWSE_VENUES, props={"format": "proverka"})
 
@@ -3726,7 +3784,7 @@ class VKBotApp:
             peer_id,
             f"Мероприятия в {venue}",
             keyboard=_venue_dates_keyboard(dates, "check_venue_date", venue, "check_venues"),
-            attachment=self._random_cover_attachment(),
+            attachment=await self._ensure_cover_attachment(peer_id),
         )
 
     async def _send_check_venue_date(
@@ -3756,7 +3814,7 @@ class VKBotApp:
             peer_id,
             f"Шоу на {_date_label(date)}:",
             keyboard=_events_keyboard(events, "check_event", "check_venue", venue=venue),
-            attachment=self._random_cover_attachment(),
+            attachment=await self._ensure_cover_attachment(peer_id),
         )
 
     async def _send_check_date(self, peer_id: int, date: str, *, vk_id: int | None = None) -> None:
@@ -3771,7 +3829,7 @@ class VKBotApp:
             peer_id,
             f"Шоу на {_date_label(date)}:",
             keyboard=_events_keyboard(events, "check_event", "check"),
-            attachment=self._random_cover_attachment(),
+            attachment=await self._ensure_cover_attachment(peer_id),
         )
 
     async def _send_check_event(self, peer_id: int, event_id: Any, *, vk_id: int | None = None) -> None:
@@ -3843,7 +3901,7 @@ class VKBotApp:
             peer_id,
             "StandUp BEST. Выбирай дату:",
             keyboard=keyboard,
-            attachment=self._random_cover_attachment(),
+            attachment=await self._ensure_cover_attachment(peer_id),
             edit=edit,
         )
         logger.info("Sent BEST dates: %s items page=%s", len(dates), page)
@@ -3860,7 +3918,7 @@ class VKBotApp:
             peer_id,
             "BEST: выбирай площадку:",
             keyboard=_venues_keyboard(venues, "best_venue", "best_date_page"),
-            attachment=self._random_cover_attachment(),
+            attachment=await self._ensure_cover_attachment(peer_id),
         )
         self._track(peer_id, EVENT_BROWSE_VENUES, props={"format": "best"})
 
@@ -3995,7 +4053,7 @@ class VKBotApp:
             peer_id,
             f"BEST на {_date_label(date)}:",
             keyboard=_events_keyboard(events, "best_event", "best"),
-            attachment=self._random_cover_attachment(),
+            attachment=await self._ensure_cover_attachment(peer_id),
         )
 
     async def _send_best_event(self, peer_id: int, event_id: Any, *, vk_id: int | None = None) -> None:
@@ -4074,7 +4132,7 @@ class VKBotApp:
             peer_id,
             text,
             keyboard=keyboard,
-            attachment=self._cover_attachment("hitloto_start", "show_cover"),
+            attachment=await self._ensure_cover_attachment(peer_id, "hitloto_start", "show_cover"),
             edit=edit,
         )
 
@@ -4090,7 +4148,7 @@ class VKBotApp:
             peer_id,
             f"Хитлото на {_date_label(date)}:",
             keyboard=_events_keyboard(events, "hitloto_event", "hitloto"),
-            attachment=self._cover_attachment("hitloto_start", "show_cover"),
+            attachment=await self._ensure_cover_attachment(peer_id, "hitloto_start", "show_cover"),
         )
 
     async def _send_hitloto_event(self, peer_id: int, event_id: Any, *, vk_id: int | None = None) -> None:
