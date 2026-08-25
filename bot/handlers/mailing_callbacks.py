@@ -8,7 +8,7 @@ import logging
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
-from bot.db.mailing import get_campaign_followup
+from bot.db.mailing import claim_mail_followup_send, get_campaign_followup
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -43,6 +43,16 @@ async def mailing_followup(call: CallbackQuery) -> None:
 
     if not call.message:
         return
+
+    user_id = int(call.from_user.id) if call.from_user else 0
+    if user_id and not claim_mail_followup_send(user_id=user_id, text=text):
+        logger.info(
+            "Skip duplicate mailing followup tg_id=%s campaign=%s",
+            user_id,
+            raw,
+        )
+        return
+
     try:
         await call.message.answer(text, parse_mode="HTML")
     except Exception:

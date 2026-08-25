@@ -43,6 +43,14 @@ def parse_event_datetime(date_str, time_str):
     return None
 
 
+def event_already_passed(date_str, time_str) -> bool:
+    """True if event date+time is strictly before now (MSK, naive)."""
+    event_dt = parse_event_datetime(date_str, time_str)
+    if not event_dt:
+        return False
+    return event_dt < now_msk().replace(tzinfo=None)
+
+
 def parse_created_at(value):
     try:
         parsed = datetime.fromisoformat(value)

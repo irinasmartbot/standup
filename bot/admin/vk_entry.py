@@ -316,7 +316,16 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
     """Сразу ветка бота — без сообщения «нажмите кнопку ниже»."""
     from bot.db.analytics import EVENT_BOT_START, track_event
     from bot.vk import raffle as vk_raffle
+    from bot.vk.app import in_evening_offline_gift_window
     from bot.vk.entry_dedupe import claim_flow_send, clear_flow_send
+
+    # Вечером на шоу вход в «розыгрыш» = офлайн-подарок.
+    if flow_key == "raffle" and in_evening_offline_gift_window():
+        logger.info(
+            "Evening window: mini-app raffle → offline gift vk_id=%s",
+            vk_id,
+        )
+        flow_key = "offline_gift"
 
     flow = FLOWS.get(flow_key) or {}
     # Общий антидубль с VK-ботом (разные процессы / воркеры).

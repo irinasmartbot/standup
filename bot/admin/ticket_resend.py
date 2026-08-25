@@ -348,6 +348,8 @@ def _usual_place(row: dict) -> str:
 
 def _usual_caption_html(row: dict, *, already_confirmed: bool, channel: str) -> str:
     """Same guest-facing ticket text as the bot (TG HTML or VK HTML before format_vk_text)."""
+    from bot.utils.booking_texts import escobar_proverka_ticket_ps
+
     place = _usual_place(row)
     guests = int(row.get("guests") or 1)
     head = "Ваш билет ещё раз 👇\n\n" if already_confirmed else "Отлично!\n\n"
@@ -357,6 +359,7 @@ def _usual_caption_html(row: dict, *, already_confirmed: bool, channel: str) -> 
             if already_confirmed
             else "<b>Отлично!</b>\n\n"
         )
+    is_raffle = _is_raffle_booking(row)
     body = (
         f"{head}"
         "<b>Данные по билету:</b>\n\n"
@@ -367,7 +370,7 @@ def _usual_caption_html(row: dict, *, already_confirmed: bool, channel: str) -> 
         f"<b>Количество гостей:</b> {guests_word(guests)}\n\n"
         "Ждем вас на мероприятии ❤️\n\n"
     )
-    if _is_raffle_booking(row):
+    if is_raffle:
         body += (
             "❗ <b>ВНИМАНИЕ, ваш билет на одного человека</b>, если вы хотите пойти с друзьями, "
             "чтобы вас посадили вместе — нажмите кнопку «Что, если я хочу прийти не один?» "
@@ -387,6 +390,11 @@ def _usual_caption_html(row: dict, *, already_confirmed: bool, channel: str) -> 
             f"И не забудь заглянуть на наш <a href=\"{escape(CHANNEL_LINK)}\">канал анонсов</a> "
             "(там часто дарят бесплатные билеты на платные шоу😉)"
         )
+    body += escobar_proverka_ticket_ps(
+        location=str(row.get("location") or ""),
+        address=str(row.get("address") or ""),
+        is_raffle=is_raffle,
+    )
     return body
 
 
@@ -493,6 +501,13 @@ async def _issue_ticket_vk(row: dict, *, already_confirmed: bool) -> dict:
         f"При вопросах — менеджеру ({vk_manager}). "
         f"Если срочно — звоните {MANAGER_PHONE}.\n\n"
         f"Канал анонсов: {vk_community}"
+    )
+    from bot.utils.booking_texts import escobar_proverka_ticket_ps
+
+    caption_src += escobar_proverka_ticket_ps(
+        location=str(row.get("location") or ""),
+        address=str(row.get("address") or ""),
+        is_raffle=_is_raffle_booking(row),
     )
     caption = format_vk_text(caption_src)
     if _is_raffle_booking(row):

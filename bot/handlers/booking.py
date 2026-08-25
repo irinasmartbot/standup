@@ -37,12 +37,12 @@ logger = logging.getLogger(__name__)
 
 from bot.utils.ticket import (
     MONTHS,
+    event_already_passed,
     format_date,
     format_ticket_place,
     generate_ticket,
     guests_word,
     now_msk,
-    parse_event_datetime,
 )
 from bot.utils.nav_messages import (
     remember_booking_nav,
@@ -241,10 +241,14 @@ async def send_event_card(message, event, back_callback="check_dates", *, telegr
     kb.button(text="📋 Правила бронирования", callback_data="booking_rules")
     kb.button(text="◀️ Назад", callback_data=back_callback)
     kb.adjust(1)
-    try:
-        await message.answer_photo(photo=event["image"], caption=text, reply_markup=kb.as_markup())
-    except Exception:
-        await message.answer(text, reply_markup=kb.as_markup())
+    from bot.utils.event_poster import tg_send_event_card
+
+    await tg_send_event_card(
+        message,
+        event.get("image"),
+        caption=text,
+        reply_markup=kb.as_markup(),
+    )
 
 
 async def check_format_entry(message):
@@ -878,6 +882,19 @@ async def get_ticket(call: CallbackQuery):
         event_location = booking[8]
         guests = booking[9]
 
+        # Повтор «Получить билет» ок; по прошедшему шоу билет больше не шлём.
+        if event_already_passed(event_date, event_time):
+            kb = InlineKeyboardBuilder()
+            kb.button(text="📅 Посмотреть актуальные даты", callback_data="check_dates")
+            kb.adjust(1)
+            await call.message.answer(
+                "К сожалению, это мероприятие уже прошло. "
+                "Посмотри актуальное расписание 👇",
+                reply_markup=kb.as_markup(),
+            )
+            await call.answer()
+            return
+
         if not already_confirmed:
             event = await get_event(event_date, event_time)
             if event:
@@ -901,6 +918,8 @@ async def get_ticket(call: CallbackQuery):
         ticket_buf = generate_ticket(name, event_date, event_time, place, guests)
         head = "Ваш билет ещё раз 👇\n\n" if already_confirmed else "Отлично!\n\n"
 
+        from bot.utils.booking_texts import escobar_proverka_ticket_ps
+
         caption = (
             f"{head}"
             "<b>Данные по билету:</b>\n\n"
@@ -915,6 +934,7 @@ async def get_ticket(call: CallbackQuery):
             f"(если срочно - звоните {MANAGER_PHONE})\n\n"
             f"И не забудь заглянуть на наш <a href=\"{CHANNEL_LINK}\">канал анонсов</a> "
             "(там часто дарят бесплатные билеты на платные шоу😉)"
+            f"{escobar_proverka_ticket_ps(location=event_location or '', address=event_address or '')}"
         )
         try:
             ticket_msg = await call.message.answer_photo(
@@ -961,8 +981,7 @@ async def _check_booking_actionable(booking_id: int, call: CallbackQuery):
         await call.answer("Эта бронь уже отменена или не найдена.", show_alert=True)
         return None
 
-    event_dt = parse_event_datetime(booking[5], booking[6])
-    if event_dt and event_dt < now_msk().replace(tzinfo=None):
+    if event_already_passed(booking[5], booking[6]):
         await call.answer()
         kb = InlineKeyboardBuilder()
         kb.button(text="📅 Посмотреть актуальные даты", callback_data="check_dates")
@@ -1057,15 +1076,23 @@ async def cancel_do(call: CallbackQuery):
     await _remove_ticket_button(booking_id, call.from_user.id)
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
+    if _is_raffle_booking(booking_id):
+        from bot.db.crud import clear_raffle_after_user_cancel
+
+        clear_raffle_after_user_cancel(call.from_user.id)
     await refresh_user_commands(call.message.bot, call.from_user.id)
     await delete_my_bookings_messages(call.message.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     kb = InlineKeyboardBuilder()
     kb.button(text="Перейти в главное меню", callback_data="main_menu")
     kb.adjust(1)
+    extra = ""
+    if _is_raffle_booking(booking_id):
+        extra = "\n\nЧтобы снова участвовать в розыгрыше — отправьте скрин заново."
     await call.message.answer(
         f"Хорошо, спасибо, что предупредили 😊 Ждём Вас на других мероприятиях, "
-        f"актуальная афиша всегда на нашем сайте: MoscowStandUpshow.ru\n\n"
+        f"актуальная афиша всегда на нашем сайте: MoscowStandUpshow.ru"
+        f"{extra}\n\n"
         f"При возникновении вопросов - можно писать менеджеру @ccoverr\n\n"
         f"И не забудь заглянуть на наш <a href='{CHANNEL_LINK}'>канал анонсов</a> "
         f"(там часто дарят бесплатные билеты на платные шоу 😉)",

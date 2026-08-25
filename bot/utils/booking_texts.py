@@ -157,3 +157,28 @@ def raffle_reminder_24h_text(
         "❗️ <b>Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.</b>\n\n"
         f"{details}"
     )
+
+
+# PS только для билета проверки на Escobar (не для розыгрыша).
+ESCOBAR_TICKET_PS_HTML = (
+    "<i>PS: по завершении нашего шоу на площадке возможны другие мероприятия, "
+    "в таком случае после шоу Вам необходимо будет покинуть заведение, "
+    "или пересесть в другую его зону ✌️</i>"
+)
+
+
+def is_escobar_venue(location: str = "", address: str = "") -> bool:
+    blob = f"{location or ''} {address or ''}".casefold()
+    return "escobar" in blob
+
+
+def escobar_proverka_ticket_ps(
+    *,
+    location: str = "",
+    address: str = "",
+    is_raffle: bool = False,
+) -> str:
+    """Хвост для подписи билета: пусто, если не Escobar или розыгрыш."""
+    if is_raffle or not is_escobar_venue(location, address):
+        return ""
+    return f"\n\n{ESCOBAR_TICKET_PS_HTML}"

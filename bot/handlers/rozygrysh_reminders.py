@@ -6,13 +6,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import CHANNEL_LINK, SITE_URL, bot
 from bot.db.crud import (
     annul_booking,
+    clear_raffle_after_user_cancel,
     clear_raffle_nav,
     get_booked_for_reminders,
     get_booking_by_id,
     get_confirmed_raffle_past_for_cleanup,
     get_raffle_nav,
     save_confirm_message_id,
-    set_rozygrysh_used,
     update_reminder_flag,
 )
 from bot.utils.booking_texts import reminder_details_cut
@@ -120,7 +120,7 @@ async def send_raffle_annulled(row):
         parse_mode="HTML",
     )
     annul_booking(booking_id)
-    set_rozygrysh_used(telegram_id, False)
+    clear_raffle_after_user_cancel(telegram_id, reason="booking_annulled")
     await refresh_user_commands(bot, telegram_id)
 
 

@@ -1383,6 +1383,96 @@ def get_pending_raffle_submission(telegram_id=None, *, vk_id=None):
             return _fetchone_tuple(cur)
 
 
+def get_approved_raffle_submission(telegram_id=None, *, vk_id=None):
+    """Последний принятый скрин (даёт право выбрать дату / забронировать)."""
+    if not _use_postgres():
+        return None
+    if telegram_id is None and vk_id is None:
+        return None
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            if vk_id is not None:
+                cur.execute(
+                    """
+                    SELECT id, kind, status, photo_file_id, moderation_message_id
+                    FROM raffle_submissions
+                    WHERE vk_id = %s AND status = 'approved'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (int(vk_id),),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, kind, status, photo_file_id, moderation_message_id
+                    FROM raffle_submissions
+                    WHERE telegram_id = %s AND status = 'approved'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (telegram_id,),
+                )
+            return _fetchone_tuple(cur)
+
+
+def revoke_approved_raffle_submissions(
+    telegram_id=None, *, vk_id=None, reason: str = "booking_cancelled"
+) -> int:
+    """Снять право бронировать по старому скрину (после отмены / аннуляции брони)."""
+    if not _use_postgres():
+        return 0
+    if telegram_id is None and vk_id is None:
+        return 0
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            if vk_id is not None:
+                cur.execute(
+                    """
+                    UPDATE raffle_submissions
+                    SET status = 'rejected',
+                        reject_reason = %s,
+                        reviewed_at = %s
+                    WHERE vk_id = %s AND status = 'approved'
+                    """,
+                    (reason, datetime.now(), int(vk_id)),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE raffle_submissions
+                    SET status = 'rejected',
+                        reject_reason = %s,
+                        reviewed_at = %s
+                    WHERE telegram_id = %s AND status = 'approved'
+                    """,
+                    (reason, datetime.now(), telegram_id),
+                )
+            n = cur.rowcount or 0
+        conn.commit()
+    return n
+
+
+def has_raffle_screen_entitlement(telegram_id=None, *, vk_id=None) -> bool:
+    """Можно бронировать/менять дату: есть активная бронь или принятый скрин."""
+    if get_active_raffle_booking(telegram_id=telegram_id, vk_id=vk_id):
+        return True
+    return get_approved_raffle_submission(telegram_id=telegram_id, vk_id=vk_id) is not None
+
+
+def clear_raffle_after_user_cancel(
+    telegram_id=None, *, vk_id=None, reason: str = "booking_cancelled"
+) -> int:
+    """Отмена/аннуляция брони гостем: снова можно участвовать, но только с новым скрином."""
+    if telegram_id is not None:
+        set_rozygrysh_used(telegram_id, False)
+    elif vk_id is not None:
+        set_rozygrysh_used(vk_id=vk_id, used=False)
+    return revoke_approved_raffle_submissions(
+        telegram_id=telegram_id, vk_id=vk_id, reason=reason
+    )
+
+
 def create_raffle_submission(
     telegram_id=None,
     username=None,
@@ -1583,7 +1673,112 @@ def ensure_offline_gift_tables():
                 )
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vk_offline_gift_timers (
+                    vk_id BIGINT PRIMARY KEY,
+                    kind TEXT NOT NULL
+                        CHECK (kind IN ('choose', 'sub_check')),
+                    event_id BIGINT REFERENCES events(id) ON DELETE CASCADE,
+                    due_at TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_vk_offline_gift_timers_due
+                ON vk_offline_gift_timers (due_at)
+                """
+            )
         conn.commit()
+
+
+def schedule_offline_gift_timer(
+    *,
+    vk_id: int,
+    kind: str,
+    delay_sec: float,
+    event_id: int | None = None,
+) -> None:
+    """Persist offline-gift reminder so it survives VK bot restarts."""
+    if not _use_postgres():
+        return
+    if kind not in {"choose", "sub_check"}:
+        raise ValueError(f"unknown offline gift timer kind: {kind}")
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vk_offline_gift_timers (vk_id, kind, event_id, due_at, created_at)
+                VALUES (
+                    %s, %s, %s,
+                    now() + (%s || ' seconds')::interval,
+                    now()
+                )
+                ON CONFLICT (vk_id) DO UPDATE
+                SET kind = EXCLUDED.kind,
+                    event_id = EXCLUDED.event_id,
+                    due_at = EXCLUDED.due_at,
+                    created_at = now()
+                """,
+                (
+                    int(vk_id),
+                    kind,
+                    int(event_id) if event_id is not None else None,
+                    str(float(delay_sec)),
+                ),
+            )
+        conn.commit()
+
+
+def clear_offline_gift_timer(vk_id: int) -> None:
+    if not _use_postgres():
+        return
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM vk_offline_gift_timers WHERE vk_id = %s",
+                (int(vk_id),),
+            )
+        conn.commit()
+
+
+def pop_due_offline_gift_timers(limit: int = 50) -> list[dict]:
+    """Atomically take due timers (survives restarts; no double-fire)."""
+    if not _use_postgres():
+        return []
+    ensure_offline_gift_tables()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM vk_offline_gift_timers t
+                WHERE t.vk_id IN (
+                    SELECT vk_id
+                    FROM vk_offline_gift_timers
+                    WHERE due_at <= now()
+                    ORDER BY due_at ASC
+                    LIMIT %s
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING vk_id, kind, event_id, due_at
+                """,
+                (int(limit),),
+            )
+            rows = cur.fetchall() or []
+        conn.commit()
+    return [
+        {
+            "vk_id": int(row[0]),
+            "kind": row[1],
+            "event_id": int(row[2]) if row[2] is not None else None,
+            "due_at": row[3],
+        }
+        for row in rows
+    ]
 
 
 def set_offline_gift_pending(*, vk_id: int, event_id: int) -> None:

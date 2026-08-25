@@ -954,10 +954,28 @@ def _status_badge(status: str) -> str:
     return f'<span class="badge" style="background:{color}">{_h(STATUS_LABELS.get(status, status))}</span>'
 
 
+def _status_scale_caption(event: dict) -> str:
+    """Подпись к цветной шкале: люди по всем статусам (не только активные)."""
+    guests = event.get("status_guests") or {}
+    booked = int(guests.get("booked") or 0)
+    confirmed = int(guests.get("confirmed") or 0)
+    cancelled = int(guests.get("cancelled") or 0)
+    annulled = int(guests.get("annulled") or 0)
+    return (
+        '<div class="status-scale-caption">'
+        f"всего: активные <b>{booked}</b> / подтверждено <b>{confirmed}</b> / "
+        f"отменено <b>{cancelled}</b> / аннулировано <b>{annulled}</b>"
+        "</div>"
+    )
+
+
 def _status_bar(event: dict) -> str:
     total = sum(event["status_counts"].values())
     if total <= 0:
-        return '<div class="status-bar empty"></div>'
+        return (
+            f"{_status_scale_caption(event)}"
+            '<div class="status-bar empty"></div>'
+        )
     parts = []
     for status in STATUSES:
         count = event["status_counts"].get(status, 0)
@@ -968,7 +986,10 @@ def _status_bar(event: dict) -> str:
             f'<span title="{_h(STATUS_LABELS[status])}: {count}" '
             f'style="width:{width:.1f}%;background:{STATUS_COLORS[status]}"></span>'
         )
-    return f'<div class="status-bar">{"".join(parts)}</div>'
+    return (
+        f"{_status_scale_caption(event)}"
+        f'<div class="status-bar">{"".join(parts)}</div>'
+    )
 
 
 def _tracks_seats(event: dict) -> bool:
@@ -977,21 +998,19 @@ def _tracks_seats(event: dict) -> bool:
 
 
 def _seat_bar(event: dict) -> str:
-    reserved = event["reserved_guests"]
     confirmed = event["confirmed_guests"]
     if not _tracks_seats(event):
-        # Розыгрыш / BEST / Hit Lotto — места не считаем
-        return f'<div class="active-bookings">Активные брони: <b>{reserved} чел</b></div>'
+        # Розыгрыш / BEST / Hit Lotto — места не считаем; статусы — у шкалы ниже.
+        return ""
     max_seats = event["max_seats"]
     if max_seats <= 0:
-        return f'<div class="capacity muted">Активные брони: {reserved} чел. Лимит мест не указан.</div>'
+        return '<div class="capacity muted">Лимит мест не указан.</div>'
     free = max(0, max_seats - confirmed)
     percent = min(100, confirmed / max_seats * 100)
     return (
         f'<div class="capacity-line"><span>Места заняты билетами: {confirmed}/{max_seats}</span>'
         f'<span>{free} свободно</span></div>'
         f'<div class="capacity-bar"><span style="width:{percent:.1f}%"></span></div>'
-        f'<div class="active-bookings">Активные брони: <b>{reserved} чел</b></div>'
     )
 
 
@@ -2946,22 +2965,25 @@ def _analytics_metric_card(
             primary = metric.get("events", 0)
         people = int(metric.get("uniques") or 0)
         secondary = f'<small class="muted">{people} чел</small>' if people else ""
+        caption_above = ""
     else:
         primary = metric.get("uniques", 0)
-        secondary_parts = []
-        if primary_caption:
-            secondary_parts.append(f'<small class="muted">{_h(primary_caption)}</small>')
+        caption_above = (
+            f'<small class="muted metric-caption">{_h(primary_caption)}</small>'
+            if primary_caption
+            else ""
+        )
         events_count = metric.get("events", 0)
         if events_label:
-            secondary_parts.append(
+            secondary = (
                 f'<small class="muted">всего {events_count} {_h(events_label)}</small>'
             )
         else:
-            secondary_parts.append(f'<small class="muted">всего {events_count}</small>')
-        secondary = "".join(secondary_parts)
+            secondary = f'<small class="muted">всего {events_count}</small>'
     return (
         f"{tag_open}"
         f"<span>{_h(title)}</span>"
+        f"{caption_above}"
         f"<b>{primary}</b>"
         f"{secondary}"
         f"{hint}"
@@ -3258,15 +3280,17 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     )
 
     start_payload_labels = {
-        "": "вход через старт",
+        "": "вход через старт / начать",
         "standup_rozygr": "вход розыгрыш",
+        "standup_book": "вход бронь",
+        "offline_gift": "вход подарок на шоу",
         "quick_booking": "вход быстрая бронь",
         "afisha_plat": "вход платный BEST",
     }
     payload_rows = []
     for row in report.get("starts_by_payload") or []:
         raw = row.get("payload") or ""
-        label = start_payload_labels.get(raw, raw or "вход через старт")
+        label = start_payload_labels.get(raw, raw or "вход через старт / начать")
         payload_rows.append(
             "<tr>"
             f"<td>{_h(label)}</td>"
@@ -3280,12 +3304,16 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         '<summary class="details-summary">'
         "<div>"
         "<strong>Входы в бот по ссылкам</strong>"
-        '<span class="muted">Все заходы и уникальные люди</span>'
+        '<span class="muted">Старт / начать и актуальные deeplink · заходы и уникальные люди</span>'
         "</div>"
         '<span class="details-action"><span class="closed-label">Развернуть</span>'
         '<span class="open-label">Свернуть</span></span>'
         "</summary>"
         '<div class="details-body">'
+        '<p class="muted" style="margin:0 0 10px">'
+        "Только вход через «Начать»/старт и рабочие ссылки: бронь, розыгрыш, подарок на шоу. "
+        "Дубли mini-app (booking/raffle) сведены к одной строке."
+        "</p>"
         '<div class="table-wrap"><table><thead><tr>'
         "<th>Вход</th><th>Все заходы</th><th>Уникальные люди</th>"
         "</tr></thead>"
@@ -3426,14 +3454,21 @@ def _analytics_tab(report: dict, filters: dict) -> str:
                 return _metric_uniques(metric)
             return _metric_events(metric)
 
+        def _step_secondary(metric: dict | None, idx: int) -> str:
+            events = _metric_events(metric)
+            uniques = _metric_uniques(metric)
+            if idx < uniques_primary_steps:
+                # Как в карточках веток: крупно люди, мелко действия.
+                return f"всего {events}"
+            return f"{uniques} чел."
+
         base = _step_value(steps[0][1], 0) if steps else 0
         prev = base
         book_base = _metric_events(drop_base) if drop_base is not None else 0
         rows = []
         for idx, (title, metric) in enumerate(steps):
-            events = _metric_events(metric)
-            uniques = _metric_uniques(metric)
             value = _step_value(metric, idx)
+            secondary = _step_secondary(metric, idx)
             pct_base = round(100 * value / base) if base else (100 if idx == 0 and value else 0)
             if idx == 0:
                 pct_note = "100% · начало воронки"
@@ -3447,7 +3482,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             rows.append(
                 '<div class="bar-funnel-row">'
                 f'<div class="bar-funnel-label">{_h(title)}</div>'
-                f'<div class="bar-funnel-nums"><b>{value}</b><span>{uniques} чел.</span></div>'
+                f'<div class="bar-funnel-nums"><b>{value}</b><span>{_h(secondary)}</span></div>'
                 '<div class="bar-funnel-track">'
                 f'<div class="bar-funnel-fill" style="width:{width}%"></div>'
                 "</div>"
@@ -3536,6 +3571,8 @@ def _analytics_tab(report: dict, filters: dict) -> str:
             ("9. Бронь аннулирована / не подтвердили", raffle_bot.get("annulled") or raffle_bookings.get("annulled")),
         ],
         drop_base=raffle_bot.get("created") or raffle_bookings.get("created"),
+        # Крупно — люди (как в карточках «пост / отзыв»), мелко — всего действий.
+        uniques_primary_steps=5,
     )
 
     def _branch_metric(title: str, metric: dict | None) -> str:
@@ -4510,6 +4547,8 @@ def render_admin_html(
     .metric span {{ display:block; color:var(--muted); font-size:14px; }}
     .metric b {{ display:block; margin-top:8px; font-size:30px; }}
     .metric small {{ display:block; margin-top:6px; font-size:13px; }}
+    .metric small.metric-caption {{ margin-top:4px; margin-bottom:0; }}
+    .metric small.metric-caption + b {{ margin-top:4px; }}
     a.metric-link {{ display:block; text-decoration:none; color:inherit; transition:box-shadow .15s, transform .15s; }}
     a.metric-link:hover {{ box-shadow:0 10px 28px rgba(15,23,42,.12); transform:translateY(-1px); }}
     a.metric-link .metric-who {{ color:#2563eb; margin-top:4px; }}
@@ -4573,6 +4612,8 @@ def render_admin_html(
     .capacity-bar span {{ display:block; background:#22c55e; }}
     .status-bar span {{ display:block; }}
     .status-bar.empty {{ background:#eef2f7; }}
+    .status-scale-caption {{ margin-top:10px; color:#334155; font-size:14px; }}
+    .status-scale-caption b {{ font-weight:700; }}
     .active-bookings {{ margin-top:10px; color:#334155; }}
     .counters, .mini-metrics {{ display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; align-items:center; }}
     .counter, .mini-metrics span {{ background:#f8fafc; border:1px solid var(--line); border-radius:999px; padding:7px 10px; color:#334155; }}

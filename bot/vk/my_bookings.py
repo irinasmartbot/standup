@@ -15,7 +15,7 @@ from bot.db.crud import (
 )
 from bot.handlers.start import MY_BOOKINGS_INTRO
 from bot.services.sheets import load_events
-from bot.utils.ticket import format_date, format_ticket_place, generate_ticket, now_msk, parse_event_datetime
+from bot.utils.ticket import event_already_passed, format_date, format_ticket_place, generate_ticket
 from bot.vk.keyboards import VKKeyboardBuilder
 
 STEP_NEW_GUESTS = "waiting_new_guests"
@@ -206,8 +206,7 @@ def actionable_booking(booking_id: int, vk_id: int) -> tuple[Any | None, str | N
     booking = get_active_booking_by_id(booking_id)
     if not booking:
         return None, "Эта бронь уже отменена или не найдена."
-    event_dt = parse_event_datetime(booking[5], booking[6])
-    if event_dt and event_dt < now_msk().replace(tzinfo=None):
+    if event_already_passed(booking[5], booking[6]):
         return None, "past"
     return booking, None
 
