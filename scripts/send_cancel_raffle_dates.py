@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Разовая отправка: отмена шоу + меню дат BEST для розыгрыша (без сегодня).
 
-Перед отправкой сбрасывает флаг/активные брони розыгрыша у получателя,
-чтобы можно было сразу выбрать новую дату без алертов.
+Перед отправкой сбрасывает флаг/активные брони розыгрыша у получателя.
 
 Примеры на сервере из /home/standup/app:
 
@@ -28,12 +27,10 @@ try:
 except ImportError:
     pass
 
-CANCEL_TEXT = (
-    "Добрый день! По техническим обстоятельствам завтрашнее мероприятие "
-    "Escobar 20:00 отменяется, Вы можете выбрать любую другую дату."
+from bot.admin.raffle_cancel_notify import (  # noqa: E402
+    DEFAULT_CANCEL_TEXT,
+    send_cancel_and_raffle_dates,
 )
-
-DATES_CAPTION = "Выбирай дату мероприятия в рамках розыгрыша 👇"
 
 
 def _lookup_telegram_ids(usernames: list[str]) -> list[dict]:
@@ -88,47 +85,7 @@ def _lookup_telegram_ids(usernames: list[str]) -> list[dict]:
     return rows
 
 
-def _prepare_raffle_rebook(telegram_id: int) -> dict:
-    """Снять активные брони розыгрыша и флаг used — чтобы выбрать новую дату."""
-    from bot.db.crud import reset_raffle_for_user
-
-    return reset_raffle_for_user(int(telegram_id))
-
-
-async def _send_one(bot, telegram_id: int) -> None:
-    from bot.handlers.rozygrysh import _dates_kb
-
-    prep = _prepare_raffle_rebook(telegram_id)
-    print(
-        f"    raffle reset: used_cleared={prep.get('rozygrysh_used_cleared')} "
-        f"bookings_cancelled={prep.get('bookings_cancelled')}"
-    )
-
-    await bot.send_message(chat_id=int(telegram_id), text=CANCEL_TEXT)
-    markup, dates = await _dates_kb()
-    if not dates:
-        await bot.send_message(
-            chat_id=int(telegram_id),
-            text="Пока нет доступных дат для выбора 😔",
-        )
-        return
-    # Не пишем raffle_nav — cleanup после шоу иначе сотрёт меню.
-    await bot.send_message(
-        chat_id=int(telegram_id),
-        text=DATES_CAPTION,
-        reply_markup=markup,
-    )
-
-
-async def _run(usernames: list[str], *, dry_run: bool) -> int:
-    import os
-
-    from aiogram import Bot
-
-    token = (os.getenv("BOT_TOKEN") or "").strip()
-    if not token:
-        raise SystemExit("BOT_TOKEN не задан")
-
+async def _run(usernames: list[str], *, body: str) -> int:
     looked = _lookup_telegram_ids(usernames)
     print("Получатели:")
     for row in looked:
@@ -142,19 +99,24 @@ async def _run(usernames: list[str], *, dry_run: bool) -> int:
         print("ОШИБКА: не у всех есть telegram_id — отправка отменена.")
         return 2
 
-    if dry_run:
-        print("dry-run: ничего не отправляли")
-        return 0
-
-    bot = Bot(token=token)
-    try:
-        for row in looked:
-            tid = int(row["telegram_id"])
-            print(f"Отправляю @{row['username']} ({tid})…")
-            await _send_one(bot, tid)
+    for row in looked:
+        tid = int(row["telegram_id"])
+        print(f"Отправляю @{row['username']} ({tid})…")
+        result = await send_cancel_and_raffle_dates(
+            telegram_id=tid,
+            body_text=body,
+            reset_raffle=True,
+        )
+        prep = result.get("reset") or {}
+        print(
+            f"    raffle reset: used_cleared={prep.get('rozygrysh_used_cleared')} "
+            f"bookings_cancelled={prep.get('bookings_cancelled')}"
+        )
+        if result.get("ok"):
             print(f"  ok @{row['username']}")
-    finally:
-        await bot.session.close()
+        else:
+            print(f"  FAIL @{row['username']}: {result.get('error')}")
+            return 1
     return 0
 
 
@@ -164,15 +126,19 @@ def main() -> int:
     g.add_argument("--test", nargs="+", metavar="USERNAME", help="Тест одному/нескольким")
     g.add_argument("--send", nargs="+", metavar="USERNAME", help="Боевая отправка")
     g.add_argument("--lookup", nargs="+", metavar="USERNAME", help="Только найти в БД")
+    p.add_argument(
+        "--text",
+        default=DEFAULT_CANCEL_TEXT,
+        help="Текст уведомления об отмене",
+    )
     args = p.parse_args()
 
     if args.lookup:
         for row in _lookup_telegram_ids(args.lookup):
             print(row)
         return 0
-    if args.test:
-        return asyncio.run(_run(args.test, dry_run=False))
-    return asyncio.run(_run(args.send, dry_run=False))
+    names = args.test or args.send
+    return asyncio.run(_run(names, body=args.text))
 
 
 if __name__ == "__main__":
