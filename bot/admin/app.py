@@ -1301,6 +1301,7 @@ _AUDIT_ACTION_META = {
     "resend_ticket": ("Переотправил билет", "ticket"),
     "resend_tickets_event": ("Массово переотправил билеты", "ticket"),
     "send_ticket": ("Отправил билет", "ticket"),
+    "raffle_cancel_notify": ("Отмена шоу + даты розыгрыша", "ticket"),
     "user_anonymize": ("Обезличил данные гостя", "user"),
 }
 _AUDIT_AFISHA_LABELS = {
@@ -1689,6 +1690,20 @@ def _audit_friendly_detail_lines(action: str, details: dict) -> list[str]:
         if details.get("confirmed"):
             line += " Бронь уже подтверждена, напоминания сняты."
         return [line]
+    if action == "raffle_cancel_notify":
+        ok = int(_audit_num(details, "ok") or 0)
+        fail = int(_audit_num(details, "fail") or 0)
+        lines = [f"Отмена шоу + даты розыгрыша: успешно {ok}, ошибок {fail}."]
+        for guest in (details.get("items") or [])[:12]:
+            if not isinstance(guest, dict):
+                continue
+            who = (guest.get("username") or guest.get("name") or "").strip()
+            mark = "ok" if guest.get("ok") else (guest.get("error") or "ошибка")
+            if who:
+                lines.append(f"@{who}" if not who.startswith("@") and guest.get("username") else who + f" · {mark}")
+            else:
+                lines.append(f"user_id {guest.get('user_id')} · {mark}")
+        return lines
     if action == "resend_tickets_event":
         ok = int(_audit_num(details, "ok") or 0)
         fail = int(_audit_num(details, "fail") or 0)
@@ -6174,6 +6189,61 @@ async def mailing_test_page(request: web.Request) -> web.Response:
     )
 
 
+async def mailing_raffle_cancel_notify_page(request: web.Request) -> web.Response:
+    """POST JSON: {body, user_ids[], reset_raffle} — отмена шоу + даты розыгрыша TG."""
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        return web.json_response({"error": "forbidden"}, status=403)
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "нужен JSON"}, status=400)
+    if not isinstance(payload, dict):
+        return web.json_response({"error": "некорректное тело"}, status=400)
+
+    body = (payload.get("body") or "").strip()
+    if not body:
+        return web.json_response({"error": "пустой текст"}, status=400)
+    raw_ids = payload.get("user_ids") or []
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return web.json_response({"error": "не указаны получатели"}, status=400)
+    user_ids = []
+    for x in raw_ids:
+        try:
+            user_ids.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    if not user_ids:
+        return web.json_response({"error": "некорректные user_ids"}, status=400)
+    if len(user_ids) > 50:
+        return web.json_response({"error": "за раз не больше 50 человек"}, status=400)
+
+    reset_raffle = bool(payload.get("reset_raffle", True))
+    from bot.admin.raffle_cancel_notify import send_cancel_and_raffle_dates_bulk
+    from bot.db.admin_audit import log_admin_action
+
+    result = await send_cancel_and_raffle_dates_bulk(
+        user_ids=user_ids,
+        body_text=body,
+        reset_raffle=reset_raffle,
+    )
+    log_admin_action(
+        actor_role=_admin_role(request, config) or "owner",
+        action="raffle_cancel_notify",
+        entity_type="mailing",
+        entity_id="",
+        details={
+            "ok": result.get("ok"),
+            "fail": result.get("fail"),
+            "total": result.get("total"),
+            "reset_raffle": reset_raffle,
+            "body_preview": body[:200],
+            "items": (result.get("items") or [])[:40],
+        },
+    )
+    return web.json_response(result)
+
+
 async def mailing_create_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config) or not _can_resend_tickets(request, config):
@@ -6369,6 +6439,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_post("/admin/mailing/followup-until", mailing_followup_until_page)
     app.router.add_get("/admin/mailing/users-search", mailing_users_search_page)
     app.router.add_post("/admin/mailing/test", mailing_test_page)
+    app.router.add_post("/admin/mailing/raffle-cancel-notify", mailing_raffle_cancel_notify_page)
     app.router.add_post("/admin/login", login_page)
     app.router.add_get("/admin/logout", logout_page)
     # Публичные VK-ленды (без admin auth); nginx не закрывает /vk/*

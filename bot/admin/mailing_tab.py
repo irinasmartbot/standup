@@ -318,6 +318,190 @@ def render_mailing_tab(
   </div>
   <div id="mail-test-status" class="mailing-preview" style="margin-top:12px"></div>
 </section>
+"""
+
+    from bot.admin.raffle_cancel_notify import DEFAULT_CANCEL_TEXT
+
+    raffle_cancel = f"""
+<section class="card mailing-raffle-cancel">
+  <h2>Отмена шоу + даты розыгрыша (Telegram)</h2>
+  <p class="muted">
+    Сбрасывает блок розыгрыша у гостя, шлёт ваш текст и меню дат <b>BEST</b>
+    (без сегодняшней даты) — как в боте розыгрыша. Только Telegram.
+  </p>
+  <label>Текст сообщения
+    <textarea id="rz-cancel-body" rows="4">{_h(DEFAULT_CANCEL_TEXT)}</textarea>
+  </label>
+  <label style="margin-top:12px">Найти и добавить получателей (имя, @username, телефон)
+    <input type="search" id="rz-cancel-q" placeholder="Например: @username" autocomplete="off">
+  </label>
+  <div class="mailing-actions" style="margin-top:8px">
+    <button type="button" id="rz-cancel-search-btn">Найти</button>
+  </div>
+  <div id="rz-cancel-search-results" class="mail-test-results muted" style="margin-top:8px">Найдите гостей и нажмите «Добавить».</div>
+  <div id="rz-cancel-selected" class="rz-cancel-selected" style="margin-top:12px"></div>
+  <label class="rz-cancel-reset" style="display:flex;gap:8px;align-items:center;margin-top:12px">
+    <input type="checkbox" id="rz-cancel-reset" checked>
+    Сбросить флаг/активные брони розыгрыша перед отправкой
+  </label>
+  <div class="mailing-actions" style="margin-top:12px">
+    <button type="button" id="rz-cancel-send-btn">Отправить выбранным</button>
+    <button type="button" id="rz-cancel-clear-btn" class="mail-secondary-btn">Очистить список</button>
+  </div>
+  <div id="rz-cancel-status" class="mailing-preview" style="margin-top:12px"></div>
+</section>
+<script>
+(function(){{
+  var qEl = document.getElementById('rz-cancel-q');
+  var searchBtn = document.getElementById('rz-cancel-search-btn');
+  var searchBox = document.getElementById('rz-cancel-search-results');
+  var selectedBox = document.getElementById('rz-cancel-selected');
+  var sendBtn = document.getElementById('rz-cancel-send-btn');
+  var clearBtn = document.getElementById('rz-cancel-clear-btn');
+  var statusEl = document.getElementById('rz-cancel-status');
+  var bodyEl = document.getElementById('rz-cancel-body');
+  var resetEl = document.getElementById('rz-cancel-reset');
+  if (!searchBtn || !sendBtn) return;
+  var selected = [];
+
+  function esc(s){{
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }}
+
+  function renderSelected(){{
+    if (!selected.length) {{
+      selectedBox.innerHTML = '<span class="muted">Список получателей пуст</span>';
+      return;
+    }}
+    var html = '<div class="rz-cancel-chips">';
+    for (var i = 0; i < selected.length; i++){{
+      var u = selected[i];
+      var uname = u.username ? ('@' + u.username) : '';
+      html += '<span class="rz-cancel-chip" data-id="' + u.id + '">' +
+        '<b>' + esc(u.name || 'Без имени') + '</b>' +
+        (uname ? (' · ' + esc(uname)) : '') +
+        ' · id ' + u.id +
+        ' <button type="button" class="rz-cancel-chip-x" data-id="' + u.id + '" title="Убрать">×</button>' +
+        '</span>';
+    }}
+    html += '</div>';
+    selectedBox.innerHTML = html;
+    selectedBox.querySelectorAll('.rz-cancel-chip-x').forEach(function(btn){{
+      btn.addEventListener('click', function(){{
+        var id = parseInt(btn.getAttribute('data-id'), 10);
+        selected = selected.filter(function(x){{ return x.id !== id; }});
+        renderSelected();
+      }});
+    }});
+  }}
+
+  function addUser(u){{
+    if (!u || !u.id) return;
+    if (!u.telegram_id) {{
+      statusEl.innerHTML = '<span class="events-error">У этого гостя нет Telegram id</span>';
+      return;
+    }}
+    if (selected.some(function(x){{ return x.id === u.id; }})) return;
+    selected.push({{
+      id: u.id,
+      name: u.name || '',
+      username: u.username || '',
+      telegram_id: u.telegram_id
+    }});
+    renderSelected();
+  }}
+
+  function renderSearch(rows){{
+    if (!rows || !rows.length) {{
+      searchBox.innerHTML = '<span class="muted">Никого не найдено</span>';
+      return;
+    }}
+    var html = '<div class="mail-test-list">';
+    for (var i = 0; i < rows.length; i++){{
+      var u = rows[i];
+      var uname = u.username ? ('@' + u.username) : '';
+      var disabled = !u.telegram_id;
+      html += '<div class="mail-test-item" style="justify-content:space-between">' +
+        '<span><b>' + esc(u.name || 'Без имени') + '</b> · id ' + u.id +
+        (uname ? (' · ' + esc(uname)) : '') +
+        (u.telegram_id ? ' · TG' : ' · <span class="events-error">нет TG</span>') +
+        '</span>' +
+        '<button type="button" class="rz-cancel-add" data-idx="' + i + '"' +
+        (disabled ? ' disabled' : '') + '>Добавить</button></div>';
+    }}
+    html += '</div>';
+    searchBox.innerHTML = html;
+    searchBox.querySelectorAll('.rz-cancel-add').forEach(function(btn){{
+      btn.addEventListener('click', function(){{
+        var idx = parseInt(btn.getAttribute('data-idx'), 10);
+        addUser(rows[idx]);
+      }});
+    }});
+  }}
+
+  searchBtn.addEventListener('click', function(){{
+    var q = (qEl.value || '').trim();
+    if (!q) {{ searchBox.innerHTML = '<span class="events-error">Введите запрос</span>'; return; }}
+    searchBox.innerHTML = '<span class="muted">Ищем…</span>';
+    fetch('/admin/mailing/users-search?q=' + encodeURIComponent(q) + '&channel=telegram', {{credentials:'same-origin'}})
+      .then(function(r){{ return r.json(); }})
+      .then(function(d){{
+        if (d.error) {{ searchBox.innerHTML = '<span class="events-error">' + esc(d.error) + '</span>'; return; }}
+        renderSearch(d.users || []);
+      }})
+      .catch(function(){{ searchBox.innerHTML = '<span class="events-error">Ошибка поиска</span>'; }});
+  }});
+  qEl.addEventListener('keydown', function(ev){{
+    if (ev.key === 'Enter') {{ ev.preventDefault(); searchBtn.click(); }}
+  }});
+  clearBtn.addEventListener('click', function(){{ selected = []; renderSelected(); }});
+  renderSelected();
+
+  sendBtn.addEventListener('click', function(){{
+    var body = (bodyEl.value || '').trim();
+    if (!body) {{ statusEl.innerHTML = '<span class="events-error">Введите текст сообщения</span>'; return; }}
+    if (!selected.length) {{ statusEl.innerHTML = '<span class="events-error">Добавьте хотя бы одного получателя</span>'; return; }}
+    if (!confirm('Отправить уведомление и даты розыгрыша ' + selected.length + ' чел.?')) return;
+    statusEl.innerHTML = '<span class="muted">Отправляем…</span>';
+    sendBtn.disabled = true;
+    fetch('/admin/mailing/raffle-cancel-notify', {{
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{
+        body: body,
+        reset_raffle: !!(resetEl && resetEl.checked),
+        user_ids: selected.map(function(u){{ return u.id; }})
+      }})
+    }})
+      .then(function(r){{ return r.json().then(function(d){{ return {{ok:r.ok, d:d}}; }}); }})
+      .then(function(res){{
+        sendBtn.disabled = false;
+        var d = res.d || {{}};
+        if (!res.ok || d.error) {{
+          statusEl.innerHTML = '<span class="events-error">' + esc(d.error || 'Не удалось отправить') + '</span>';
+          return;
+        }}
+        var lines = ['<b>Готово:</b> успешно ' + (d.ok||0) + ', ошибок ' + (d.fail||0)];
+        (d.items || []).forEach(function(it){{
+          var who = (it.username ? ('@' + it.username) : '') || it.name || ('id ' + it.user_id);
+          if (it.ok) lines.push('✓ ' + esc(who));
+          else lines.push('✗ ' + esc(who) + ': ' + esc(it.error || 'ошибка'));
+        }});
+        statusEl.innerHTML = lines.join('<br>');
+      }})
+      .catch(function(){{
+        sendBtn.disabled = false;
+        statusEl.innerHTML = '<span class="events-error">Ошибка сети</span>';
+      }});
+  }});
+}})();
+</script>
+"""
+
+    form = (
+        form
+        + """
 <script>
 (function(){
   var form = document.getElementById('mailing-form');
@@ -577,6 +761,7 @@ def render_mailing_tab(
 })();
 </script>
 """
+    )
 
     styles = """
 <style>
@@ -616,7 +801,22 @@ def render_mailing_tab(
     margin:8px 0 14px; padding:12px 14px; background:#f8fafc; border:1px solid var(--line);
     border-radius:12px; white-space:pre-wrap; word-break:break-word; font-size:14px;
   }
+  .mailing-raffle-cancel label { display:block; margin:10px 0; font-size:14px; }
+  .mailing-raffle-cancel textarea,
+  .mailing-raffle-cancel input[type=search] {
+    display:block; width:100%; margin-top:4px; padding:8px 10px;
+    border:1px solid var(--line); border-radius:10px; font:inherit; box-sizing:border-box;
+  }
+  .rz-cancel-chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .rz-cancel-chip {
+    display:inline-flex; align-items:center; gap:6px; padding:6px 10px;
+    background:#ecfdf5; border:1px solid #a7f3d0; border-radius:999px; font-size:13px;
+  }
+  .rz-cancel-chip-x {
+    border:0; background:transparent; cursor:pointer; font-size:16px; line-height:1; padding:0 2px;
+  }
+  .rz-cancel-add { padding:6px 10px; border-radius:8px; border:1px solid #111827; background:#fff; cursor:pointer; }
   @media (max-width:900px){ .mailing-grid { grid-template-columns:1fr; } }
 </style>
 """
-    return styles + flash_html + error_html + detail_html + form + history
+    return styles + flash_html + error_html + detail_html + form + raffle_cancel + history
