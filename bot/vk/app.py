@@ -2247,19 +2247,28 @@ class VKBotApp:
             )
         is_gift_deeplink = _is_offline_gift_ref(ref) and is_start_entry and not cmd
         if cmd == "offline_gift" or is_gift_deeplink:
-            self._track(
-                vk_id,
-                EVENT_BOT_START,
-                props={"payload": ref or "offline_gift", "via": "deeplink"},
-            )
-            event_id = _offline_gift_event_id_from_ref(ref)
-            if event_id:
-                self._cancel_offline_gift_timers(vk_id)
-                self._offline_gift_await_choice.discard(int(vk_id))
-                await self._join_offline_gift_event(peer_id, vk_id, event_id)
+            # VK липко таскает ref: «начать» после окна 19–21 не должно снова
+            # писать в список участников. Явное слово «подарок» (cmd) — как было.
+            if is_gift_deeplink and not in_evening_offline_gift_window():
+                logger.info(
+                    "Ignore sticky offline_gift ref outside 19–21 MSK vk_id=%s ref=%r",
+                    vk_id,
+                    ref,
+                )
             else:
-                await self._send_offline_gift_events(peer_id, vk_id=vk_id)
-            return
+                self._track(
+                    vk_id,
+                    EVENT_BOT_START,
+                    props={"payload": ref or "offline_gift", "via": "deeplink"},
+                )
+                event_id = _offline_gift_event_id_from_ref(ref)
+                if event_id:
+                    self._cancel_offline_gift_timers(vk_id)
+                    self._offline_gift_await_choice.discard(int(vk_id))
+                    await self._join_offline_gift_event(peer_id, vk_id, event_id)
+                else:
+                    await self._send_offline_gift_events(peer_id, vk_id=vk_id)
+                return
 
         is_raffle_deeplink = _is_raffle_ref(ref) and is_start_entry and not cmd
         if cmd == "raffle" or is_raffle_deeplink:
