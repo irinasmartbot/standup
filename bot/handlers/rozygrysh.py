@@ -1339,9 +1339,17 @@ async def rz_channel_join(event: ChatMemberUpdated):
 async def rz_date(call: CallbackQuery, state: FSMContext):
     if not await _guard_action(call):
         return
-    if get_active_raffle_booking(call.from_user.id):
-        await call.answer("У тебя уже есть активная бронь", show_alert=True)
-        return
+    active = get_active_raffle_booking(call.from_user.id)
+    if active:
+        if _raffle_event_passed(active):
+            await call.answer("У тебя уже есть активная бронь", show_alert=True)
+            return
+        # Будущая бронь — можно сменить дату без алерта (в т.ч. после отмены шоу).
+        try:
+            update_booking_status(int(active[0]), "cancelled")
+            set_rozygrysh_used(call.from_user.id, False)
+        except Exception:
+            logger.exception("auto-cancel previous raffle booking for %s", call.from_user.id)
 
     date = call.data.replace("rz_date_", "", 1)
     events = [e for e in await _future_best_events() if e["date"] == date]
@@ -1504,7 +1512,17 @@ async def _ask_raffle_name(call: CallbackQuery, state: FSMContext) -> None:
 async def rz_book(call: CallbackQuery, state: FSMContext):
     if not await _guard_action(call):
         return
-    if get_active_raffle_booking(call.from_user.id) or get_rozygrysh_used(call.from_user.id):
+    active = get_active_raffle_booking(call.from_user.id)
+    if active:
+        if _raffle_event_passed(active):
+            await call.answer("Возможность уже использована или бронь активна", show_alert=True)
+            return
+        try:
+            update_booking_status(int(active[0]), "cancelled")
+            set_rozygrysh_used(call.from_user.id, False)
+        except Exception:
+            logger.exception("auto-cancel previous raffle booking before book for %s", call.from_user.id)
+    elif get_rozygrysh_used(call.from_user.id):
         await call.answer("Возможность уже использована или бронь активна", show_alert=True)
         return
 
