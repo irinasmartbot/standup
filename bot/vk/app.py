@@ -4010,6 +4010,26 @@ class VKBotApp:
             self.peer_best_poster_message_ids[peer] = int(mid)
         return mid
 
+    async def _clear_best_card_surface(self, peer_id: int) -> None:
+        """Убрать старую BEST-карточку до отправки пары постер → текст."""
+        peer = int(peer_id)
+        ids: list[int] = []
+        old_card = self.peer_carousel_message_ids.pop(peer, None)
+        old_poster = self.peer_best_poster_message_ids.pop(peer, None)
+        for mid in (old_card, old_poster):
+            if mid:
+                ids.append(int(mid))
+        if ids:
+            try:
+                await self.client.delete_messages(peer, ids)
+            except Exception:
+                logger.exception("Failed to delete old BEST messages peer_id=%s ids=%s", peer_id, ids)
+        await self._delete_nav(peer_id)
+        cmid = self._callback_cmid(peer_id)
+        if cmid:
+            await self.client.delete_by_cmids(peer, [int(cmid)])
+            self._clear_dates_card(peer_id)
+
     async def _send_best_venue_carousel(
         self,
         peer_id: int,
@@ -4058,11 +4078,7 @@ class VKBotApp:
             payment_url=payment_url,
             manager_link=self.settings.manager_link,
         )
-        attachment = await self._event_poster_attachment(
-            peer_id,
-            event,
-            force_refresh=True,
-        )
+        attachment = await self._event_poster_attachment(peer_id, event)
         if not attachment and not (event.get("image") or "").strip():
             logger.warning(
                 "BEST event has empty image_url event_id=%s date=%s location=%s",
@@ -4077,30 +4093,20 @@ class VKBotApp:
                 (event.get("image") or "")[:120],
             )
         peer = int(peer_id)
-        # VK messages.edit с новым attachment почти никогда не подставляет постер
-        # (остаётся старое фото или текст без фото). Как у дат: удалить и send.
-        existing_id = self.peer_carousel_message_ids.pop(peer, None)
-        if existing_id:
-            try:
-                await self.client.delete_messages(peer_id, [int(existing_id)])
-            except Exception:
-                logger.exception(
-                    "Failed to delete old BEST carousel card peer_id=%s id=%s",
-                    peer_id,
-                    existing_id,
-                )
+        await self._clear_best_card_surface(peer_id)
         poster_mid = await self._send_best_poster_message(peer_id, attachment)
         mid = await self._send_text(
             peer_id,
             text,
             keyboard=keyboard,
             attachment=None,
-            replace_nav=True,
+            replace_nav=False,
         )
         if poster_mid:
             self._remember_nav(peer_id, poster_mid)
         if mid:
             self.peer_carousel_message_ids[peer] = int(mid)
+            self._remember_nav(peer_id, mid)
         elif attachment:
             # send_text при replace_nav+edit может вернуть None — запомним cmid нельзя.
             logger.warning(
@@ -4152,20 +4158,20 @@ class VKBotApp:
             kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
         kb.button("Назад к датам", _payload("best_date_page"))
         kb.adjust(1)
-        attachment = await self._event_poster_attachment(
-            peer_id,
-            event,
-            force_refresh=True,
-        )
+        attachment = await self._event_poster_attachment(peer_id, event)
+        await self._clear_best_card_surface(peer_id)
         poster_mid = await self._send_best_poster_message(peer_id, attachment)
-        await self._send_text(
+        mid = await self._send_text(
             peer_id,
             _best_event_text_vk(event),
             keyboard=kb.as_json(),
             attachment=None,
+            replace_nav=False,
         )
         if poster_mid:
             self._remember_nav(peer_id, poster_mid)
+        if mid:
+            self._remember_nav(peer_id, mid)
 
     async def _send_hitloto_dates(
         self,
