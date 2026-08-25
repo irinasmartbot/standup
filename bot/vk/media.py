@@ -304,10 +304,13 @@ async def resolve_image_attachment(
         from bot.utils.event_poster import download_poster_bytes
 
         image_bytes = await download_poster_bytes(url)
+        filename = _filename_from_url(url)
+        if not filename.lower().endswith((".jpg", ".jpeg")):
+            filename = (filename.rsplit(".", 1)[0] if "." in filename else filename) + ".jpg"
         attachment = await client.upload_message_photo(
             peer_id,
             image_bytes,
-            filename=_filename_from_url(url),
+            filename=filename,
         )
         cache.set(url, attachment)
         return attachment
