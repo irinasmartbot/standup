@@ -1014,7 +1014,11 @@ async def cancel_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
-    # Карточку /my_bookings не удаляем — подтверждение отдельным сообщением
+    # Снимаем кнопки с карточки / напоминания сразу — иначе остаются «Отменить» и т.п.
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
     kb = InlineKeyboardBuilder()
     kb.button(text="Подтверждаю", callback_data=f"cancel_do_{booking_id}")
@@ -1073,6 +1077,10 @@ async def cancel_select_back(call: CallbackQuery):
 @router.callback_query(F.data.startswith("cancel_do_"))
 async def cancel_do(call: CallbackQuery):
     booking_id = int(call.data.replace("cancel_do_", ""))
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await _remove_ticket_button(booking_id, call.from_user.id)
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
@@ -1131,7 +1139,10 @@ async def change_date_confirm(call: CallbackQuery):
     this_booking = await _check_booking_actionable(int(booking_id), call)
     if not this_booking:
         return
-    # Карточку /my_bookings не удаляем — подтверждение отдельным сообщением
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     date_label = f"{format_date(this_booking[5])} {this_booking[6]}"
     kb = InlineKeyboardBuilder()
     kb.button(text="Подтверждаю", callback_data=f"change_date_do_{booking_id}")

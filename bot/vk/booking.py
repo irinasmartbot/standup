@@ -45,6 +45,9 @@ async def clear_inline_keyboard(
     messages.send в разных версиях API отдаёт message_id или cmid.
     Не останавливаемся на первом успехе — иначе снимается только
     диалог «подтвердите отмену», а кнопки на карточке брони остаются.
+
+    Edit идёт через edit_keyboard_only: с тем же текстом сообщения
+    (edit только с keyboard у VK часто не срабатывает).
     """
     kb = empty_inline_keyboard()
     refs: list[tuple[str, int]] = []
@@ -63,12 +66,25 @@ async def clear_inline_keyboard(
     if message_ref:
         mid = int(message_ref)
         _add("message_id", mid)
-        _add("conversation_message_id", mid)
+        # Глобальный message_id ≠ cmid; как cmid пробуем только «маленькие» id
+        # (типичный cmid в диалоге), иначе edit по чужому cmid бессмысленен.
+        if mid < 1_000_000:
+            _add("conversation_message_id", mid)
 
     ok = False
+    edit_kb = getattr(client, "edit_keyboard_only", None)
     for kind, value in refs:
-        kwargs = {"message_id": value} if kind == "message_id" else {"conversation_message_id": value}
+        kwargs = (
+            {"message_id": value}
+            if kind == "message_id"
+            else {"conversation_message_id": value}
+        )
         try:
+            if callable(edit_kb):
+                if await edit_kb(peer_id, kb, **kwargs):
+                    ok = True
+                    continue
+            # Fallback: старый путь (если клиент без edit_keyboard_only).
             if await client.edit_message(peer_id, None, keyboard=kb, **kwargs):
                 ok = True
         except Exception:
