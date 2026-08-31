@@ -233,14 +233,14 @@ WELCOME_TEXT = (
 )
 # Вечернее окно шоу (МСК): «Начать» → подсказка; воронка розыгрыша → офлайн-подарок.
 _EVENING_GIFT_HINT_HOUR_START = 19
-_EVENING_GIFT_HINT_HOUR_END = 21  # exclusive
+_EVENING_GIFT_HINT_HOUR_END = 22  # exclusive
 EVENING_GIFT_HINT_TEXT = (
     "Если вы хотели участвовать в розыгрыше, напишите слово <b>подарок</b>"
 )
 
 
 def in_evening_offline_gift_window(when: datetime | None = None) -> bool:
-    """True с 19:00 до 21:00 по Москве (час шоу / офлайн-розыгрыша)."""
+    """True с 19:00 до 22:00 по Москве (час шоу / офлайн-розыгрыша)."""
     dt = when or now_msk()
     return _EVENING_GIFT_HINT_HOUR_START <= int(dt.hour) < _EVENING_GIFT_HINT_HOUR_END
 FORMATS_TEXT = TG_FORMATS_TEXT
@@ -2323,7 +2323,7 @@ class VKBotApp:
             is_gift_deeplink = False
         elif is_gift_deeplink and not in_evening_offline_gift_window():
             logger.info(
-                "Ignore offline_gift deeplink outside 19–21 MSK vk_id=%s ref=%r",
+                "Ignore offline_gift deeplink outside 19–22 MSK vk_id=%s ref=%r",
                 vk_id,
                 ref,
             )
@@ -2654,7 +2654,7 @@ class VKBotApp:
             logger.exception("Failed to clear offline gift timer vk_id=%s", vk_id)
 
     def _offline_gift_in_start_window(self, vk_id: int) -> bool:
-        # После 21:00 МСК «Начать» снова обычное меню, даже если воронку
+        # После 22:00 МСК «Начать» снова обычное меню, даже если воронку
         # открывали раньше вечером.
         if not in_evening_offline_gift_window():
             return False
@@ -2743,7 +2743,7 @@ class VKBotApp:
         event_id = timer.get("event_id")
         if not in_evening_offline_gift_window():
             logger.info(
-                "Skip offline gift timer outside 19–21 MSK vk_id=%s kind=%s",
+                "Skip offline gift timer outside 19–22 MSK vk_id=%s kind=%s",
                 vk_id,
                 kind,
             )
