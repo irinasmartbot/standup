@@ -81,7 +81,7 @@ VK_CHANNEL = "vkontakte"
 # (ссылка вида vk.com/club...?ref= НЕ передаёт ref в message_new).
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
 _BOOKING_REF_VALUES = frozenset({"standup_book", "booking", "book", "бронь", "proverka"})
-_OFFLINE_GIFT_REF_VALUES = frozenset({"offline_gift", "gift", "chek_list", "check_list"})
+_OFFLINE_GIFT_REF_VALUES = frozenset({"offline_gift", "gift"})
 _BOOKING_REF_SOURCE_PREFIXES = (
     "standup_book_source_",
     "standup_book_src_",
@@ -182,7 +182,7 @@ def booking_entry_link(settings: VKSettings) -> str:
 
 def _offline_gift_event_id_from_ref(ref: str) -> int | None:
     value = (ref or "").strip().casefold()
-    for prefix in ("offline_gift_", "gift_", "chek_list_", "check_list_"):
+    for prefix in ("offline_gift_", "gift_"):
         if value.startswith(prefix):
             raw = value[len(prefix) :]
             return int(raw) if raw.isdigit() else None
@@ -2210,10 +2210,7 @@ class VKBotApp:
                 "розыгрыш": "raffle",
                 "участвовать в розыгрыше": "raffle",
                 "подарок": "offline_gift",
-                "чек лист": "offline_gift",
-                "чек-лист": "offline_gift",
-                "chek_list": "offline_gift",
-                "check_list": "offline_gift",
+                # chek_list / check_list — только TG-чек-лист админа, не VK-клиент.
                 # Старые текстовые кнопки Salebot → наши сценарии
                 "отменить бронь": "my_bookings",
                 "изменить дату": "my_bookings",
