@@ -598,8 +598,22 @@ async def issue_ticket(
             (e for e in events if e.get("date") == event_date and e.get("time") == event_time),
             None,
         )
-    # Места проверяем только при первом подтверждении.
-    if not already_confirmed and event:
+
+    is_raffle = False
+    try:
+        from bot.db.crud import get_active_raffle_booking, get_booking_format
+
+        fmt = (get_booking_format(booking_id) or "").strip().lower()
+        raffle_row = get_active_raffle_booking(vk_id=int(peer_id))
+        is_raffle = fmt == "rozygrysh" or bool(
+            raffle_row and int(raffle_row[0]) == int(booking_id)
+        )
+    except Exception:
+        pass
+
+    # Места проверяем только у «Проверки» и только при первом подтверждении.
+    # Розыгрыш / BEST: max_seats не ограничивает выдачу билета.
+    if not already_confirmed and not is_raffle and event:
         confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
         if confirmed_guests + guests > event["max_seats"]:
             available = max(0, event["max_seats"] - confirmed_guests)
@@ -617,18 +631,6 @@ async def issue_ticket(
             return
 
     place = f"{event_location}, {event_address}".strip(", ") if event_location else event_address
-    is_raffle = False
-    try:
-        from bot.db.crud import get_active_raffle_booking, get_booking_format
-
-        fmt = (get_booking_format(booking_id) or "").strip().lower()
-        raffle_row = get_active_raffle_booking(vk_id=int(peer_id))
-        is_raffle = fmt == "rozygrysh" or bool(
-            raffle_row and int(raffle_row[0]) == int(booking_id)
-        )
-    except Exception:
-        pass
-
     place_on_ticket = format_ticket_place(event_location, event_address)
     ticket_buf = generate_ticket(name or "", event_date, event_time, place_on_ticket, guests)
 

@@ -69,7 +69,6 @@ from bot.db.crud import (
     get_raffle_submission,
     get_raffle_submission_by_mod_message,
     get_rozygrysh_used,
-    get_total_guests,
     has_raffle_screen_entitlement,
     reset_raffle_for_user,
     save_confirm_message_id,
@@ -1921,29 +1920,7 @@ async def rz_ticket(call: CallbackQuery):
         event_location = row[8]
         guests = row[9]
 
-        if not already_confirmed:
-            events = await load_events("best")
-            event = next(
-                (
-                    e for e in events
-                    if e["date"] == event_date
-                    and e["time"] == event_time
-                    and e["location"] == event_location
-                ),
-                None,
-            )
-            if event:
-                confirmed_guests = get_total_guests(event_date, event_time, exclude_id=booking_id)
-                if confirmed_guests + guests > event["max_seats"]:
-                    await call.message.answer(
-                        "К сожалению, на это мероприятие уже не осталось мест для подтверждения билета.\n\n"
-                        f"Сейчас свободно: {max(0, event['max_seats'] - confirmed_guests)}. "
-                        f"Напишите менеджеру {_manager_username()}, мы поможем подобрать другой вариант.",
-                        parse_mode="HTML",
-                    )
-                    await call.answer()
-                    return
-
+        # Розыгрыш идёт на BEST: лимит мест (max_seats) только у «Проверки».
         place_on_ticket = format_ticket_place(event_location, event_address)
         ticket_buf = generate_ticket(name, event_date, event_time, place_on_ticket, guests)
 
