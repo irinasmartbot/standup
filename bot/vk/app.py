@@ -2311,8 +2311,8 @@ class VKBotApp:
                 source,
             )
         is_gift_deeplink = _is_offline_gift_ref(ref) and is_start_entry and not cmd
-        # «Начать» текстом + липкий gift-ref больше не открывает розыгрыш.
-        # Настоящий deeplink: пустой текст и payload command=start (синяя кнопка / write-).
+        # Липкий gift-ref сам по себе не решает сценарий: обычное «Начать»
+        # ниже ведём по текущему вечернему окну.
         typed_start = text_key in {"/start", "start", "начать", "старт"}
         if is_gift_deeplink and typed_start:
             logger.info(
@@ -2382,15 +2382,15 @@ class VKBotApp:
             or cmd == "main_menu"
             or payload_command == "start"
         ):
-            # «Начать» всегда меню. Участие в офлайн-подарке — только «подарок» /
-            # кнопки / свежий deeplink, не повторный Start.
-            if (
-                cmd != "main_menu"
-                and (
-                    text.lower() in {"/start", "start", "начать", "старт"}
-                    or payload_command == "start"
-                )
-            ):
+            is_start_text = (
+                text.lower() in {"/start", "start", "начать", "старт"}
+                or payload_command == "start"
+            )
+            # В вечернее окно «Начать» = офлайн-подарок. После 22:00 — обычное меню.
+            if cmd != "main_menu" and is_start_text and in_evening_offline_gift_window():
+                await self._send_offline_gift_events(peer_id, vk_id=vk_id)
+                return
+            if cmd != "main_menu" and is_start_text:
                 self._offline_gift_launch_at.pop(int(vk_id), None)
                 self._offline_gift_await_choice.discard(int(vk_id))
                 self._cancel_offline_gift_timers(vk_id)
