@@ -82,6 +82,22 @@ VK_CHANNEL = "vkontakte"
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
 _BOOKING_REF_VALUES = frozenset({"standup_book", "booking", "book", "бронь", "proverka"})
 _OFFLINE_GIFT_REF_VALUES = frozenset({"offline_gift", "gift", "chek_list", "check_list"})
+_BOOKING_REF_SOURCE_PREFIXES = (
+    "standup_book_source_",
+    "standup_book_src_",
+    "booking_source_",
+    "booking_src_",
+)
+_RAFFLE_REF_SOURCE_PREFIXES = (
+    "standup_rozygr_source_",
+    "standup_rozygr_src_",
+    "raffle_source_",
+    "raffle_src_",
+)
+_OFFLINE_GIFT_REF_SOURCE_PREFIXES = (
+    "offline_gift_source_",
+    "offline_gift_src_",
+)
 
 
 def _is_booking_ref(ref: str) -> bool:
@@ -89,14 +105,22 @@ def _is_booking_ref(ref: str) -> bool:
     if value in _BOOKING_REF_VALUES:
         return True
     # go-лендинг: write-?ref=standup_book_c{ClientID}
-    return value.startswith("standup_book_c") or value.startswith("booking_c")
+    return (
+        value.startswith("standup_book_c")
+        or value.startswith("booking_c")
+        or value.startswith(_BOOKING_REF_SOURCE_PREFIXES)
+    )
 
 
 def _is_raffle_ref(ref: str) -> bool:
     value = (ref or "").strip().casefold()
     if value in _RAFFLE_REF_VALUES:
         return True
-    return value.startswith("standup_rozygr_c") or value.startswith("raffle_c")
+    return (
+        value.startswith("standup_rozygr_c")
+        or value.startswith("raffle_c")
+        or value.startswith(_RAFFLE_REF_SOURCE_PREFIXES)
+    )
 
 
 def _metrika_cid_from_ref(ref: str) -> str:
@@ -105,6 +129,30 @@ def _metrika_cid_from_ref(ref: str) -> str:
         if value.casefold().startswith(prefix):
             return value[len(prefix) :].strip()
     return ""
+
+
+def _source_from_ref(ref: str) -> str:
+    value = (ref or "").strip()
+    value_cf = value.casefold()
+    for prefix in (
+        *_BOOKING_REF_SOURCE_PREFIXES,
+        *_RAFFLE_REF_SOURCE_PREFIXES,
+        *_OFFLINE_GIFT_REF_SOURCE_PREFIXES,
+    ):
+        if value_cf.startswith(prefix):
+            return value[len(prefix) :].strip()
+    return ""
+
+
+def _entry_props(ref: str, *, fallback_payload: str, source: str = "") -> dict[str, Any]:
+    cid = _metrika_cid_from_ref(ref) or None
+    source_value = (source or _source_from_ref(ref) or "").strip() or None
+    return {
+        "payload": ref or fallback_payload,
+        "via": "deeplink",
+        "cid": cid,
+        "source": source_value,
+    }
 
 
 def raffle_entry_link(settings: VKSettings) -> str:
@@ -2241,16 +2289,26 @@ class VKBotApp:
         # Long Poll часто не кладёт ref в event — добираем через messages.getById.
         if is_start_entry and not cmd and not (message.get("ref") or payload.get("ref")):
             message = await self._enrich_message_ref(message)
-        ref = str(message.get("ref") or payload.get("ref") or "").strip().casefold()
+        raw_ref = str(message.get("ref") or payload.get("ref") or "").strip()
+        ref = raw_ref.casefold()
+        ref_source = str(message.get("ref_source") or payload.get("ref_source") or "").strip()
+        source = _source_from_ref(raw_ref)
         if is_start_entry:
             logger.info(
-                "VK start_entry peer_id=%s vk_id=%s ref=%r payload_command=%r cmd=%s msg_id=%s",
+                (
+                    "VK start_entry peer_id=%s vk_id=%s ref=%r ref_source=%r "
+                    "payload_command=%r cmd=%s msg_id=%s payload_keys=%s cid=%r source=%r"
+                ),
                 peer_id,
                 vk_id,
-                ref,
+                raw_ref,
+                ref_source,
                 payload_command,
                 cmd,
                 message.get("id"),
+                sorted(str(k) for k in payload.keys()),
+                _metrika_cid_from_ref(raw_ref) or "",
+                source,
             )
         is_gift_deeplink = _is_offline_gift_ref(ref) and is_start_entry and not cmd
         # «Начать» текстом + липкий gift-ref больше не открывает розыгрыш.
@@ -2274,7 +2332,7 @@ class VKBotApp:
             self._track(
                 vk_id,
                 EVENT_BOT_START,
-                props={"payload": ref or "offline_gift", "via": "deeplink"},
+                props=_entry_props(raw_ref, fallback_payload="offline_gift", source=source),
             )
             event_id = _offline_gift_event_id_from_ref(ref)
             if event_id:
@@ -2290,7 +2348,7 @@ class VKBotApp:
             self._track(
                 vk_id,
                 EVENT_BOT_START,
-                props={"payload": ref or "raffle", "via": "deeplink", "cid": _metrika_cid_from_ref(ref) or None},
+                props=_entry_props(raw_ref, fallback_payload="raffle", source=source),
             )
             await self._send_raffle_start(peer_id, vk_id)
             return
@@ -2302,7 +2360,7 @@ class VKBotApp:
             self._track(
                 vk_id,
                 EVENT_BOT_START,
-                props={"payload": ref or "booking", "via": "deeplink", "cid": _metrika_cid_from_ref(ref) or None},
+                props=_entry_props(raw_ref, fallback_payload="booking", source=source),
             )
             self.peer_context[peer_id] = "check"
             self._track(vk_id, EVENT_BRANCH_PROVERKA)

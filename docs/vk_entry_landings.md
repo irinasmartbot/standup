@@ -46,6 +46,58 @@ https://go.moscowstandupshow.ru/vk-mini/start/offline_gift
 
 Писать «начать» не нужно.
 
+## Тест передачи источника в VK-бот
+
+Текущая ссылка сайта открывает VK Mini App:
+
+```text
+https://vk.ru/app54704296#flow=booking
+```
+
+Для неё проверяем такой тест:
+
+```text
+https://vk.ru/app54704296#flow=booking&source=test_metrika_0829
+```
+
+После перехода mini app должен отправить `/vk-mini/entry`, а в логах должна появиться
+строка:
+
+```text
+VK mini entry request ... flow=booking ... source=test_metrika_0829
+```
+
+Для прямого входа в диалог VK используем только ссылки вида `write-` или `vk.me`.
+Ссылка вида `vk.com/club...?ref=...` не передаёт `ref` в `message_new`.
+
+Базовый вход в бронь:
+
+```text
+https://vk.com/write-225298932?ref=standup_book
+```
+
+Тестовая ссылка с источником:
+
+```text
+https://vk.com/write-225298932?ref=standup_book_source_test_metrika_0829
+```
+
+Если используется короткий адрес сообщества, тест такой же:
+
+```text
+https://vk.me/<screen_name>?ref=standup_book_source_test_metrika_0829
+```
+
+После перехода нажать «Начать» / отправить стартовое сообщение и смотреть в логах
+`standup-vk-bot` строку:
+
+```text
+VK start_entry ... ref='standup_book_source_test_metrika_0829' ... source='test_metrika_0829'
+```
+
+Если строка есть, источник доходит до бота и пишется в `analytics_events.props.source`
+на событии `bot_start`.
+
 ## Env (админка `/home/standup/app/.env`)
 
 ```env

@@ -114,6 +114,7 @@ def _mini_app_vk_url(
     *,
     short: bool = False,
     cid: str = "",
+    source: str = "",
 ) -> str:
     """Ссылка mini app внутри VK.
 
@@ -134,6 +135,9 @@ def _mini_app_vk_url(
     cid_value = (cid or "").strip()
     if cid_value:
         parts.append(f"cid={cid_value}")
+    source_value = (source or "").strip()
+    if source_value:
+        parts.append(f"source={source_value}")
     if parts:
         url = f"{url}#{'&'.join(parts)}"
     return url
@@ -144,6 +148,15 @@ def _request_cid(request: web.Request) -> str:
         request.query.get("cid")
         or request.query.get("client_id")
         or request.query.get("ym_cid")
+        or ""
+    ).strip()
+
+
+def _request_source(request: web.Request) -> str:
+    return str(
+        request.query.get("source")
+        or request.query.get("utm_source")
+        or request.query.get("utm_campaign")
         or ""
     ).strip()
 
@@ -312,7 +325,15 @@ def _gift_event_label(event: dict[str, Any]) -> str:
     return label or "шоу"
 
 
-async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int) -> None:
+async def _send_flow_chain(
+    client: VKClient,
+    settings,
+    flow_key: str,
+    vk_id: int,
+    *,
+    cid: str = "",
+    source: str = "",
+) -> None:
     """Сразу ветка бота — без сообщения «нажмите кнопку ниже»."""
     from bot.db.analytics import EVENT_BOT_START, track_event
     from bot.vk import raffle as vk_raffle
@@ -342,15 +363,21 @@ async def _send_flow_chain(client: VKClient, settings, flow_key: str, vk_id: int
             await _offline_gift_repeat_action(client, vk_id)
         return
 
+    props = {
+        "payload": str(flow.get("ref") or flow_key),
+        "via": "mini_app_flow",
+        "flow": flow_key,
+    }
+    if cid:
+        props["cid"] = cid
+    if source:
+        props["source"] = source
+
     track_event(
         EVENT_BOT_START,
         vk_id=int(vk_id),
         channel="vkontakte",
-        props={
-            "payload": str(flow.get("ref") or flow_key),
-            "via": "mini_app_flow",
-            "flow": flow_key,
-        },
+        props=props,
     )
 
     try:
@@ -716,22 +743,25 @@ def _html_response(text: str) -> web.Response:
 async def landing_booking(request: web.Request) -> web.Response:
     """Одна простая ссылка: всегда уводим в рабочий mini app #flow=booking."""
     cid = _request_cid(request)
+    source = _request_source(request)
     settings = load_vk_settings()
-    target = _mini_app_vk_url(settings, "booking", short=True, cid=cid)
+    target = _mini_app_vk_url(settings, "booking", short=True, cid=cid, source=source)
     return _html_response(_mobile_vk_jump_html("booking", target))
 
 
 async def landing_raffle(request: web.Request) -> web.Response:
     cid = _request_cid(request)
+    source = _request_source(request)
     settings = load_vk_settings()
-    target = _mini_app_vk_url(settings, "raffle", short=True, cid=cid)
+    target = _mini_app_vk_url(settings, "raffle", short=True, cid=cid, source=source)
     return _html_response(_mobile_vk_jump_html("raffle", target))
 
 
 async def landing_offline_gift(request: web.Request) -> web.Response:
     cid = _request_cid(request)
+    source = _request_source(request)
     settings = load_vk_settings()
-    target = _mini_app_vk_url(settings, "offline_gift", short=True, cid=cid)
+    target = _mini_app_vk_url(settings, "offline_gift", short=True, cid=cid, source=source)
     return _html_response(_mobile_vk_jump_html("offline_gift", target))
 
 
@@ -1048,6 +1078,14 @@ def _mini_app_html(default_flow: str = "") -> str:
     ).trim();
   }}
 
+  function parseSourceValue(value) {{
+    if (!value) return "";
+    var params = parseHashParams(value);
+    return String(
+      params.get("source") || params.get("utm_source") || params.get("utm_campaign") || ""
+    ).trim();
+  }}
+
   function flowFromLocation() {{
     var search = new URLSearchParams(window.location.search || "");
     return (
@@ -1067,6 +1105,17 @@ def _mini_app_html(default_flow: str = "") -> str:
       parseCidValue(search.get("hash") || "") ||
       parseCidValue(search.get("vk_hash") || "") ||
       parseCidValue(search.get("start_param") || "")
+    );
+  }}
+
+  function sourceFromLocation() {{
+    var search = new URLSearchParams(window.location.search || "");
+    return (
+      parseSourceValue(window.location.hash || "") ||
+      String(search.get("source") || search.get("utm_source") || search.get("utm_campaign") || "").trim() ||
+      parseSourceValue(search.get("hash") || "") ||
+      parseSourceValue(search.get("vk_hash") || "") ||
+      parseSourceValue(search.get("start_param") || "")
     );
   }}
 
@@ -1090,11 +1139,23 @@ def _mini_app_html(default_flow: str = "") -> str:
     );
   }}
 
+  function sourceFromLaunchParams(data) {{
+    if (!data) return "";
+    return (
+      parseSourceValue(data.hash || "") ||
+      parseSourceValue(data.vk_hash || "") ||
+      parseSourceValue(data.start_param || "") ||
+      String(data.source || data.utm_source || data.utm_campaign || "").trim()
+    );
+  }}
+
   var detectedCid = "";
+  var detectedSource = "";
 
   function resolveFlow(launchData) {{
     // Приоритет: hash/launch params из VK, и только потом server handoff.
     detectedCid = cidFromLaunchParams(launchData) || cidFromLocation() || detectedCid;
+    detectedSource = sourceFromLaunchParams(launchData) || sourceFromLocation() || detectedSource;
     return (
       flowFromLaunchParams(launchData) ||
       flowFromLocation() ||
@@ -1103,27 +1164,10 @@ def _mini_app_html(default_flow: str = "") -> str:
   }}
 
   function showCidDebug(source) {{
-    var search = new URLSearchParams(window.location.search || "");
-    var wantDebug =
-      search.get("debug") === "1" ||
-      (window.location.hash || "").indexOf("debug=1") !== -1;
-    if (!wantDebug) return;
+    // Диагностика источников теперь смотрится только в серверных логах:
+    // пользователь не должен видеть технический hash/cid/source в mini app.
     detectedCid = detectedCid || cidFromLocation();
-    var msg;
-    if (!detectedCid) {{
-      msg =
-        "DEBUG: cid не найден. hash=" + (window.location.hash || "(пусто)") +
-          " · src=" + (source || "");
-      if (leadEl) leadEl.textContent = msg;
-      setStatus(msg, false);
-      return;
-    }}
-    msg =
-      "DEBUG: cid=" + detectedCid +
-        " · hash=" + (window.location.hash || "(пусто)") +
-        " · src=" + (source || "location");
-    if (leadEl) leadEl.textContent = msg;
-    setStatus(msg, true);
+    detectedSource = detectedSource || sourceFromLocation();
   }}
 
   function showOnlyFlow(flow) {{
@@ -1326,6 +1370,7 @@ def _mini_app_html(default_flow: str = "") -> str:
       body: JSON.stringify({{
         flow: currentFlow,
         cid: detectedCid || cidFromLocation() || "",
+        source: detectedSource || sourceFromLocation() || "",
         hash: window.location.hash || "",
         launch_params: launchParamsQuery
       }})
@@ -1451,7 +1496,9 @@ def _mini_app_html(default_flow: str = "") -> str:
     if (type !== "VKWebAppLocationChanged" && type !== "VKWebAppChangeFragment") return;
     var flow = parseFlowValue(data.location || data.hash || data.fragment || "");
     var fragCid = parseCidValue(data.location || data.hash || data.fragment || "");
+    var fragSource = parseSourceValue(data.location || data.hash || data.fragment || "");
     if (fragCid) detectedCid = fragCid;
+    if (fragSource) detectedSource = fragSource;
     if (flow) {{
       showCidDebug("fragment");
       autoStart(flow);
@@ -1503,12 +1550,18 @@ def _mini_app_html(default_flow: str = "") -> str:
   // через GetLaunchParams, иначе все ссылки уезжают в booking.
   var earlyFlow = flowFromLocation();
   detectedCid = cidFromLocation();
+  detectedSource = sourceFromLocation();
   if (earlyFlow) {{
     setFlow(earlyFlow, true);
     showCidDebug("early");
   }} else {{
     showAllFlows();
-    if (detectedCid || (window.location.hash || "").indexOf("cid=") !== -1) {{
+    if (
+      detectedCid ||
+      detectedSource ||
+      (window.location.hash || "").indexOf("cid=") !== -1 ||
+      (window.location.hash || "").indexOf("source=") !== -1
+    ) {{
       showCidDebug("early-no-flow");
     }}
   }}
@@ -1524,6 +1577,7 @@ def _mini_app_html(default_flow: str = "") -> str:
   }}).catch(function () {{
     var flow = flowFromLocation() || currentFlow || parseFlowValue(serverFlow);
     detectedCid = detectedCid || cidFromLocation();
+    detectedSource = detectedSource || sourceFromLocation();
     showCidDebug("launch-fallback");
     if (flow) autoStart(flow);
     else showAllFlows();
@@ -1618,9 +1672,10 @@ async def mini_app_start(request: web.Request) -> web.Response:
     if flow_key not in FLOWS:
         raise web.HTTPNotFound(text="Unknown VK Mini App flow")
     cid = _request_cid(request)
+    source = _request_source(request)
     _remember_mini_flow(request, flow_key)
     settings = load_vk_settings()
-    target = _mini_app_vk_url(settings, flow_key, short=True, cid=cid)
+    target = _mini_app_vk_url(settings, flow_key, short=True, cid=cid, source=source)
     return _html_response(_mobile_vk_jump_html(flow_key, target))
 
 
@@ -1700,7 +1755,14 @@ async def entry_post(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         vk_id = 0
     cid = str((data or {}).get("cid") or "").strip()
-    logger.info("VK entry request vk_id=%s flow=%s cid=%s", vk_id, flow_key, cid or "-")
+    source = str((data or {}).get("source") or "").strip()
+    logger.info(
+        "VK entry request vk_id=%s flow=%s cid=%s source=%s",
+        vk_id,
+        flow_key,
+        cid or "-",
+        source or "-",
+    )
     if vk_id <= 0:
         return web.json_response({"ok": False, "error": "Не удалось определить VK id."}, status=400)
 
@@ -1719,7 +1781,7 @@ async def entry_post(request: web.Request) -> web.Response:
 
     client = VKClient(settings)
     try:
-        await _send_flow_chain(client, settings, flow_key, vk_id)
+        await _send_flow_chain(client, settings, flow_key, vk_id, cid=cid, source=source)
     except VKAPIError as exc:
         _clear_cooldown(vk_id, flow_key)
         err = str(exc).lower()
@@ -1748,8 +1810,14 @@ async def entry_post(request: web.Request) -> web.Response:
             status=502,
         )
 
-    logger.info("VK entry ok vk_id=%s flow=%s cid=%s", vk_id, flow_key, cid or "-")
-    return web.json_response({"ok": True, "cid": cid or None})
+    logger.info(
+        "VK entry ok vk_id=%s flow=%s cid=%s source=%s",
+        vk_id,
+        flow_key,
+        cid or "-",
+        source or "-",
+    )
+    return web.json_response({"ok": True, "cid": cid or None, "source": source or None})
 
 
 async def mini_entry_post(request: web.Request) -> web.Response:
@@ -1777,12 +1845,14 @@ async def mini_entry_post(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         vk_id = 0
     cid = str((data or {}).get("cid") or "").strip()
+    source = str((data or {}).get("source") or "").strip()
     raw_hash = str((data or {}).get("hash") or "").strip()
     logger.info(
-        "VK mini entry request vk_id=%s flow=%s cid=%s hash=%s",
+        "VK mini entry request vk_id=%s flow=%s cid=%s source=%s hash=%s",
         vk_id,
         flow_key,
         cid or "-",
+        source or "-",
         raw_hash or "-",
     )
     if vk_id <= 0:
@@ -1803,7 +1873,7 @@ async def mini_entry_post(request: web.Request) -> web.Response:
 
     client = VKClient(settings)
     try:
-        await _send_flow_chain(client, settings, flow_key, vk_id)
+        await _send_flow_chain(client, settings, flow_key, vk_id, cid=cid, source=source)
     except VKAPIError as exc:
         _clear_cooldown(vk_id, flow_key)
         err = str(exc).lower()
@@ -1828,8 +1898,14 @@ async def mini_entry_post(request: web.Request) -> web.Response:
             status=502,
         )
 
-    logger.info("VK mini entry ok vk_id=%s flow=%s cid=%s", vk_id, flow_key, cid or "-")
-    return web.json_response({"ok": True, "cid": cid or None})
+    logger.info(
+        "VK mini entry ok vk_id=%s flow=%s cid=%s source=%s",
+        vk_id,
+        flow_key,
+        cid or "-",
+        source or "-",
+    )
+    return web.json_response({"ok": True, "cid": cid or None, "source": source or None})
 
 
 def register_routes(app: web.Application) -> None:
