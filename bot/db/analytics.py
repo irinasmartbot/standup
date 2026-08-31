@@ -253,6 +253,68 @@ def track_event(
         logger.exception("analytics track failed: %s", name)
 
 
+def latest_metrika_attribution(
+    *,
+    telegram_id: Optional[int] = None,
+    vk_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+) -> dict[str, Any]:
+    """Return latest bot_start cid/source for a person, if we have one."""
+    if not _use_postgres():
+        return {}
+    identity_clauses: list[str] = []
+    params: dict[str, Any] = {}
+    if user_id is not None:
+        identity_clauses.append("user_id = %(user_id)s")
+        params["user_id"] = int(user_id)
+    if telegram_id is not None:
+        identity_clauses.append("telegram_id = %(telegram_id)s")
+        params["telegram_id"] = int(telegram_id)
+    if vk_id is not None:
+        identity_clauses.append("vk_id = %(vk_id)s")
+        params["vk_id"] = int(vk_id)
+    if not identity_clauses:
+        return {}
+
+    try:
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        NULLIF(TRIM(props->>'cid'), '') AS cid,
+                        NULLIF(TRIM(props->>'source'), '') AS source,
+                        created_at
+                    FROM analytics_events
+                    WHERE name = %(event_name)s
+                      AND ({' OR '.join(identity_clauses)})
+                      AND (
+                          NULLIF(TRIM(props->>'cid'), '') IS NOT NULL
+                          OR NULLIF(TRIM(props->>'source'), '') IS NOT NULL
+                      )
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    {"event_name": EVENT_BOT_START, **params},
+                )
+                row = cur.fetchone()
+        if not row:
+            return {}
+        return {
+            "cid": row.get("cid") or "",
+            "source": row.get("source") or "",
+            "created_at": row.get("created_at"),
+        }
+    except Exception:
+        logger.exception(
+            "latest metrika attribution lookup failed telegram_id=%s vk_id=%s user_id=%s",
+            telegram_id,
+            vk_id,
+            user_id,
+        )
+        return {}
+
+
 def set_user_blocked(telegram_id: int, blocked: bool) -> None:
     """Update users.is_blocked from my_chat_member."""
     if not _use_postgres() or not telegram_id:

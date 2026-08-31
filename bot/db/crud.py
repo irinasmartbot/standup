@@ -301,7 +301,30 @@ def create_booking(
                 booking_id = cur.fetchone()[0]
             conn.commit()
             try:
-                from bot.db.analytics import EVENT_BOOKING_CREATED, track_event
+                from bot.db.analytics import (
+                    EVENT_BOOKING_CREATED,
+                    latest_metrika_attribution,
+                    track_event,
+                )
+                from bot.services.metrika import queue_booking_created_goal
+
+                attribution = latest_metrika_attribution(
+                    telegram_id=telegram_id,
+                    vk_id=vk_id,
+                    user_id=user_id,
+                )
+                event_props = {
+                    "format": booking_format,
+                    "event_format": event_format,
+                    "guests": guests,
+                    "event_date": event_date,
+                    "event_time": event_time,
+                    "location": event_location,
+                }
+                if attribution.get("cid"):
+                    event_props["cid"] = attribution["cid"]
+                if attribution.get("source"):
+                    event_props["source"] = attribution["source"]
 
                 track_event(
                     EVENT_BOOKING_CREATED,
@@ -311,13 +334,17 @@ def create_booking(
                     channel=booking_source if booking_source in {"telegram", "vkontakte"} else "unknown",
                     event_id=found_event_id,
                     booking_id=booking_id,
-                    props={
-                        "format": booking_format,
-                        "event_format": event_format,
-                        "guests": guests,
-                        "event_date": event_date,
-                        "event_time": event_time,
-                        "location": event_location,
+                    props=event_props,
+                )
+                queue_booking_created_goal(
+                    client_id=str(attribution.get("cid") or ""),
+                    created_at=datetime.now(),
+                    context={
+                        "booking_id": booking_id,
+                        "user_id": user_id,
+                        "telegram_id": telegram_id,
+                        "vk_id": vk_id,
+                        "source": attribution.get("source") or "",
                     },
                 )
             except Exception:
