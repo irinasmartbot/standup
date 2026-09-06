@@ -170,6 +170,67 @@ class VKClient:
         return item if isinstance(item, dict) else None
 
     @staticmethod
+    def message_item_has_photo(item: dict[str, Any] | None) -> bool:
+        """True, если в объекте сообщения VK есть вложение photo с id."""
+        if not item:
+            return False
+        for att in item.get("attachments") or []:
+            if not isinstance(att, dict) or att.get("type") != "photo":
+                continue
+            obj = att.get("photo")
+            if isinstance(obj, dict) and obj.get("id") is not None and obj.get("owner_id") is not None:
+                return True
+        return False
+
+    async def require_sent_photo(
+        self,
+        message_id: int,
+        *,
+        peer_id: int | None = None,
+    ) -> None:
+        """Проверяет, что отправленное сообщение реально содержит фото.
+
+        Если сообщение не удаётся прочитать (права API) — только warning.
+        Если прочитали и photo нет — ошибка, чтобы сработал повтор выдачи билета.
+        """
+        if not message_id:
+            raise VKAPIError("VK send returned no message_id")
+        item: dict[str, Any] | None = None
+        for delay in (0.4, 0.8):
+            await asyncio.sleep(delay)
+            item = await self.get_message_by_id(int(message_id))
+            if item is None and peer_id:
+                item = await self.get_message_by_cmid(int(peer_id), int(message_id))
+            if self.message_item_has_photo(item):
+                return
+        if item is None:
+            logger.warning(
+                "Could not re-fetch VK message %s to verify photo peer_id=%s",
+                message_id,
+                peer_id,
+            )
+            return
+        if peer_id:
+            await self.delete_broken_photo_message(int(peer_id), int(message_id))
+        raise VKAPIError(f"VK message {message_id} has no photo attachment")
+
+    async def delete_broken_photo_message(self, peer_id: int, message_id: int) -> None:
+        """Убрать текст билета без фото, чтобы повтор не оставил дырявое сообщение."""
+        try:
+            await self.delete_messages(int(peer_id), [int(message_id)], delete_for_all=True)
+            logger.info(
+                "Deleted VK ticket message without photo peer_id=%s message_id=%s",
+                peer_id,
+                message_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to delete VK ticket message without photo peer_id=%s message_id=%s",
+                peer_id,
+                message_id,
+            )
+
+    @staticmethod
     def _attachment_string_from_message(item: dict[str, Any]) -> str | None:
         """Собрать attachment=photo-123_456_key из объекта сообщения VK."""
         parts: list[str] = []

@@ -267,6 +267,7 @@ async def _resend_ticket_vk(row: dict, *, updated: bool, extra_note: str = "") -
         filename=f"ticket_{booking_id}.jpg",
     )
     msg_id = await client.send_message(peer_id, caption, attachment=attachment)
+    await client.require_sent_photo(msg_id, peer_id=peer_id)
     save_ticket_message_id(booking_id, msg_id)
     return {"ok": True, "error": "", "booking_id": booking_id}
 
@@ -525,6 +526,7 @@ async def _issue_ticket_vk(row: dict, *, already_confirmed: bool) -> dict:
     msg_id = await client.send_message(
         peer_id, caption, attachment=attachment, keyboard=keyboard
     )
+    await client.require_sent_photo(msg_id, peer_id=peer_id)
     save_ticket_message_id(booking_id, msg_id)
     return {"ok": True, "error": "", "booking_id": booking_id}
 

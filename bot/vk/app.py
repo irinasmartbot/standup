@@ -1428,12 +1428,14 @@ class VKBotApp:
             vk_mb.ticket_bytes(row),
             filename=f"ticket_{row[0]}.jpg",
         )
-        await self._send_text(
+        # Не через _send_text: при ошибке вложения он шлёт текст без фото.
+        msg_id = await self.client.send_message(
             peer_id,
             vk_mb.ticket_caption(row),
             keyboard=vk_mb.ticket_view_keyboard(page),
             attachment=attachment,
         )
+        await self.client.require_sent_photo(msg_id, peer_id=peer_id)
 
     async def _mb_actionable(self, peer_id: int, vk_id: int, booking_id: int):
         booking, err = vk_mb.actionable_booking(booking_id, vk_id)

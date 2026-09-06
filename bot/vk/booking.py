@@ -692,6 +692,7 @@ async def issue_ticket(
         attachment=attachment,
         keyboard=keyboard,
     )
+    await client.require_sent_photo(msg_id, peer_id=peer_id)
     # Билет ушёл — снимаем кнопки с сообщения «Получить билет» (клик + сохранённый id).
     await clear_inline_keyboard(
         client,

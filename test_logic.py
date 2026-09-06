@@ -108,9 +108,22 @@ def test_db_schema():
     print("db schema indices: OK")
 
 
+def test_vk_message_item_has_photo():
+    from bot.vk.client import VKClient
+
+    assert VKClient.message_item_has_photo(
+        {"attachments": [{"type": "photo", "photo": {"id": 1, "owner_id": -123}}]}
+    )
+    assert not VKClient.message_item_has_photo({"attachments": []})
+    assert not VKClient.message_item_has_photo({"attachments": [{"type": "doc", "doc": {"id": 1}}]})
+    assert not VKClient.message_item_has_photo(None)
+    print("vk message photo check: OK")
+
+
 async def main():
     test_callback_parsing()
     test_db_schema()
+    test_vk_message_item_has_photo()
     events = await load_events()
     print(f"events loaded: {len(events)}")
     if not events:
