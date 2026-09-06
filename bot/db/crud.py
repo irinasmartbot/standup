@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import psycopg
@@ -1375,7 +1375,73 @@ def ensure_raffle_tables():
                 )
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS raffle_after_accept (
+                    telegram_id BIGINT PRIMARY KEY,
+                    due_at TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
         conn.commit()
+
+
+def schedule_raffle_after_accept(telegram_id: int, delay_sec: int = 3) -> None:
+    """Очередь шага после принятия скрина (подписка + даты). Переживает рестарт."""
+    if not _use_postgres() or not telegram_id:
+        return
+    due_at = datetime.now() + timedelta(seconds=max(0, int(delay_sec)))
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO raffle_after_accept (telegram_id, due_at, created_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (telegram_id) DO UPDATE
+                SET due_at = EXCLUDED.due_at
+                """,
+                (int(telegram_id), due_at, datetime.now()),
+            )
+        conn.commit()
+
+
+def claim_raffle_after_accept(telegram_id: int) -> bool:
+    """Забрать задачу, чтобы не отправить даты дважды. True — мы её взяли."""
+    if not _use_postgres() or not telegram_id:
+        return False
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM raffle_after_accept
+                WHERE telegram_id = %s
+                RETURNING telegram_id
+                """,
+                (int(telegram_id),),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return bool(row)
+
+
+def pop_due_raffle_after_accept() -> list[int]:
+    """Просроченные/готовые задачи после accept — забираем пачкой."""
+    if not _use_postgres():
+        return []
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM raffle_after_accept
+                WHERE due_at <= %s
+                RETURNING telegram_id
+                """,
+                (datetime.now(),),
+            )
+            rows = cur.fetchall() or []
+        conn.commit()
+    return [int(r[0]) for r in rows if r and r[0]]
 
 
 def get_pending_raffle_submission(telegram_id=None, *, vk_id=None):

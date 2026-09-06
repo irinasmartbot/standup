@@ -75,6 +75,7 @@ from bot.db.crud import (
     save_raffle_moderation_message,
     save_raffle_nav,
     save_ticket_message_id,
+    schedule_raffle_after_accept,
     set_raffle_awaiting_screenshot,
     set_rozygrysh_used,
     has_pdn_consent,
@@ -947,9 +948,10 @@ async def rz_mod_ok(call: CallbackQuery, state: FSMContext):
         telegram_id,
         "Класс, скрин принят. Теперь проверим подписку на канал 👌",
     )
-    asyncio.create_task(_after_screen_accepted(telegram_id))
+    _schedule_tg_after_accept(int(telegram_id))
 
 
+_TG_AFTER_ACCEPT_TASKS: set[asyncio.Task] = set()
 _VK_AFTER_ACCEPT_TASKS: set[asyncio.Task] = set()
 
 
@@ -985,12 +987,40 @@ def _schedule_vk_after_accept(vk_id: int) -> None:
     task.add_done_callback(_VK_AFTER_ACCEPT_TASKS.discard)
 
 
+def _schedule_tg_after_accept(telegram_id: int) -> None:
+    """Держим ссылку на задачу: в Python 3.12 без неё GC может её съесть."""
+    schedule_raffle_after_accept(int(telegram_id), delay_sec=3)
+    task = asyncio.create_task(_after_screen_accepted(int(telegram_id)))
+    _TG_AFTER_ACCEPT_TASKS.add(task)
+    task.add_done_callback(_TG_AFTER_ACCEPT_TASKS.discard)
+
+
 async def _after_screen_accepted(telegram_id: int):
+    from bot.db.crud import claim_raffle_after_accept
+
+    claimed = False
     try:
         await asyncio.sleep(3)
+        if not claim_raffle_after_accept(int(telegram_id)):
+            return
+        claimed = True
         await _continue_after_subscribe_check(telegram_id)
     except Exception:
         logger.exception("After-accept flow failed for %s", telegram_id)
+        if claimed:
+            schedule_raffle_after_accept(int(telegram_id), delay_sec=15)
+
+
+async def process_due_raffle_after_accept() -> None:
+    """Досылает даты, если фон после accept умер (рестарт / GC)."""
+    from bot.db.crud import pop_due_raffle_after_accept
+
+    for telegram_id in pop_due_raffle_after_accept():
+        try:
+            await _continue_after_subscribe_check(int(telegram_id))
+        except Exception:
+            logger.exception("Retry after-accept failed for %s", telegram_id)
+            schedule_raffle_after_accept(int(telegram_id), delay_sec=30)
 
 
 async def _reject_submission(row, reason: str | None, card_ref, cleanup_chat_id=None, *cleanup_ids):

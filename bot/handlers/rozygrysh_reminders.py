@@ -125,7 +125,13 @@ async def send_raffle_annulled(row):
 
 
 async def process_raffle_reminders():
+    from bot.handlers.rozygrysh import process_due_raffle_after_accept
     from bot.utils.reminder_schedule import plan_booking_reminders
+
+    try:
+        await process_due_raffle_after_accept()
+    except Exception:
+        logger.exception("Failed to process raffle after-accept queue")
 
     now = now_msk().replace(tzinfo=None)
     for telegram_id in get_confirmed_raffle_past_for_cleanup():

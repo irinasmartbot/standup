@@ -131,6 +131,12 @@ CREATE TABLE IF NOT EXISTS raffle_vk_awaiting (
     awaiting_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS raffle_after_accept (
+    telegram_id BIGINT PRIMARY KEY,
+    due_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS vk_offline_gift_entries (
     id BIGSERIAL PRIMARY KEY,
     event_id BIGINT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
