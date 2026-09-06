@@ -725,11 +725,11 @@ async def book(call: CallbackQuery, state: FSMContext):
     """Бесплатная бронь: сразу экран Проверки материала."""
     from bot.handlers.booking import check_format_entry
 
+    await call.answer()
     await state.clear()
     await delete_booking_nav(call.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     await check_format_entry(call.message)
-    await call.answer()
 
 
 @router.callback_query(lambda c: c.data == "buy_ticket")
@@ -737,12 +737,12 @@ async def buy_ticket(call: CallbackQuery, state: FSMContext):
     from bot.utils.reply_keyboard import clear_reply_keyboard
 
     track_event(EVENT_CMD_BUY_TICKET, telegram_id=call.from_user.id, props={"via": "callback"})
+    await call.answer()
     await state.clear()
     await clear_reply_keyboard(call.message)
     await delete_booking_nav(call.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
     await send_buy_ticket_formats(call.message)
-    await call.answer()
 
 
 async def best_format_entry(message):

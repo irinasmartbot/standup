@@ -32,6 +32,9 @@ _IGNORE_TG_MARKERS = (
     "chat not found",
     "bot can't initiate conversation",
     "have no rights to send a message",
+    "query is too old",
+    "query id is invalid",
+    "response timeout expired",
 )
 
 
