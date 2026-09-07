@@ -6256,32 +6256,39 @@ async def mailing_raffle_cancel_notify_page(request: web.Request) -> web.Respons
             continue
     if not user_ids:
         return web.json_response({"error": "некорректные user_ids"}, status=400)
-    if len(user_ids) > 50:
-        return web.json_response({"error": "за раз не больше 50 человек"}, status=400)
+    if len(user_ids) > 10:
+        return web.json_response({"error": "за раз не больше 10 человек"}, status=400)
 
     reset_raffle = bool(payload.get("reset_raffle", True))
     from bot.admin.raffle_cancel_notify import send_cancel_and_raffle_dates_bulk
     from bot.db.admin_audit import log_admin_action
 
-    result = await send_cancel_and_raffle_dates_bulk(
-        user_ids=user_ids,
-        body_text=body,
-        reset_raffle=reset_raffle,
-    )
-    log_admin_action(
-        actor_role=_admin_role(request, config) or "owner",
-        action="raffle_cancel_notify",
-        entity_type="mailing",
-        entity_id="",
-        details={
-            "ok": result.get("ok"),
-            "fail": result.get("fail"),
-            "total": result.get("total"),
-            "reset_raffle": reset_raffle,
-            "body_preview": body[:200],
-            "items": (result.get("items") or [])[:40],
-        },
-    )
+    try:
+        result = await send_cancel_and_raffle_dates_bulk(
+            user_ids=user_ids,
+            body_text=body,
+            reset_raffle=reset_raffle,
+        )
+    except Exception as exc:
+        logger.exception("raffle-cancel-notify failed")
+        return web.json_response({"error": str(exc) or "внутренняя ошибка"}, status=500)
+    try:
+        log_admin_action(
+            actor_role=_admin_role(request, config) or "owner",
+            action="raffle_cancel_notify",
+            entity_type="mailing",
+            entity_id="",
+            details={
+                "ok": result.get("ok"),
+                "fail": result.get("fail"),
+                "total": result.get("total"),
+                "reset_raffle": reset_raffle,
+                "body_preview": body[:200],
+                "items": (result.get("items") or [])[:40],
+            },
+        )
+    except Exception:
+        logger.exception("raffle-cancel-notify audit failed")
     return web.json_response(result)
 
 

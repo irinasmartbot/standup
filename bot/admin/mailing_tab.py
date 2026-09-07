@@ -328,6 +328,7 @@ def render_mailing_tab(
   <p class="muted">
     Сбрасывает блок розыгрыша у гостя, шлёт ваш текст и меню дат <b>BEST</b>
     (без сегодняшней даты) — как в боте розыгрыша. Только Telegram.
+    Можно слать по одному человеку.
   </p>
   <label>Текст сообщения
     <textarea id="rz-cancel-body" rows="4">{_h(DEFAULT_CANCEL_TEXT)}</textarea>
@@ -474,7 +475,16 @@ def render_mailing_tab(
         user_ids: selected.map(function(u){{ return u.id; }})
       }})
     }})
-      .then(function(r){{ return r.json().then(function(d){{ return {{ok:r.ok, d:d}}; }}); }})
+      .then(function(r){{
+        return r.text().then(function(raw){{
+          var d = {{}};
+          try {{ d = raw ? JSON.parse(raw) : {{}}; }}
+          catch (e) {{
+            throw new Error('Сервер ответил не JSON (HTTP ' + r.status + ')');
+          }}
+          return {{ok: r.ok, d: d}};
+        }});
+      }})
       .then(function(res){{
         sendBtn.disabled = false;
         var d = res.d || {{}};
@@ -490,9 +500,9 @@ def render_mailing_tab(
         }});
         statusEl.innerHTML = lines.join('<br>');
       }})
-      .catch(function(){{
+      .catch(function(err){{
         sendBtn.disabled = false;
-        statusEl.innerHTML = '<span class="events-error">Ошибка сети</span>';
+        statusEl.innerHTML = '<span class="events-error">' + esc(err && err.message ? err.message : 'Ошибка сети') + '</span>';
       }});
   }});
 }})();
