@@ -998,17 +998,14 @@ def _schedule_tg_after_accept(telegram_id: int) -> None:
 async def _after_screen_accepted(telegram_id: int):
     from bot.db.crud import claim_raffle_after_accept
 
-    claimed = False
     try:
         await asyncio.sleep(3)
-        if not claim_raffle_after_accept(int(telegram_id)):
-            return
-        claimed = True
         await _continue_after_subscribe_check(telegram_id)
+        # Снимаем с очереди только после успеха — иначе рестарт теряет даты.
+        claim_raffle_after_accept(int(telegram_id))
     except Exception:
         logger.exception("After-accept flow failed for %s", telegram_id)
-        if claimed:
-            schedule_raffle_after_accept(int(telegram_id), delay_sec=15)
+        schedule_raffle_after_accept(int(telegram_id), delay_sec=15)
 
 
 async def process_due_raffle_after_accept() -> None:

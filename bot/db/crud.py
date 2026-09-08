@@ -1399,7 +1399,8 @@ def schedule_raffle_after_accept(telegram_id: int, delay_sec: int = 3) -> None:
                 INSERT INTO raffle_after_accept (telegram_id, due_at, created_at)
                 VALUES (%s, %s, %s)
                 ON CONFLICT (telegram_id) DO UPDATE
-                SET due_at = EXCLUDED.due_at
+                SET due_at = EXCLUDED.due_at,
+                    created_at = EXCLUDED.created_at
                 """,
                 (int(telegram_id), due_at, datetime.now()),
             )
@@ -1407,7 +1408,7 @@ def schedule_raffle_after_accept(telegram_id: int, delay_sec: int = 3) -> None:
 
 
 def claim_raffle_after_accept(telegram_id: int) -> bool:
-    """Забрать задачу, чтобы не отправить даты дважды. True — мы её взяли."""
+    """Снять задачу после успешной отправки дат. True — строка была в очереди."""
     if not _use_postgres() or not telegram_id:
         return False
     with _pg_connect() as conn:
@@ -1426,18 +1427,20 @@ def claim_raffle_after_accept(telegram_id: int) -> bool:
 
 
 def pop_due_raffle_after_accept() -> list[int]:
-    """Просроченные/готовые задачи после accept — забираем пачкой."""
+    """Задачи, которые живой воркер уже должен был закрыть (рестарт/обрыв)."""
     if not _use_postgres():
         return []
+    cutoff = datetime.now() - timedelta(seconds=90)
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 DELETE FROM raffle_after_accept
                 WHERE due_at <= %s
+                  AND created_at <= %s
                 RETURNING telegram_id
                 """,
-                (datetime.now(),),
+                (datetime.now(), cutoff),
             )
             rows = cur.fetchall() or []
         conn.commit()
