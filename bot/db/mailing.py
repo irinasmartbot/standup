@@ -12,19 +12,164 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from bot.config import BOOKINGS_SOURCE, DATABASE_URL
-from bot.utils.ticket import now_msk
+from bot.utils.ticket import MSK, now_msk
 
 logger = logging.getLogger(__name__)
 
 BOOKING_STATUSES = ("booked", "confirmed", "cancelled", "annulled")
 CHANNELS = ("telegram", "vkontakte", "both")
 CAMPAIGN_STATUSES = ("draft", "queued", "running", "paused", "done", "cancelled")
+# Не слать служебные аккаунты в массовых рассылках.
+MAIL_SKIP_USERNAMES = ("nastya_stand_up", "ccoverr")
+
+MAILING_TEMPLATE_SPECS = (
+    {
+        "key": "best_tg",
+        "title": "BEST · Telegram",
+        "channel": "telegram",
+        "button_text": "",
+        "followup_html": "",
+        "body_html": (
+            "Привет! 😊 Дарим 15 бесплатных билетов на СЕГОДНЯШНИЙ концерт первым пятнадцати, "
+            "написавшим в личку "
+            '<a href="https://t.me/ccoverr?text=%D0%A5%D0%BE%D1%87%D1%83%20%D0%B1%D0%B8%D0%BB%D0%B5%D1%82">'
+            "<b>@ccoverr</b></a> \"хочу билет\" !!!\n"
+            "\n"
+            "<b>Шоу сегодня в 20:00 в Эскобаре на м.Площадь Ильича ☝️</b>\n"
+            "\n"
+            "Пиши прямо сейчас, не откладывай 😊\n"
+            "Посмотреть, кто сегодня выступает, можно в нашем канале 😊\n"
+            "https://t.me/MoscowStandupShow"
+        ),
+    },
+    {
+        "key": "best_vk",
+        "title": "BEST · VK",
+        "channel": "vkontakte",
+        "button_text": "хочу билет",
+        "body_html": (
+            "Привет! 😊 Дарим 15 бесплатных билетов на СЕГОДНЯШНИЙ концерт первым пятнадцати, "
+            "кто нажмет кнопку \"хочу билет\"!!!\n"
+            "\n"
+            "<b>Шоу сегодня в 20:00 в Эскобаре на м.Площадь Ильича ☝️</b>\n"
+            "\n"
+            "Нажимай кнопку прямо сейчас, не откладывай 😊\n"
+            "Посмотреть, кто сегодня выступает, можно в нашем сообществе 😊\n"
+            "<b>https://vk.ru/moscowstandupshow</b>"
+        ),
+        "followup_html": (
+            "Здравствуйте, начало сегодня в 20:00, успеваете? 😊 \n"
+            "\n"
+            "Если да, напишите Ваш номер телефона, имя и один билет нужен или два 😊\n"
+            "Я внесу в списки, администратору на входе назовёте имя, он посадит 😊\n"
+            "\n"
+            "📍 Адрес ESCOBAR, м. Площадь Ильича, ул. Сергия Радонежского, 15-17с17\n"
+            "<b>Посещение мероприятия предполагает обязательный заказ минимум одной позиции по меню 🍽 ☝️😊</b>"
+        ),
+    },
+    {
+        "key": "hitloto_tg",
+        "title": "Музлото · Telegram",
+        "channel": "telegram",
+        "button_text": "",
+        "followup_html": "",
+        "body_html": (
+            "<b>Бесплатные билеты на музыкальное лото с комиком от Moscow StandUp Show!!</b>\n"
+            "\n"
+            "Привет!! СЕГОДНЯ, <b>01 августа в 20:30</b> пройдёт 🔥Хитлото by Moscow StandUp Show 🔥\n"
+            "\n"
+            "📍Адрес - TEMPLE (м.Курская) Нижний Сусальный переулок, дом 5, стр. 4а\n"
+            "\n"
+            "В программе розыгрыш билетов на стендап, сертификаты на массаж и квизы, "
+            "подарки от заведения, и лучшие хиты всех времен!!! 🎼\n"
+            "\n"
+            "Вход бесплатный, но как и всегда, обязательное условие- заказ минимум одной "
+            "позиции по меню заведения ☝️\n"
+            "\n"
+            "Чтобы попасть на мероприятие пиши в личку нашему менеджеру "
+            '<a href="https://t.me/ccoverr?text=%D0%A5%D0%BE%D1%87%D1%83%20%D0%B1%D0%B8%D0%BB%D0%B5%D1%82">'
+            "<b>@ccoverr</b></a> \"хочу билет\" !!!"
+        ),
+    },
+    {
+        "key": "hitloto_vk",
+        "title": "Музлото · VK",
+        "channel": "vkontakte",
+        "button_text": "хочу билет",
+        "body_html": (
+            "<b>Бесплатные билеты на музыкальное лото с комиком от Moscow StandUp Show!!</b>\n"
+            "\n"
+            "Привет!! СЕГОДНЯ, <b>01 августа в 20:30</b> пройдёт 🔥Хитлото by Moscow StandUp Show 🔥\n"
+            "\n"
+            "📍Адрес - TEMPLE (м.Курская) Нижний Сусальный переулок, дом 5, стр. 4а\n"
+            "\n"
+            "В программе розыгрыш билетов на стендап, сертификаты на массаж и квизы, "
+            "подарки от заведения, и лучшие хиты всех времен!!! 🎼\n"
+            "\n"
+            "Вход бесплатный, но как и всегда, обязательное условие- заказ минимум одной "
+            "позиции по меню заведения ☝️\n"
+            "\n"
+            "Чтобы попасть на мероприятие <b>нажми кнопку \"хочу билет\":</b>"
+        ),
+        "followup_html": (
+            "Здравствуйте, начало сегодня в 20:30, успеваете? 😊 \n"
+            "\n"
+            "Если да, напишите Ваш номер телефона, имя и один билет нужен или два 😊\n"
+            "Я внесу в списки, администратору на входе назовёте имя, он посадит 😊\n"
+            "\n"
+            "📍 Адрес TEMPLE (м.Курская) Нижний Сусальный переулок, дом 5, стр. 4а\n"
+            "<b>Посещение мероприятия предполагает обязательный заказ минимум одной позиции по меню 🍽 ☝️😊</b>"
+        ),
+    },
+)
+MAILING_TEMPLATE_KEYS = tuple(item["key"] for item in MAILING_TEMPLATE_SPECS)
 
 # Отбивка, если нажали кнопку после даты актуальности рассылки.
 FOLLOWUP_EXPIRED_TEXT = (
     "Здравствуйте! Это предложение уже неактуально — мероприятие прошло 😊\n"
     "Следите за новостями в нашем сообществе: там появляются свежие анонсы и розыгрыши ☝️"
 )
+# Служебный follow-up: кнопка запускает бронь сольника 15.09, не доп. текст.
+MAIL_FLOW_BOOKING_RESIDENT = "__flow:booking_resident__"
+
+
+def followup_is_booking_flow(text: str | None) -> bool:
+    return (text or "").strip() == MAIL_FLOW_BOOKING_RESIDENT
+
+
+def followup_preview_label(text: str | None) -> str:
+    raw = (text or "").strip()
+    if followup_is_booking_flow(raw):
+        return "Сценарий брони: сольник 15.09 (проверка материала)"
+    return raw
+
+
+def form_starts_booking(value: str | None) -> bool:
+    return (value or "").strip().casefold() in {
+        "1",
+        "on",
+        "true",
+        "yes",
+        "booking_resident",
+    }
+
+
+def resolve_mailing_button_fields(
+    *,
+    starts_booking: bool,
+    button_url: str | None,
+    followup_html: str | None,
+    followup_until: str | None = None,
+) -> tuple[str, str, str | None]:
+    """URL / follow-up / дата кнопки. Для брони URL очищаем, follow-up — служебный маркер."""
+    until = (followup_until or "").strip() or None
+    if not starts_booking:
+        return (button_url or "").strip(), (followup_html or "").strip(), until
+    if not until:
+        from bot.utils.booking_texts import resident_show_until_iso
+
+        until = resident_show_until_iso()
+    return "", MAIL_FLOW_BOOKING_RESIDENT, until
 # Повтор того же текста после кнопки рассылки — не чаще чем раз в 30 мин.
 MAIL_FOLLOWUP_DEDUPE_SEC = 1800.0
 
@@ -140,6 +285,71 @@ def ensure_mailing_tables() -> None:
                     ADD COLUMN IF NOT EXISTS followup_until DATE
                     """
                 )
+                cur.execute(
+                    """
+                    ALTER TABLE mailing_campaigns
+                    ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_mailing_campaigns_queued_at
+                    ON mailing_campaigns (scheduled_at, id)
+                    WHERE status = 'queued'
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mailing_templates (
+                        key TEXT PRIMARY KEY,
+                        title TEXT NOT NULL DEFAULT '',
+                        channel TEXT NOT NULL
+                            CHECK (channel IN ('telegram', 'vkontakte', 'both')),
+                        body_html TEXT NOT NULL DEFAULT '',
+                        button_text TEXT NOT NULL DEFAULT '',
+                        followup_html TEXT NOT NULL DEFAULT '',
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                for spec in MAILING_TEMPLATE_SPECS:
+                    cur.execute(
+                        """
+                        INSERT INTO mailing_templates (
+                            key, title, channel, body_html, button_text, followup_html
+                        )
+                        VALUES (
+                            %(key)s, %(title)s, %(channel)s,
+                            %(body_html)s, %(button_text)s, %(followup_html)s
+                        )
+                        ON CONFLICT (key) DO UPDATE
+                        SET title = EXCLUDED.title,
+                            channel = EXCLUDED.channel,
+                            body_html = CASE
+                                WHEN BTRIM(mailing_templates.body_html) = ''
+                                THEN EXCLUDED.body_html
+                                ELSE mailing_templates.body_html
+                            END,
+                            button_text = CASE
+                                WHEN BTRIM(mailing_templates.button_text) = ''
+                                THEN EXCLUDED.button_text
+                                ELSE mailing_templates.button_text
+                            END,
+                            followup_html = CASE
+                                WHEN BTRIM(mailing_templates.followup_html) = ''
+                                THEN EXCLUDED.followup_html
+                                ELSE mailing_templates.followup_html
+                            END
+                        """,
+                        {
+                            "key": spec["key"],
+                            "title": spec["title"],
+                            "channel": spec["channel"],
+                            "body_html": spec.get("body_html") or "",
+                            "button_text": spec.get("button_text") or "",
+                            "followup_html": spec.get("followup_html") or "",
+                        },
+                    )
             conn.commit()
     except Exception:
         logger.exception("ensure_mailing_tables failed")
@@ -161,6 +371,47 @@ def _parse_iso_date(value: Any) -> date | None:
         except ValueError:
             continue
     return None
+
+
+def parse_admin_datetime(value: Any) -> datetime | None:
+    """Дата-время из админки (datetime-local) как московское время."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        dt = value
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=MSK)
+        return dt.astimezone(MSK)
+    text = str(value).strip().replace(" ", "T")
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+        try:
+            return datetime.strptime(text[:19], fmt).replace(tzinfo=MSK)
+        except ValueError:
+            continue
+    return None
+
+
+def format_admin_datetime(value: Any) -> str:
+    dt = parse_admin_datetime(value)
+    if not dt:
+        return ""
+    return dt.strftime("%d.%m.%Y %H:%M")
+
+
+def to_datetime_local_value(value: Any) -> str:
+    dt = parse_admin_datetime(value)
+    if not dt:
+        return ""
+    return dt.strftime("%Y-%m-%dT%H:%M")
+
+
+def is_campaign_scheduled(row: dict | None) -> bool:
+    if not row or (row.get("status") or "") != "queued":
+        return False
+    at = parse_admin_datetime(row.get("scheduled_at"))
+    return bool(at and at > now_msk())
 
 
 def campaign_followup_until(campaign: dict | None) -> date | None:
@@ -242,8 +493,14 @@ def _audience_sql(channel: str, filters: dict) -> tuple[str, dict]:
     """Build SELECT user_id, channel, peer_id for one messenger channel."""
     if channel not in ("telegram", "vkontakte"):
         raise ValueError("bad channel")
-    params: dict[str, Any] = {"msg_channel": channel}
-    where = ["TRUE"]
+    params: dict[str, Any] = {
+        "msg_channel": channel,
+        "skip_usernames": list(MAIL_SKIP_USERNAMES),
+    }
+    where = [
+        "TRUE",
+        "NOT (LOWER(BTRIM(COALESCE(u.username, ''))) = ANY(%(skip_usernames)s))",
+    ]
     if channel == "telegram":
         where.append("u.telegram_id IS NOT NULL")
         peer_expr = "u.telegram_id"
@@ -414,6 +671,7 @@ def create_campaign(
     disable_link_preview: bool = False,
     created_by: str = "owner",
     start: bool = True,
+    scheduled_at: datetime | str | None = None,
 ) -> dict:
     ensure_mailing_tables()
     if not _use_postgres():
@@ -436,6 +694,9 @@ def create_campaign(
         until = _parse_iso_date(filters_n.get("date_to")) or _parse_iso_date(
             filters_n.get("date_from")
         )
+    when = parse_admin_datetime(scheduled_at)
+    if when and when <= now_msk():
+        raise ValueError("Время рассылки уже прошло — выберите другое или отправьте сразу")
 
     preview = preview_audience(channel, filters_n)
     capped = int(preview["capped_total"])
@@ -450,13 +711,13 @@ def create_campaign(
                     title, channel, status, body_html, photo_path,
                     button_text, button_url, followup_html, followup_until,
                     disable_link_preview, interval_sec, batch_limit, filters,
-                    total_count, created_by
+                    total_count, created_by, scheduled_at
                 )
                 VALUES (
                     %(title)s, %(channel)s, %(status)s, %(body_html)s, %(photo_path)s,
                     %(button_text)s, %(button_url)s, %(followup_html)s, %(followup_until)s,
                     %(disable_link_preview)s, %(interval_sec)s, %(batch_limit)s, %(filters)s,
-                    0, %(created_by)s
+                    0, %(created_by)s, %(scheduled_at)s
                 )
                 RETURNING *
                 """,
@@ -475,6 +736,7 @@ def create_campaign(
                     "batch_limit": filters_n.get("batch_limit"),
                     "filters": Json(filters_n),
                     "created_by": created_by or "owner",
+                    "scheduled_at": when,
                 },
             )
             campaign = dict(cur.fetchone())
@@ -519,6 +781,186 @@ def create_campaign(
             )
             campaign = dict(cur.fetchone())
         conn.commit()
+    return campaign
+
+
+def _previous_full_queue(limited: dict) -> dict | None:
+    """Ближняя более крупная очередь того же канала — обычно отменённая 21k перед лимитом 11k."""
+    channel = (limited.get("channel") or "").strip()
+    if channel not in CHANNELS:
+        return None
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM mailing_campaigns
+                WHERE id < %(id)s
+                  AND channel = %(channel)s
+                  AND title IS DISTINCT FROM 'test-followup'
+                  AND total_count > %(total)s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                {
+                    "id": int(limited["id"]),
+                    "channel": channel,
+                    "total": int(limited.get("total_count") or 0),
+                },
+            )
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def remainder_after_limit(limited_id: int) -> dict:
+    """Сколько человек из полной очереди не попали в ограниченную рассылку."""
+    ensure_mailing_tables()
+    limited = get_campaign(limited_id)
+    if not limited:
+        raise ValueError("Кампания не найдена")
+    full = _previous_full_queue(limited)
+    if not full:
+        return {"count": 0, "full_id": None, "limited_id": int(limited_id)}
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM mailing_recipients r
+                WHERE r.campaign_id = %(full_id)s
+                  AND r.status IN ('pending', 'skipped')
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM mailing_recipients s
+                      WHERE s.campaign_id = %(limited_id)s
+                        AND s.user_id = r.user_id
+                        AND s.channel = r.channel
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM users xu
+                      WHERE xu.id = r.user_id
+                        AND LOWER(BTRIM(COALESCE(xu.username, ''))) = ANY(%(skip_usernames)s)
+                  )
+                """,
+                {"full_id": int(full["id"]), "limited_id": int(limited_id), "skip_usernames": list(MAIL_SKIP_USERNAMES)},
+            )
+            count = int(cur.fetchone()["n"] or 0)
+    return {
+        "count": count,
+        "full_id": int(full["id"]),
+        "limited_id": int(limited_id),
+        "full_title": full.get("title") or "",
+        "full_total": int(full.get("total_count") or 0),
+    }
+
+
+def create_remainder_campaign(limited_id: int, *, created_by: str = "owner") -> dict:
+    """Новая рассылка: текст/кнопка/фото из ограниченной, люди — из полной очереди минус уже взятые."""
+    ensure_mailing_tables()
+    if not _use_postgres():
+        raise RuntimeError("PostgreSQL required for mailing")
+    limited = get_campaign(limited_id)
+    if not limited:
+        raise ValueError("Кампания не найдена")
+    info = remainder_after_limit(limited_id)
+    full_id = info.get("full_id")
+    if not full_id or int(info.get("count") or 0) <= 0:
+        raise ValueError(
+            "Не кого досылать: нет предыдущей более крупной очереди или все из неё уже были в этой рассылке"
+        )
+    if not (limited.get("body_html") or "").strip() and not (limited.get("photo_path") or "").strip():
+        raise ValueError("У этой рассылки нет текста и картинки")
+    title = (limited.get("title") or "Рассылка").strip()
+    if "остаток" not in title.casefold():
+        title = f"{title} · остаток"
+    title = title[:120]
+    channel = limited.get("channel") or "telegram"
+    if channel not in CHANNELS:
+        channel = "telegram"
+    filters_payload = {
+        "remainder_of": int(limited_id),
+        "remainder_from": int(full_id),
+    }
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mailing_campaigns (
+                    title, channel, status, body_html, photo_path,
+                    button_text, button_url, followup_html, followup_until,
+                    disable_link_preview, interval_sec, batch_limit, filters,
+                    total_count, created_by
+                )
+                VALUES (
+                    %(title)s, %(channel)s, 'queued', %(body_html)s, %(photo_path)s,
+                    %(button_text)s, %(button_url)s, %(followup_html)s, %(followup_until)s,
+                    %(disable_link_preview)s, %(interval_sec)s, NULL, %(filters)s,
+                    0, %(created_by)s
+                )
+                RETURNING *
+                """,
+                {
+                    "title": title,
+                    "channel": channel,
+                    "body_html": limited.get("body_html") or "",
+                    "photo_path": limited.get("photo_path"),
+                    "button_text": limited.get("button_text"),
+                    "button_url": limited.get("button_url"),
+                    "followup_html": limited.get("followup_html"),
+                    "followup_until": limited.get("followup_until"),
+                    "disable_link_preview": bool(limited.get("disable_link_preview")),
+                    "interval_sec": limited.get("interval_sec") or 0.1,
+                    "filters": Json(filters_payload),
+                    "created_by": created_by or "owner",
+                },
+            )
+            campaign = dict(cur.fetchone())
+            new_id = int(campaign["id"])
+            cur.execute(
+                """
+                INSERT INTO mailing_recipients (campaign_id, user_id, channel, peer_id)
+                SELECT %(new_id)s, r.user_id, r.channel, r.peer_id
+                FROM mailing_recipients r
+                WHERE r.campaign_id = %(full_id)s
+                  AND r.status IN ('pending', 'skipped')
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM mailing_recipients s
+                      WHERE s.campaign_id = %(limited_id)s
+                        AND s.user_id = r.user_id
+                        AND s.channel = r.channel
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM users xu
+                      WHERE xu.id = r.user_id
+                        AND LOWER(BTRIM(COALESCE(xu.username, ''))) = ANY(%(skip_usernames)s)
+                  )
+                ON CONFLICT (campaign_id, channel, peer_id) DO NOTHING
+                """,
+                {
+                    "new_id": new_id,
+                    "full_id": int(full_id),
+                    "limited_id": int(limited_id),
+                    "skip_usernames": list(MAIL_SKIP_USERNAMES),
+                },
+            )
+            cur.execute(
+                """
+                UPDATE mailing_campaigns
+                SET total_count = (
+                    SELECT COUNT(*) FROM mailing_recipients WHERE campaign_id = %(id)s
+                )
+                WHERE id = %(id)s
+                RETURNING *
+                """,
+                {"id": new_id},
+            )
+            campaign = dict(cur.fetchone())
+        conn.commit()
+    if int(campaign.get("total_count") or 0) <= 0:
+        raise ValueError("Не удалось собрать остаток очереди")
     return campaign
 
 
@@ -614,8 +1056,118 @@ def set_campaign_status(campaign_id: int, status: str) -> dict | None:
     return dict(row) if row else None
 
 
+def set_campaign_schedule(
+    campaign_id: int,
+    *,
+    scheduled_at: datetime | str | None = None,
+    send_now: bool = False,
+) -> dict | None:
+    """Перенести запланированную рассылку или отправить сразу."""
+    ensure_mailing_tables()
+    row = get_campaign(campaign_id)
+    if not row:
+        raise ValueError("Кампания не найдена")
+    if (row.get("status") or "") not in ("queued", "paused"):
+        raise ValueError("Перенести можно только очередь или паузу")
+    if send_now:
+        when = None
+        status = "queued"
+    else:
+        when = parse_admin_datetime(scheduled_at)
+        if not when:
+            raise ValueError("Укажите дату и время")
+        if when <= now_msk():
+            raise ValueError("Время уже прошло")
+        status = row.get("status") or "queued"
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE mailing_campaigns
+                SET scheduled_at = %(when)s,
+                    status = %(status)s,
+                    finished_at = NULL
+                WHERE id = %(id)s
+                RETURNING *
+                """,
+                {"id": int(campaign_id), "when": when, "status": status},
+            )
+            updated = cur.fetchone()
+        conn.commit()
+    return dict(updated) if updated else None
+
+
+def list_mailing_templates() -> list[dict]:
+    ensure_mailing_tables()
+    rows: dict[str, dict] = {}
+    if _use_postgres():
+        with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM mailing_templates")
+                for raw in cur.fetchall() or []:
+                    row = dict(raw)
+                    rows[str(row.get("key") or "")] = row
+    out = []
+    for spec in MAILING_TEMPLATE_SPECS:
+        stored = rows.get(spec["key"]) or {}
+        out.append(
+            {
+                "key": spec["key"],
+                "title": spec["title"],
+                "channel": spec["channel"],
+                "body_html": (stored.get("body_html") or "").strip() or spec.get("body_html") or "",
+                "button_text": (stored.get("button_text") or "").strip()
+                or spec.get("button_text")
+                or "",
+                "followup_html": (stored.get("followup_html") or "").strip()
+                or spec.get("followup_html")
+                or "",
+            }
+        )
+    return out
+
+
+def save_mailing_templates(items: list[dict]) -> list[dict]:
+    ensure_mailing_tables()
+    if not _use_postgres():
+        raise RuntimeError("PostgreSQL required for mailing")
+    by_key = {str(item.get("key") or ""): item for item in items if item}
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            for spec in MAILING_TEMPLATE_SPECS:
+                payload = by_key.get(spec["key"]) or {}
+                cur.execute(
+                    """
+                    INSERT INTO mailing_templates (
+                        key, title, channel, body_html, button_text, followup_html, updated_at
+                    )
+                    VALUES (
+                        %(key)s, %(title)s, %(channel)s, %(body_html)s,
+                        %(button_text)s, %(followup_html)s, NOW()
+                    )
+                    ON CONFLICT (key) DO UPDATE
+                    SET title = EXCLUDED.title,
+                        channel = EXCLUDED.channel,
+                        body_html = EXCLUDED.body_html,
+                        button_text = EXCLUDED.button_text,
+                        followup_html = EXCLUDED.followup_html,
+                        updated_at = NOW()
+                    """,
+                    {
+                        "key": spec["key"],
+                        "title": spec["title"],
+                        "channel": spec["channel"],
+                        "body_html": (payload.get("body_html") or "").strip(),
+                        "button_text": (payload.get("button_text") or "").strip(),
+                        "followup_html": (payload.get("followup_html") or "").strip(),
+                    },
+                )
+        conn.commit()
+    return list_mailing_templates()
+
+
 def claim_next_campaign() -> dict | None:
-    """Pick queued campaign or continue a running one."""
+    """Pick queued campaign that is due, or continue a running one."""
     ensure_mailing_tables()
     if not _use_postgres():
         return None
@@ -636,7 +1188,8 @@ def claim_next_campaign() -> dict | None:
                     """
                     SELECT id FROM mailing_campaigns
                     WHERE status = 'queued'
-                    ORDER BY id
+                      AND (scheduled_at IS NULL OR scheduled_at <= NOW())
+                    ORDER BY COALESCE(scheduled_at, created_at), id
                     LIMIT 1
                     FOR UPDATE SKIP LOCKED
                     """

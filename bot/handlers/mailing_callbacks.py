@@ -6,33 +6,53 @@ import asyncio
 import logging
 
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
-from bot.db.mailing import claim_mail_followup_send, get_campaign_followup
+from bot.db.mailing import (
+    claim_mail_followup_send,
+    followup_is_booking_flow,
+    get_campaign_followup,
+)
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
 @router.callback_query(F.data.startswith("mail_fu:"))
-async def mailing_followup(call: CallbackQuery) -> None:
+async def mailing_followup(call: CallbackQuery, state: FSMContext | None = None) -> None:
     # Сразу гасим «часики» на кнопке — до любого обращения к БД.
     raw = (call.data or "").split(":", 1)[-1].strip()
     if not raw.isdigit():
         await call.answer("Не найдено", show_alert=True)
         return
-    try:
-        await call.answer()
-    except Exception:
-        pass
 
     try:
         text = await asyncio.to_thread(get_campaign_followup, int(raw))
     except Exception:
         logger.exception("mailing followup db failed campaign=%s", raw)
+        try:
+            await call.answer()
+        except Exception:
+            pass
         if call.message:
             await call.message.answer("Не удалось загрузить текст. Попробуйте ещё раз.")
         return
+
+    if followup_is_booking_flow(text):
+        from bot.handlers.booking import begin_proverka_booking
+        from bot.utils.booking_texts import RESIDENT_SHOW_DATE, RESIDENT_SHOW_TIME
+
+        if state is None:
+            await call.answer("Не удалось начать бронь. Напишите боту /start.", show_alert=True)
+            return
+        await begin_proverka_booking(call, state, RESIDENT_SHOW_DATE, RESIDENT_SHOW_TIME)
+        return
+
+    try:
+        await call.answer()
+    except Exception:
+        pass
 
     if not text:
         if call.message:

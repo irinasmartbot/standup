@@ -6112,6 +6112,19 @@ async def mailing_test_page(request: web.Request) -> web.Response:
     button_text = (form.get("button_text") or "").strip()
     button_url = (form.get("button_url") or "").strip()
     followup_html = (form.get("followup_html") or "").strip()
+    from bot.db.mailing import form_starts_booking, resolve_mailing_button_fields
+
+    starts_booking = form_starts_booking(form.get("button_starts_booking"))
+    if starts_booking and not button_text:
+        return web.json_response(
+            {"error": "Для брони укажите текст кнопки, например «Забронировать»"},
+            status=400,
+        )
+    button_url, followup_html, _followup_until = resolve_mailing_button_fields(
+        starts_booking=starts_booking,
+        button_url=button_url,
+        followup_html=followup_html,
+    )
     disable_link_preview = (form.get("disable_link_preview") or "") in {
         "1",
         "on",
@@ -6303,7 +6316,21 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     button_text = (form.get("button_text") or "").strip()
     button_url = (form.get("button_url") or "").strip()
     followup_html = (form.get("followup_html") or "").strip()
-    followup_until = _form_text(form, "followup_until")
+    from bot.db.mailing import form_starts_booking, resolve_mailing_button_fields
+    from urllib.parse import quote
+
+    starts_booking = form_starts_booking(form.get("button_starts_booking"))
+    if starts_booking and not button_text:
+        raise web.HTTPFound(
+            "/admin?tab=mailing&m_err="
+            + quote("Для брони укажите текст кнопки, например «Забронировать»")
+        )
+    button_url, followup_html, followup_until = resolve_mailing_button_fields(
+        starts_booking=starts_booking,
+        button_url=button_url,
+        followup_html=followup_html,
+        followup_until=_form_text(form, "followup_until"),
+    )
     followup_until = _date_to_input(followup_until) or followup_until
     disable_link_preview = (form.get("disable_link_preview") or "") in {
         "1",
@@ -6336,10 +6363,16 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     from urllib.parse import quote
 
     from bot.db.admin_audit import log_admin_action
-    from bot.db.mailing import create_campaign, set_campaign_photo
+    from bot.db.mailing import create_campaign, parse_admin_datetime, set_campaign_photo
 
     try:
         filters = _mailing_filters_from_form(form)
+        send_when = _form_text(form, "send_when", "now") or "now"
+        scheduled_at = None
+        if send_when == "later":
+            scheduled_at = parse_admin_datetime(_form_text(form, "scheduled_at"))
+            if not scheduled_at:
+                raise ValueError("Для плана укажите дату и время")
         campaign = await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: create_campaign(
@@ -6356,6 +6389,7 @@ async def mailing_create_page(request: web.Request) -> web.Response:
                 disable_link_preview=disable_link_preview,
                 created_by=_admin_role(request, config) or "owner",
                 start=True,
+                scheduled_at=scheduled_at,
             ),
         )
     except Exception as exc:
@@ -6389,11 +6423,20 @@ async def mailing_create_page(request: web.Request) -> web.Response:
             "channel": channel,
             "total": campaign.get("total_count"),
             "interval_sec": interval,
+            "scheduled_at": str(campaign.get("scheduled_at") or ""),
         },
     )
-    flash = quote(
-        f"Кампания #{campaign.get('id')} запущена · {campaign.get('total_count')} получателей"
-    )
+    from bot.db.mailing import format_admin_datetime, is_campaign_scheduled
+
+    if is_campaign_scheduled(campaign):
+        when = format_admin_datetime(campaign.get("scheduled_at"))
+        flash = quote(
+            f"Кампания #{campaign.get('id')} запланирована на {when} · {campaign.get('total_count')} получателей"
+        )
+    else:
+        flash = quote(
+            f"Кампания #{campaign.get('id')} запущена · {campaign.get('total_count')} получателей"
+        )
     raise web.HTTPFound(f"/admin?tab=mailing&m_flash={flash}")
 
 
@@ -6461,6 +6504,127 @@ async def mailing_status_page(request: web.Request) -> web.Response:
     raise web.HTTPFound(f"/admin?tab=mailing&campaign={cid}")
 
 
+async def mailing_schedule_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin/login")
+    form = await request.post()
+    cid_raw = (form.get("campaign_id") or "").strip()
+    if not cid_raw.isdigit():
+        raise web.HTTPFound("/admin?tab=mailing")
+    cid = int(cid_raw)
+    send_now = (form.get("send_now") or "") in {"1", "on", "true", "yes"}
+    from urllib.parse import quote
+
+    from bot.db.admin_audit import log_admin_action
+    from bot.db.mailing import format_admin_datetime, set_campaign_schedule
+
+    try:
+        row = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: set_campaign_schedule(
+                cid,
+                scheduled_at=form.get("scheduled_at"),
+                send_now=send_now,
+            ),
+        )
+    except Exception as exc:
+        raise web.HTTPFound(
+            f"/admin?tab=mailing&m_err={quote(f'{type(exc).__name__}: {exc}'[:200])}"
+        )
+    log_admin_action(
+        actor_role=_admin_role(request, config) or "owner",
+        action="mailing_schedule",
+        entity_type="mailing_campaign",
+        entity_id=str(cid),
+        details={"send_now": send_now, "scheduled_at": str((row or {}).get("scheduled_at") or "")},
+    )
+    if send_now:
+        flash = quote(f"Кампания #{cid} поставлена в отправку сейчас")
+    else:
+        flash = quote(
+            f"Кампания #{cid} перенесена на {format_admin_datetime((row or {}).get('scheduled_at'))}"
+        )
+    raise web.HTTPFound(f"/admin?tab=mailing&campaign={cid}&m_flash={flash}")
+
+
+async def mailing_templates_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin/login")
+    form = await request.post()
+    from urllib.parse import quote
+
+    from bot.db.admin_audit import log_admin_action
+    from bot.db.mailing import MAILING_TEMPLATE_SPECS, save_mailing_templates
+
+    items = []
+    for spec in MAILING_TEMPLATE_SPECS:
+        key = spec["key"]
+        items.append(
+            {
+                "key": key,
+                "body_html": _form_text(form, f"tpl_{key}_body"),
+                "button_text": _form_text(form, f"tpl_{key}_button"),
+                "followup_html": _form_text(form, f"tpl_{key}_followup"),
+            }
+        )
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, save_mailing_templates, items)
+    except Exception as exc:
+        raise web.HTTPFound(
+            f"/admin?tab=mailing&m_err={quote(f'{type(exc).__name__}: {exc}'[:200])}"
+        )
+    log_admin_action(
+        actor_role=_admin_role(request, config) or "owner",
+        action="mailing_templates",
+        entity_type="mailing_template",
+        entity_id="all",
+        details={"keys": [spec["key"] for spec in MAILING_TEMPLATE_SPECS]},
+    )
+    raise web.HTTPFound(
+        f"/admin?tab=mailing&m_flash={quote('Шаблоны сохранены')}"
+    )
+
+
+async def mailing_retry_remainder_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin/login")
+    form = await request.post()
+    cid = (form.get("campaign_id") or "").strip()
+    if not cid.isdigit():
+        raise web.HTTPFound("/admin?tab=mailing")
+    from urllib.parse import quote
+
+    from bot.db.admin_audit import log_admin_action
+    from bot.db.mailing import create_remainder_campaign
+
+    try:
+        campaign = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: create_remainder_campaign(
+                int(cid),
+                created_by=_admin_role(request, config) or "owner",
+            ),
+        )
+    except Exception as exc:
+        raise web.HTTPFound(
+            f"/admin?tab=mailing&campaign={cid}&m_err={quote(f'{type(exc).__name__}: {exc}'[:200])}"
+        )
+    new_id = int(campaign.get("id") or 0)
+    total = int(campaign.get("total_count") or 0)
+    log_admin_action(
+        actor_role=_admin_role(request, config) or "owner",
+        action="mailing_retry_remainder",
+        entity_type="mailing_campaign",
+        entity_id=str(new_id),
+        details={"source_id": int(cid), "total": total},
+    )
+    flash = quote(f"Досылка #{new_id}: {total} чел. остаток очереди после #{cid}")
+    raise web.HTTPFound(f"/admin?tab=mailing&campaign={new_id}&m_flash={flash}")
+
+
 def create_app(config: AdminConfig | None = None) -> web.Application:
     from bot.admin import vk_entry
     from bot.admin.mailing_worker import start_mailing_worker
@@ -6484,6 +6648,9 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_post("/admin/mailing/preview", mailing_preview_page)
     app.router.add_post("/admin/mailing/create", mailing_create_page)
     app.router.add_post("/admin/mailing/status", mailing_status_page)
+    app.router.add_post("/admin/mailing/schedule", mailing_schedule_page)
+    app.router.add_post("/admin/mailing/templates", mailing_templates_page)
+    app.router.add_post("/admin/mailing/retry-remainder", mailing_retry_remainder_page)
     app.router.add_post("/admin/mailing/followup-until", mailing_followup_until_page)
     app.router.add_get("/admin/mailing/users-search", mailing_users_search_page)
     app.router.add_post("/admin/mailing/test", mailing_test_page)

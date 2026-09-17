@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import json
+
 from bot.db.mailing import (
     estimate_duration_sec,
+    format_admin_datetime,
     format_duration,
+    is_campaign_scheduled,
     list_campaigns,
+    list_mailing_templates,
+    remainder_after_limit,
+    to_datetime_local_value,
 )
 
 
@@ -60,10 +67,29 @@ def render_mailing_tab(
         interval = float(c.get("interval_sec") or 0)
         left = max(0, total - sent - failed - int(c.get("skipped_count") or 0))
         eta = format_duration(estimate_duration_sec(left, interval)) if status == "running" else "—"
+        status_label = STATUS_LABELS.get(status, status)
+        when_label = format_admin_datetime(c.get("scheduled_at")) or "—"
+        if is_campaign_scheduled(c):
+            status_label = "запланирована"
         actions = []
         actions.append(
             f'<a class="pill" href="/admin?tab=mailing&campaign={cid}">Текст и статистика</a>'
         )
+        if status in ("queued", "paused"):
+            local_val = to_datetime_local_value(c.get("scheduled_at"))
+            actions.append(
+                f'<form method="post" action="/admin/mailing/schedule" class="inline-form mailing-reschedule">'
+                f'<input type="hidden" name="campaign_id" value="{cid}">'
+                f'<input type="datetime-local" name="scheduled_at" value="{_h(local_val)}" required>'
+                f'<button type="submit">Перенести</button></form>'
+            )
+            actions.append(
+                f'<form method="post" action="/admin/mailing/schedule" class="inline-form">'
+                f'<input type="hidden" name="campaign_id" value="{cid}">'
+                f'<input type="hidden" name="send_now" value="1">'
+                f'<button type="submit" onclick="return confirm('
+                f"'Отправить рассылку #{cid} сейчас?');\">Сейчас</button></form>"
+            )
         if status in ("queued", "running"):
             actions.append(
                 f'<form method="post" action="/admin/mailing/status" class="inline-form">'
@@ -90,7 +116,8 @@ def render_mailing_tab(
             "<tr>"
             f"<td>{cid}</td>"
             f"<td>{_h(c.get('title'))}<br><span class='muted'>{_h(c.get('channel'))}</span></td>"
-            f"<td>{_h(STATUS_LABELS.get(status, status))}</td>"
+            f"<td>{_h(status_label)}"
+            f"<br><span class='muted'>{_h(when_label)}</span></td>"
             f"<td>{sent}/{total}"
             f"<br><span class='muted'>ошибки {failed}</span></td>"
             f"<td>{_h(eta)}</td>"
@@ -105,7 +132,7 @@ def render_mailing_tab(
         '<span class="details-action"><span class="closed-label">Развернуть</span>'
         '<span class="open-label">Свернуть</span></span></summary>'
         '<div class="table-wrap"><table class="users">'
-        "<thead><tr><th>id</th><th>Название</th><th>Статус</th>"
+        "<thead><tr><th>id</th><th>Название</th><th>Статус / время</th>"
         "<th>Прогресс</th><th>Осталось ≈</th><th></th></tr></thead>"
         f"<tbody>{''.join(rows) or '<tr><td colspan=\"6\" class=\"muted\">Пока пусто</td></tr>'}</tbody>"
         "</table></div>"
@@ -159,9 +186,32 @@ def render_mailing_tab(
         sent = int(detail.get("sent_count") or 0)
         failed = int(detail.get("failed_count") or 0)
         total_c = int(detail.get("total_count") or 0)
+        rem = {"count": 0}
+        try:
+            rem = remainder_after_limit(int(cid))
+        except Exception:
+            rem = {"count": 0}
+        rem_n = int(rem.get("count") or 0)
+        rem_form = ""
+        if rem_n > 0 and (detail.get("status") or "") in ("done", "cancelled", "paused"):
+            full_id = rem.get("full_id")
+            rem_form = (
+                '<form method="post" action="/admin/mailing/retry-remainder" '
+                'class="inline-form" style="margin:12px 0">'
+                f'<input type="hidden" name="campaign_id" value="{int(cid)}">'
+                f'<button type="submit" onclick="return confirm('
+                f"'Запустить досылку на {rem_n} человек из очереди #{full_id}? "
+                f"Кто уже был в #{int(cid)}, не получат повторно.');\">"
+                f"Дослать оставшимся из #{full_id} ({rem_n} чел.)</button>"
+                "<p class='muted' style='margin:8px 0 0'>"
+                "Берёт людей из полной очереди до лимита и вычитает тех, кто уже попал в эту рассылку. "
+                "Текст, картинка и кнопка — как в этом письме. Живые фильтры «заблокировал / уже слали» не используются."
+                "</p></form>"
+            )
         btn = (detail.get("button_text") or "").strip()
         btn_url = (detail.get("button_url") or "").strip()
         follow = (detail.get("followup_html") or "").strip()
+        from bot.db.mailing import followup_is_booking_flow, followup_preview_label
         body = detail.get("body_html") or ""
         preview_off = bool(detail.get("disable_link_preview"))
         until_raw = detail.get("followup_until")
@@ -174,11 +224,17 @@ def render_mailing_tab(
             f"превью ссылок: {'выкл' if preview_off else 'вкл'} · "
             f"кнопка до: {_h(until_val) or 'не задано'}</p>"
         )
-        follow_block = (
-            f"<p><b>После кнопки:</b></p><div class='mailing-msg-preview'>{follow}</div>"
-            if follow
-            else ""
-        )
+        follow_block = ""
+        if follow:
+            if followup_is_booking_flow(follow):
+                follow_block = (
+                    f"<p><b>После кнопки:</b> {_h(followup_preview_label(follow))}</p>"
+                )
+            else:
+                follow_block = (
+                    f"<p><b>После кнопки:</b></p>"
+                    f"<div class='mailing-msg-preview'>{follow}</div>"
+                )
         until_form = ""
         if follow:
             until_form = (
@@ -196,8 +252,10 @@ def render_mailing_tab(
             '<section class="card">'
             f"<h2>Кампания #{_h(cid)} · {_h(detail.get('title'))}</h2>"
             f"<p class='muted'>Статус: {_h(STATUS_LABELS.get(detail.get('status'), detail.get('status')))} · "
-            f"канал {_h(detail.get('channel'))} · интервал {_h(detail.get('interval_sec'))} сек</p>"
+            f"канал {_h(detail.get('channel'))} · интервал {_h(detail.get('interval_sec'))} сек"
+            f"{(' · план ' + format_admin_datetime(detail.get('scheduled_at'))) if detail.get('scheduled_at') else ''}</p>"
             f"<p><b>Статистика:</b> отправлено {sent} / {total_c} · ошибки {failed}</p>"
+            f"{rem_form}"
             "<p><b>Текст сообщения:</b></p>"
             f"<div class='mailing-msg-preview'>{body or '<span class=\"muted\">(пусто)</span>'}</div>"
             f"{msg_meta}{follow_block}{until_form}"
@@ -212,11 +270,53 @@ def render_mailing_tab(
             "</section>"
         )
 
-    form = """
+    templates = list_mailing_templates()
+    tpl_json = json.dumps(
+        {t["key"]: t for t in templates},
+        ensure_ascii=False,
+    ).replace("<", "\\u003c")
+    tpl_opts = ['<option value="">Без шаблона — вставить вручную</option>']
+    editor_blocks = []
+    for t in templates:
+        key = _h(t["key"])
+        tpl_opts.append(f'<option value="{key}">{_h(t["title"])}</option>')
+        editor_blocks.append(
+            '<div class="mailing-tpl-edit">'
+            f"<h3>{_h(t['title'])}</h3>"
+            "<label>Текст"
+            f'<textarea name="tpl_{key}_body" rows="6">{_h(t.get("body_html"))}</textarea></label>'
+            "<label>Текст кнопки"
+            f'<input type="text" name="tpl_{key}_button" value="{_h(t.get("button_text"))}" maxlength="40"></label>'
+            "<label>После кнопки"
+            f'<textarea name="tpl_{key}_followup" rows="2">{_h(t.get("followup_html"))}</textarea></label>'
+            "</div>"
+        )
+
+    form = f"""
 <section class="card mailing-compose">
   <h2>Новая рассылка</h2>
   <p class="muted">HTML: &lt;b&gt;жирный&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;, &lt;a href="..."&gt;ссылка&lt;/a&gt;. TG и VK.</p>
+  <details data-persist-key="mailing:templates-edit">
+    <summary><strong>Редактировать шаблоны текстов</strong>
+      <span class="details-action"><span class="closed-label">Развернуть</span>
+      <span class="open-label">Свернуть</span></span></summary>
+    <p class="muted">Сохраните 4 варианта один раз — потом только выбирайте шаблон в форме.</p>
+    <form method="post" action="/admin/mailing/templates" class="mailing-form">
+      {''.join(editor_blocks)}
+      <div class="mailing-actions">
+        <button type="submit">Сохранить шаблоны</button>
+      </div>
+    </form>
+  </details>
   <form method="post" action="/admin/mailing/create" enctype="multipart/form-data" class="mailing-form" id="mailing-form">
+    <div class="mailing-grid">
+      <label>Шаблон текста
+        <select id="mail-template-key">{''.join(tpl_opts)}</select>
+      </label>
+      <div class="mailing-actions" style="align-items:end">
+        <button type="button" id="mail-template-apply" class="mail-secondary-btn">Подставить шаблон</button>
+      </div>
+    </div>
     <label>Название
       <input type="text" name="title" placeholder="Анонс пятницы" maxlength="120">
     </label>
@@ -235,13 +335,27 @@ def render_mailing_tab(
     </label>
     <div class="mailing-grid">
       <label>Текст кнопки
-        <input type="text" name="button_text" maxlength="40" placeholder="Подробнее">
+        <input type="text" name="button_text" maxlength="40" placeholder="Забронировать">
       </label>
       <label>Ссылка кнопки (URL)
         <input type="url" name="button_url" placeholder="https://...">
       </label>
     </div>
-    <label>После нажатия кнопки (если нет URL) — доп. текст
+    <details class="mailing-cut" data-persist-key="mailing:resident-booking">
+      <summary><strong>Служебная опция (сольник 15.09)</strong>
+        <span class="details-action"><span class="closed-label">Развернуть</span>
+        <span class="open-label">Свернуть</span></span></summary>
+      <p class="muted">Дата шоу уже прошла — опция спрятана, логика брони не удалена.</p>
+      <label>
+        <input type="checkbox" name="button_starts_booking" value="booking_resident">
+        Кнопка запускает бронь сольника 15.09 (проверка материала)
+      </label>
+      <p class="muted" style="margin:0 0 12px">
+        Если галочка включена — URL и «после нажатия» не нужны.
+        Гость сразу попадает в сценарий имени и гостей, как с карточки проверки.
+      </p>
+    </details>
+    <label>После нажатия кнопки (если нет URL и нет брони выше) — доп. текст
       <textarea name="followup_html" rows="3" placeholder="Отлично! Вот детали..."></textarea>
     </label>
     <label>Кнопка актуальна до (дата шоу)
@@ -265,39 +379,54 @@ def render_mailing_tab(
       </label>
     </div>
     <fieldset class="mailing-row">
-      <legend>Фильтры аудитории</legend>
-      <label><input type="checkbox" name="exclude_blocked" value="1" checked> Исключить заблокировавших TG-бота</label>
-      <label><input type="checkbox" name="has_phone" value="1"> Только с телефоном</label>
-      <label><input type="checkbox" name="exclude_today_bookings" value="1"> Не слать тем, у кого сегодня шоу (активная бронь или билет)</label>
+      <legend>Когда отправить</legend>
+      <label><input type="radio" name="send_when" value="now" checked> Сразу</label>
+      <label><input type="radio" name="send_when" value="later"> Запланировать</label>
+      <label>Дата и время (МСК)
+        <input type="datetime-local" name="scheduled_at" id="mail-scheduled-at">
+      </label>
+      <p class="muted" style="margin:6px 0 0">Аудитория считается сейчас, письма уйдут в выбранное время. Можно отменить или перенести в истории.</p>
     </fieldset>
-    <fieldset class="mailing-row">
-      <legend>Статус брони</legend>
-      <p class="muted" style="margin:0 0 8px">Если ничего не выбрано — вся база канала (без фильтра по броням). Брони <b>розыгрыша</b> в эти статусы не входят.</p>
-      <label><input type="checkbox" name="booking_statuses" value="active"> Активная (бронь или билет)</label>
-      <label><input type="checkbox" name="booking_statuses" value="booked"> Только бронь без билета</label>
-      <label><input type="checkbox" name="booking_statuses" value="confirmed"> Только подтверждённый билет</label>
-      <label><input type="checkbox" name="booking_statuses" value="cancelled"> Отмена</label>
-      <label><input type="checkbox" name="booking_statuses" value="annulled"> Аннулировано</label>
-    </fieldset>
-    <fieldset class="mailing-row">
-      <legend>Дата шоу для статуса выше</legend>
-      <p class="muted" style="margin:0 0 8px">Выберите дату или диапазон дат (день мероприятия в афише). Одна дата = только этот день.</p>
-      <div class="mailing-grid">
-        <label>Дата
-          <input type="date" name="date_from">
-        </label>
-        <label>По дату (если диапазон)
-          <input type="date" name="date_to">
-        </label>
-      </div>
-    </fieldset>
+    <details class="mailing-cut" data-persist-key="mailing:audience-filters">
+      <summary><strong>Фильтры аудитории</strong>
+        <span class="details-action"><span class="closed-label">Развернуть</span>
+        <span class="open-label">Свернуть</span></span></summary>
+      <p class="muted">Нужны редко: статус брони, дата шоу, телефон, «не слать у кого сегодня шоу».</p>
+      <fieldset class="mailing-row">
+        <legend>Фильтры аудитории</legend>
+        <label><input type="checkbox" name="exclude_blocked" value="1" checked> Исключить заблокировавших TG-бота</label>
+        <label><input type="checkbox" name="has_phone" value="1"> Только с телефоном</label>
+        <label><input type="checkbox" name="exclude_today_bookings" value="1"> Не слать тем, у кого сегодня шоу (активная бронь или билет)</label>
+      </fieldset>
+      <fieldset class="mailing-row">
+        <legend>Статус брони</legend>
+        <p class="muted" style="margin:0 0 8px">Если ничего не выбрано — вся база канала (без фильтра по броням). Брони <b>розыгрыша</b> в эти статусы не входят.</p>
+        <label><input type="checkbox" name="booking_statuses" value="active"> Активная (бронь или билет)</label>
+        <label><input type="checkbox" name="booking_statuses" value="booked"> Только бронь без билета</label>
+        <label><input type="checkbox" name="booking_statuses" value="confirmed"> Только подтверждённый билет</label>
+        <label><input type="checkbox" name="booking_statuses" value="cancelled"> Отмена</label>
+        <label><input type="checkbox" name="booking_statuses" value="annulled"> Аннулировано</label>
+      </fieldset>
+      <fieldset class="mailing-row">
+        <legend>Дата шоу для статуса выше</legend>
+        <p class="muted" style="margin:0 0 8px">Выберите дату или диапазон дат (день мероприятия в афише). Одна дата = только этот день.</p>
+        <div class="mailing-grid">
+          <label>Дата
+            <input type="date" name="date_from">
+          </label>
+          <label>По дату (если диапазон)
+            <input type="date" name="date_to">
+          </label>
+        </div>
+      </fieldset>
+    </details>
     <div class="mailing-preview" id="mail-preview">
       <span class="muted">Нажмите «Посчитать аудиторию», чтобы увидеть число и примерное время.</span>
     </div>
     <div class="mailing-actions">
       <button type="button" id="mail-preview-btn">Посчитать аудиторию</button>
       <button type="button" id="mail-reset-filters-btn" class="mail-secondary-btn">Сбросить фильтры</button>
-      <button type="submit">Запустить рассылку</button>
+      <button type="submit" id="mail-submit-btn">Запустить рассылку</button>
     </div>
   </form>
 </section>
@@ -324,7 +453,10 @@ def render_mailing_tab(
 
     raffle_cancel = f"""
 <section class="card mailing-raffle-cancel">
-  <h2>Отмена шоу + даты розыгрыша (Telegram)</h2>
+  <details data-persist-key="mailing:raffle-cancel">
+  <summary><strong>Отмена шоу + даты розыгрыша (Telegram)</strong>
+    <span class="details-action"><span class="closed-label">Развернуть</span>
+    <span class="open-label">Свернуть</span></span></summary>
   <p class="muted">
     Сбрасывает блок розыгрыша у гостя, шлёт ваш текст и меню дат <b>BEST</b>
     (без сегодняшней даты) — как в боте розыгрыша. Только Telegram.
@@ -507,24 +639,30 @@ def render_mailing_tab(
   }});
 }})();
 </script>
+  </details>
+</section>
 """
 
     form = (
         form
         + """
 <script>
+var MAIL_TEMPLATES = """
+        + tpl_json
+        + """;
 (function(){
   var form = document.getElementById('mailing-form');
   var btn = document.getElementById('mail-preview-btn');
   var box = document.getElementById('mail-preview');
   if (!form || !btn || !box) return;
-  var STORAGE_KEY = 'admin-mailing-draft-v6';
+  var STORAGE_KEY = 'admin-mailing-draft-v7';
   try {
     sessionStorage.removeItem('admin-mailing-draft-v1');
     sessionStorage.removeItem('admin-mailing-draft-v2');
     sessionStorage.removeItem('admin-mailing-draft-v3');
     sessionStorage.removeItem('admin-mailing-draft-v4');
     sessionStorage.removeItem('admin-mailing-draft-v5');
+    sessionStorage.removeItem('admin-mailing-draft-v6');
   } catch (e) {}
 
   function saveDraft(){
@@ -566,6 +704,7 @@ def render_mailing_tab(
         continue;
       }
       if (el.type === 'checkbox') {
+        if (el.name === 'button_starts_booking') continue;
         var list = data[el.name];
         if (!Array.isArray(list)) list = [];
         el.checked = list.indexOf(el.value) !== -1;
@@ -596,6 +735,42 @@ def render_mailing_tab(
   restoreDraft();
   form.addEventListener('input', saveDraft);
   form.addEventListener('change', saveDraft);
+
+  var tplSel = document.getElementById('mail-template-key');
+  var tplBtn = document.getElementById('mail-template-apply');
+  if (tplBtn && tplSel) {
+    tplBtn.addEventListener('click', function(){
+      var key = tplSel.value;
+      if (!key) return;
+      var t = MAIL_TEMPLATES[key];
+      if (!t) return;
+      var body = form.querySelector('[name=body_html]');
+      if (body && body.value.trim() && !confirm('Заменить текущий текст шаблоном «' + (t.title || key) + '»?')) return;
+      if (body) body.value = t.body_html || '';
+      var ch = form.querySelector('input[name=channel][value="' + t.channel + '"]');
+      if (ch) ch.checked = true;
+      var btnEl = form.querySelector('[name=button_text]');
+      if (btnEl && t.button_text) btnEl.value = t.button_text;
+      var fu = form.querySelector('[name=followup_html]');
+      if (fu && t.followup_html) fu.value = t.followup_html;
+      var title = form.querySelector('[name=title]');
+      if (title && !title.value.trim()) title.value = t.title || '';
+      saveDraft();
+    });
+  }
+
+  function syncSendWhen(){
+    var later = form.querySelector('input[name=send_when][value=later]');
+    var submit = document.getElementById('mail-submit-btn');
+    var at = document.getElementById('mail-scheduled-at');
+    var isLater = !!(later && later.checked);
+    if (at) at.required = isLater;
+    if (submit) submit.textContent = isLater ? 'Запланировать рассылку' : 'Запустить рассылку';
+  }
+  form.querySelectorAll('input[name=send_when]').forEach(function(el){
+    el.addEventListener('change', syncSendWhen);
+  });
+  syncSendWhen();
 
   var resetBtn = document.getElementById('mail-reset-filters-btn');
   if (resetBtn) {
@@ -780,10 +955,27 @@ def render_mailing_tab(
   .mailing-compose input[type=url],
   .mailing-compose input[type=number],
   .mailing-compose input[type=date],
+  .mailing-compose input[type=datetime-local],
+  .mailing-compose select,
   .mailing-compose textarea,
   .mailing-compose input[type=file] {
     display:block; width:100%; margin-top:4px; padding:8px 10px;
     border:1px solid var(--line); border-radius:10px; font:inherit;
+  }
+  .mailing-compose details { margin:12px 0; }
+  .mailing-compose summary, .mailing-raffle-cancel summary {
+    cursor:pointer; display:flex; justify-content:space-between; align-items:center;
+    gap:12px; list-style:none;
+  }
+  .mailing-compose summary::-webkit-details-marker,
+  .mailing-raffle-cancel summary::-webkit-details-marker { display:none; }
+  .mailing-tpl-edit {
+    margin:12px 0; padding:12px; border:1px solid var(--line); border-radius:12px; background:#f8fafc;
+  }
+  .mailing-tpl-edit h3 { margin:0 0 8px; font-size:15px; }
+  .mailing-reschedule { display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .mailing-reschedule input[type=datetime-local] {
+    padding:6px 8px; border-radius:8px; border:1px solid var(--line); font:inherit;
   }
   .mailing-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
   .mailing-row { border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin:12px 0; }

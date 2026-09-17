@@ -65,6 +65,77 @@ def test_callback_parsing():
     print("callback parsing: OK")
 
 
+def test_mailing_booking_button_fields():
+    from bot.db.mailing import (
+        MAIL_FLOW_BOOKING_RESIDENT,
+        followup_is_booking_flow,
+        resolve_mailing_button_fields,
+    )
+
+    url, follow, until = resolve_mailing_button_fields(
+        starts_booking=True,
+        button_url="https://example.com",
+        followup_html="hello",
+        followup_until="",
+    )
+    assert url == ""
+    assert follow == MAIL_FLOW_BOOKING_RESIDENT
+    assert followup_is_booking_flow(follow)
+    assert until == "2026-09-15"
+
+    url2, follow2, until2 = resolve_mailing_button_fields(
+        starts_booking=False,
+        button_url="https://example.com",
+        followup_html="hello",
+        followup_until="2026-10-01",
+    )
+    assert url2 == "https://example.com"
+    assert follow2 == "hello"
+    assert until2 == "2026-10-01"
+    print("mailing booking button fields: OK")
+
+
+def test_mailing_schedule_and_templates():
+    from datetime import timedelta
+
+    from bot.db.mailing import (
+        MAILING_TEMPLATE_KEYS,
+        format_admin_datetime,
+        is_campaign_scheduled,
+        parse_admin_datetime,
+        to_datetime_local_value,
+    )
+    from bot.utils.ticket import now_msk
+
+    dt = parse_admin_datetime("2026-09-20T19:30")
+    assert dt is not None
+    assert dt.tzinfo is not None
+    assert dt.hour == 19 and dt.minute == 30
+    assert format_admin_datetime(dt) == "20.09.2026 19:30"
+    assert to_datetime_local_value(dt) == "2026-09-20T19:30"
+
+    future = now_msk() + timedelta(hours=2)
+    past = now_msk() - timedelta(hours=2)
+    assert is_campaign_scheduled({"status": "queued", "scheduled_at": future})
+    assert not is_campaign_scheduled({"status": "queued", "scheduled_at": past})
+    assert not is_campaign_scheduled({"status": "running", "scheduled_at": future})
+    assert not is_campaign_scheduled({"status": "queued", "scheduled_at": None})
+    assert MAILING_TEMPLATE_KEYS == ("best_tg", "best_vk", "hitloto_tg", "hitloto_vk")
+    from bot.db.mailing import MAILING_TEMPLATE_SPECS
+
+    by_key = {item["key"]: item for item in MAILING_TEMPLATE_SPECS}
+    assert "хочу билет" in by_key["best_vk"]["body_html"]
+    assert by_key["best_vk"]["button_text"] == "хочу билет"
+    assert "Сергия Радонежского" in by_key["best_vk"]["followup_html"]
+    assert "@ccoverr" in by_key["best_tg"]["body_html"]
+    assert not by_key["best_tg"]["followup_html"]
+    assert "01 августа" in by_key["hitloto_vk"]["body_html"]
+    assert "20:30" in by_key["hitloto_vk"]["followup_html"]
+    assert "@ccoverr" in by_key["hitloto_tg"]["body_html"]
+    assert not by_key["hitloto_tg"]["followup_html"]
+    print("mailing schedule and templates: OK")
+
+
 def test_db_schema():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         path = tmp.name
@@ -122,6 +193,8 @@ def test_vk_message_item_has_photo():
 
 async def main():
     test_callback_parsing()
+    test_mailing_booking_button_fields()
+    test_mailing_schedule_and_templates()
     test_db_schema()
     test_vk_message_item_has_photo()
     events = await load_events()

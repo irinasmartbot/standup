@@ -225,7 +225,8 @@ CREATE TABLE IF NOT EXISTS mailing_campaigns (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
-    created_by TEXT NOT NULL DEFAULT 'owner'
+    created_by TEXT NOT NULL DEFAULT 'owner',
+    scheduled_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS mailing_recipients (
@@ -252,3 +253,18 @@ CREATE INDEX IF NOT EXISTS idx_mailing_recipients_user_sent
 
 CREATE INDEX IF NOT EXISTS idx_mailing_campaigns_status
     ON mailing_campaigns (status, id);
+
+CREATE INDEX IF NOT EXISTS idx_mailing_campaigns_queued_at
+    ON mailing_campaigns (scheduled_at, id)
+    WHERE status = 'queued';
+
+CREATE TABLE IF NOT EXISTS mailing_templates (
+    key TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    channel TEXT NOT NULL
+        CHECK (channel IN ('telegram', 'vkontakte', 'both')),
+    body_html TEXT NOT NULL DEFAULT '',
+    button_text TEXT NOT NULL DEFAULT '',
+    followup_html TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
