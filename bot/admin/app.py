@@ -6112,19 +6112,6 @@ async def mailing_test_page(request: web.Request) -> web.Response:
     button_text = (form.get("button_text") or "").strip()
     button_url = (form.get("button_url") or "").strip()
     followup_html = (form.get("followup_html") or "").strip()
-    from bot.db.mailing import form_starts_booking, resolve_mailing_button_fields
-
-    starts_booking = form_starts_booking(form.get("button_starts_booking"))
-    if starts_booking and not button_text:
-        return web.json_response(
-            {"error": "Для брони укажите текст кнопки, например «Забронировать»"},
-            status=400,
-        )
-    button_url, followup_html, _followup_until = resolve_mailing_button_fields(
-        starts_booking=starts_booking,
-        button_url=button_url,
-        followup_html=followup_html,
-    )
     disable_link_preview = (form.get("disable_link_preview") or "") in {
         "1",
         "on",
@@ -6316,22 +6303,9 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     button_text = (form.get("button_text") or "").strip()
     button_url = (form.get("button_url") or "").strip()
     followup_html = (form.get("followup_html") or "").strip()
-    from bot.db.mailing import form_starts_booking, resolve_mailing_button_fields
-    from urllib.parse import quote
-
-    starts_booking = form_starts_booking(form.get("button_starts_booking"))
-    if starts_booking and not button_text:
-        raise web.HTTPFound(
-            "/admin?tab=mailing&m_err="
-            + quote("Для брони укажите текст кнопки, например «Забронировать»")
-        )
-    button_url, followup_html, followup_until = resolve_mailing_button_fields(
-        starts_booking=starts_booking,
-        button_url=button_url,
-        followup_html=followup_html,
-        followup_until=_form_text(form, "followup_until"),
+    followup_until = _date_to_input(_form_text(form, "followup_until")) or _form_text(
+        form, "followup_until"
     )
-    followup_until = _date_to_input(followup_until) or followup_until
     disable_link_preview = (form.get("disable_link_preview") or "") in {
         "1",
         "on",

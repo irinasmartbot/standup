@@ -129,7 +129,8 @@ FOLLOWUP_EXPIRED_TEXT = (
     "Здравствуйте! Это предложение уже неактуально — мероприятие прошло 😊\n"
     "Следите за новостями в нашем сообществе: там появляются свежие анонсы и розыгрыши ☝️"
 )
-# Служебный follow-up: кнопка запускает бронь сольника 15.09, не доп. текст.
+# Старый маркер кнопки сольника 15.09. Новые кампании его не ставят;
+# клик по старым кнопкам отдаёт FOLLOWUP_EXPIRED_TEXT.
 MAIL_FLOW_BOOKING_RESIDENT = "__flow:booking_resident__"
 
 
@@ -140,7 +141,7 @@ def followup_is_booking_flow(text: str | None) -> bool:
 def followup_preview_label(text: str | None) -> str:
     raw = (text or "").strip()
     if followup_is_booking_flow(raw):
-        return "Сценарий брони: сольник 15.09 (проверка материала)"
+        return "Сценарий брони (шоу уже прошло)"
     return raw
 
 
@@ -166,9 +167,7 @@ def resolve_mailing_button_fields(
     if not starts_booking:
         return (button_url or "").strip(), (followup_html or "").strip(), until
     if not until:
-        from bot.utils.booking_texts import resident_show_until_iso
-
-        until = resident_show_until_iso()
+        until = "2026-09-15"
     return "", MAIL_FLOW_BOOKING_RESIDENT, until
 # Повтор того же текста после кнопки рассылки — не чаще чем раз в 30 мин.
 MAIL_FOLLOWUP_DEDUPE_SEC = 1800.0

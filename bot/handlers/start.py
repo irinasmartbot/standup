@@ -435,13 +435,19 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
     await state.clear()
     await refresh_user_commands(message.bot, message.from_user.id)
     payload = (command.args or "").strip()
+    if not payload:
+        text = (message.text or "").strip()
+        parts = text.split(maxsplit=1)
+        if len(parts) > 1:
+            payload = parts[1].strip()
+    payload_key = payload.casefold()
     track_event(
         EVENT_BOT_START,
         telegram_id=message.from_user.id,
         props={"payload": payload or None},
     )
 
-    if payload == "standup_rozygr":
+    if payload_key == "standup_rozygr":
         from bot.handlers.rozygrysh import send_raffle_start
         await send_raffle_start(message, state)
         return
@@ -475,6 +481,17 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
         # бесплатная бронь «Проверка материала» (дата / площадка)
         from bot.handlers.booking import check_format_entry
         await check_format_entry(message)
+        return
+
+    if payload_key in {
+        "booking_resident",
+        "pushkin",
+        "standup_booking_resident",
+        "standup_pushkin",
+    }:
+        from bot.db.mailing import FOLLOWUP_EXPIRED_TEXT
+
+        await message.answer(FOLLOWUP_EXPIRED_TEXT)
         return
 
     if payload == PAID_BEST_START:

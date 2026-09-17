@@ -46,6 +46,22 @@ https://go.moscowstandupshow.ru/vk-mini/start/offline_gift
 
 Писать «начать» не нужно.
 
+## Старые ссылки сольника 15.09
+
+Шоу уже прошло. Старые URL не 404 и не открывают бронь — показывают, что мероприятие неактуально:
+
+```text
+https://go.moscowstandupshow.ru/vk/booking_resident
+https://go.moscowstandupshow.ru/vk/pushkin
+https://go.moscowstandupshow.ru/vk-mini/start/booking_resident
+https://vk.com/app54704296_-225298932#flow=booking_resident
+https://vk.ru/app54704296_-225298932#flow=pushkin
+https://t.me/StandUp_Show_bot?start=booking_resident
+https://t.me/StandUp_Show_bot?start=pushkin
+```
+
+То же для `ref`/`cmd` `booking_resident` / `pushkin` в VK и для старых кнопок рассылки с маркером `__flow:booking_resident__`. Новые рассылки эту бронь больше не ставят.
+
 ## Тест передачи источника в VK-бот
 
 Текущая ссылка сайта открывает VK Mini App:

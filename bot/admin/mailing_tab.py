@@ -341,21 +341,7 @@ def render_mailing_tab(
         <input type="url" name="button_url" placeholder="https://...">
       </label>
     </div>
-    <details class="mailing-cut" data-persist-key="mailing:resident-booking">
-      <summary><strong>Служебная опция (сольник 15.09)</strong>
-        <span class="details-action"><span class="closed-label">Развернуть</span>
-        <span class="open-label">Свернуть</span></span></summary>
-      <p class="muted">Дата шоу уже прошла — опция спрятана, логика брони не удалена.</p>
-      <label>
-        <input type="checkbox" name="button_starts_booking" value="booking_resident">
-        Кнопка запускает бронь сольника 15.09 (проверка материала)
-      </label>
-      <p class="muted" style="margin:0 0 12px">
-        Если галочка включена — URL и «после нажатия» не нужны.
-        Гость сразу попадает в сценарий имени и гостей, как с карточки проверки.
-      </p>
-    </details>
-    <label>После нажатия кнопки (если нет URL и нет брони выше) — доп. текст
+    <label>После нажатия кнопки (если нет URL) — доп. текст
       <textarea name="followup_html" rows="3" placeholder="Отлично! Вот детали..."></textarea>
     </label>
     <label>Кнопка актуальна до (дата шоу)
@@ -704,7 +690,6 @@ var MAIL_TEMPLATES = """
         continue;
       }
       if (el.type === 'checkbox') {
-        if (el.name === 'button_starts_booking') continue;
         var list = data[el.name];
         if (!Array.isArray(list)) list = [];
         el.checked = list.indexOf(el.value) !== -1;

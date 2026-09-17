@@ -58,6 +58,17 @@ FLOWS: dict[str, dict[str, Any]] = {
 
 # После модерации снова показываем все входные сценарии mini app.
 MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking", "raffle", "offline_gift")
+# Прямые ссылки с сайта, без кнопки в общем меню mini app.
+MINI_APP_DIRECT_FLOWS: tuple[str, ...] = ()
+EXPIRED_DIRECT_FLOWS: frozenset[str] = frozenset(
+    {
+        "booking_resident",
+        "pushkin",
+        "resident",
+        "standup_pushkin",
+        "standup_booking_resident",
+    }
+)
 
 _ENTRY_COOLDOWN_SEC = 45.0
 _MINI_FLOW_HANDOFF_TTL_SEC = 300.0
@@ -115,16 +126,20 @@ def _mini_app_vk_url(
     short: bool = False,
     cid: str = "",
     source: str = "",
+    with_group: bool = False,
 ) -> str:
     """Ссылка mini app внутри VK.
 
     short=True → vk.ru/app{id}#flow=… (лучше на телефоне; без _-group).
     short=False → vk.com/app{id}_-{group}#flow=… (канон, на ПК hash часто режется).
+    with_group=True на short даёт vk.ru/app{id}_-{group}#flow=… — как ссылки с сайта.
     """
     app_id = _env_mini_app_id() or "54704296"
     if short:
         host = "https://vk.ru"
-        group_suffix = ""
+        group_suffix = (
+            f"_-{int(settings.group_id)}" if with_group and settings.group_id else ""
+        )
     else:
         host = "https://vk.com"
         group_suffix = f"_-{int(settings.group_id)}" if settings.group_id else ""
@@ -740,6 +755,17 @@ def _html_response(text: str) -> web.Response:
     )
 
 
+def _show_passed_html() -> str:
+    return """<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Шоу уже прошло</title></head>
+<body style="font-family:Arial,sans-serif;max-width:480px;margin:48px auto;padding:0 16px;text-align:center;color:#111">
+<p>Это мероприятие уже прошло 😊</p>
+<p><a href="/vk/booking">Актуальная афиша</a></p>
+</body></html>"""
+
+
 async def landing_booking(request: web.Request) -> web.Response:
     """Одна простая ссылка: всегда уводим в рабочий mini app #flow=booking."""
     cid = _request_cid(request)
@@ -763,6 +789,10 @@ async def landing_offline_gift(request: web.Request) -> web.Response:
     settings = load_vk_settings()
     target = _mini_app_vk_url(settings, "offline_gift", short=True, cid=cid, source=source)
     return _html_response(_mobile_vk_jump_html("offline_gift", target))
+
+
+async def landing_booking_resident(request: web.Request) -> web.Response:
+    return _html_response(_show_passed_html())
 
 
 def _vk_me_path(community_link: str, group_id: int) -> str:
@@ -791,9 +821,9 @@ def _mini_app_html(default_flow: str = "") -> str:
             "lead": value["lead"],
         }
         for key, value in FLOWS.items()
-        if key in visible
+        if key in visible or key in MINI_APP_DIRECT_FLOWS
     }
-    if default_flow and default_flow not in visible:
+    if default_flow and default_flow not in FLOWS:
         default_flow = visible[0] if visible else ""
 
     if not ready:
@@ -809,10 +839,19 @@ def _mini_app_html(default_flow: str = "") -> str:
             )
             for key in visible
         )
+        direct_buttons_html = "\n".join(
+            (
+                f'          <button type="button" class="cta" data-flow="{escape(key)}" hidden>'
+                f'{escape(FLOWS[key]["button"])}</button>'
+            )
+            for key in MINI_APP_DIRECT_FLOWS
+            if key in FLOWS
+        )
         body = f"""
         <p id="lead" class="lead">Забронируйте места на шоу — продолжение в личке VK.</p>
         <div class="actions" id="actions">
 {buttons_html}
+{direct_buttons_html}
         </div>
         <p id="status" class="status" hidden></p>
         """
@@ -900,9 +939,11 @@ def _mini_app_html(default_flow: str = "") -> str:
   var vkMePath = {json.dumps(vk_me)};
   var serverFlow = {json.dumps(default_flow if default_flow in FLOWS else "")};
   var flowLabels = {json.dumps(flow_labels, ensure_ascii=False)};
+  var directFlows = {json.dumps(list(MINI_APP_DIRECT_FLOWS))};
   var currentFlow = null;
   var sending = false;
   var autoStarted = false;
+  var expiredShown = false;
   var permissionRequested = false;
   var dialogReady = false;
   var dialogOpened = false;
@@ -1034,6 +1075,13 @@ def _mini_app_html(default_flow: str = "") -> str:
     gift: "offline_gift",
     offline_gift: "offline_gift"
   }};
+  var EXPIRED_FLOWS = {{
+    booking_resident: true,
+    pushkin: true,
+    resident: true,
+    standup_pushkin: true,
+    standup_booking_resident: true
+  }};
 
   function normalizeFlow(value) {{
     if (!value) return "";
@@ -1041,6 +1089,52 @@ def _mini_app_html(default_flow: str = "") -> str:
     if (flowLabels[key]) return key;
     var aliased = FLOW_ALIASES[key] || "";
     return flowLabels[aliased] ? aliased : "";
+  }}
+
+  function rawFlowKey(value) {{
+    if (!value) return "";
+    var params = parseHashParams(value);
+    var first = String(value).replace(/^#/, "").replace(/^\\?/, "").split("&")[0];
+    if (first && first.indexOf("=") === -1) return first.trim();
+    return String(
+      params.get("flow") || params.get("start") || params.get("start_param") || ""
+    ).trim();
+  }}
+
+  function isExpiredFlow(value) {{
+    return !!EXPIRED_FLOWS[String(value || "").trim()];
+  }}
+
+  function expiredFromLocation() {{
+    var search = new URLSearchParams(window.location.search || "");
+    return (
+      isExpiredFlow(rawFlowKey(window.location.hash || "")) ||
+      isExpiredFlow(rawFlowKey(search.get("flow") || "")) ||
+      isExpiredFlow(rawFlowKey(search.get("hash") || "")) ||
+      isExpiredFlow(rawFlowKey(search.get("vk_hash") || "")) ||
+      isExpiredFlow(rawFlowKey(search.get("start_param") || ""))
+    );
+  }}
+
+  function expiredFromLaunchParams(data) {{
+    if (!data) return false;
+    return (
+      isExpiredFlow(rawFlowKey(data.hash || "")) ||
+      isExpiredFlow(rawFlowKey(data.vk_hash || "")) ||
+      isExpiredFlow(rawFlowKey(data.start_param || "")) ||
+      isExpiredFlow(rawFlowKey(data.flow || ""))
+    );
+  }}
+
+  function showExpiredShow() {{
+    expiredShown = true;
+    currentFlow = null;
+    autoStarted = true;
+    sending = true;
+    if (titleEl) titleEl.textContent = "Шоу уже прошло";
+    if (leadEl) leadEl.textContent = "Это мероприятие уже прошло 😊";
+    if (actionsEl) actionsEl.hidden = true;
+    setStatus("Следите за анонсами в сообществе — там появляются свежие шоу.", true);
   }}
 
   function parseHashParams(value) {{
@@ -1494,9 +1588,14 @@ def _mini_app_html(default_flow: str = "") -> str:
     var type = raw.type || (raw.detail && raw.detail.type);
     var data = raw.data || (raw.detail && raw.detail.data) || {{}};
     if (type !== "VKWebAppLocationChanged" && type !== "VKWebAppChangeFragment") return;
-    var flow = parseFlowValue(data.location || data.hash || data.fragment || "");
-    var fragCid = parseCidValue(data.location || data.hash || data.fragment || "");
-    var fragSource = parseSourceValue(data.location || data.hash || data.fragment || "");
+    var loc = data.location || data.hash || data.fragment || "";
+    if (isExpiredFlow(rawFlowKey(loc))) {{
+      showExpiredShow();
+      return;
+    }}
+    var flow = parseFlowValue(loc);
+    var fragCid = parseCidValue(loc);
+    var fragSource = parseSourceValue(loc);
     if (fragCid) detectedCid = fragCid;
     if (fragSource) detectedSource = fragSource;
     if (flow) {{
@@ -1535,7 +1634,7 @@ def _mini_app_html(default_flow: str = "") -> str:
     actionsEl.hidden = false;
     actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
       var flow = button.getAttribute("data-flow");
-      if (!flowLabels[flow]) {{
+      if (!flowLabels[flow] || directFlows.indexOf(flow) !== -1) {{
         button.hidden = true;
         button.style.display = "none";
         return;
@@ -1551,7 +1650,9 @@ def _mini_app_html(default_flow: str = "") -> str:
   var earlyFlow = flowFromLocation();
   detectedCid = cidFromLocation();
   detectedSource = sourceFromLocation();
-  if (earlyFlow) {{
+  if (expiredFromLocation()) {{
+    showExpiredShow();
+  }} else if (earlyFlow) {{
     setFlow(earlyFlow, true);
     showCidDebug("early");
   }} else {{
@@ -1569,7 +1670,9 @@ def _mini_app_html(default_flow: str = "") -> str:
     rememberLaunchParams(data);
     var flow = resolveFlow(data) || currentFlow;
     showCidDebug("launch");
-    if (flow) {{
+    if (expiredShown || expiredFromLaunchParams(data) || expiredFromLocation()) {{
+      showExpiredShow();
+    }} else if (flow) {{
       autoStart(flow);
     }} else {{
       showAllFlows();
@@ -1579,7 +1682,8 @@ def _mini_app_html(default_flow: str = "") -> str:
     detectedCid = detectedCid || cidFromLocation();
     detectedSource = detectedSource || sourceFromLocation();
     showCidDebug("launch-fallback");
-    if (flow) autoStart(flow);
+    if (expiredShown || expiredFromLocation()) showExpiredShow();
+    else if (flow) autoStart(flow);
     else showAllFlows();
   }});
 }})();
@@ -1663,12 +1767,16 @@ def _mini_app_html(default_flow: str = "") -> str:
 
 async def mini_app_page(request: web.Request) -> web.Response:
     query_flow = str(request.query.get("flow") or "").strip()
+    if query_flow in EXPIRED_DIRECT_FLOWS:
+        return _html_response(_show_passed_html())
     default_flow = query_flow if query_flow in FLOWS else _mini_flow_from_handoff(request)
     return _html_response(_mini_app_html(default_flow))
 
 
 async def mini_app_start(request: web.Request) -> web.Response:
     flow_key = str(request.match_info.get("flow") or "").strip()
+    if flow_key in EXPIRED_DIRECT_FLOWS:
+        return _html_response(_show_passed_html())
     if flow_key not in FLOWS:
         raise web.HTTPNotFound(text="Unknown VK Mini App flow")
     cid = _request_cid(request)
@@ -1829,7 +1937,10 @@ async def mini_entry_post(request: web.Request) -> web.Response:
     flow_key = str((data or {}).get("flow") or "").strip()
     if flow_key not in FLOWS:
         return web.json_response({"ok": False, "error": "Неизвестный сценарий."}, status=400)
-    if flow_key not in MINI_APP_VISIBLE_FLOWS:
+    if (
+        flow_key not in MINI_APP_VISIBLE_FLOWS
+        and flow_key not in MINI_APP_DIRECT_FLOWS
+    ):
         return web.json_response(
             {"ok": False, "error": "Этот сценарий сейчас недоступен."},
             status=400,
@@ -1914,5 +2025,7 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/vk/booking", landing_booking)
     app.router.add_get("/vk/raffle", landing_raffle)
     app.router.add_get("/vk/offline-gift", landing_offline_gift)
+    app.router.add_get("/vk/booking_resident", landing_booking_resident)
+    app.router.add_get("/vk/pushkin", landing_booking_resident)
     app.router.add_post("/vk/entry", entry_post)
     app.router.add_post("/vk-mini/entry", mini_entry_post)

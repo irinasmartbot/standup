@@ -81,6 +81,12 @@ VK_CHANNEL = "vkontakte"
 # (ссылка вида vk.com/club...?ref= НЕ передаёт ref в message_new).
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
 _BOOKING_REF_VALUES = frozenset({"standup_book", "booking", "book", "бронь", "proverka"})
+_EXPIRED_SHOW_REF_VALUES = frozenset({
+    "standup_booking_resident",
+    "booking_resident",
+    "standup_pushkin",
+    "pushkin",
+})
 _OFFLINE_GIFT_REF_VALUES = frozenset({"offline_gift", "gift"})
 _BOOKING_REF_SOURCE_PREFIXES = (
     "standup_book_source_",
@@ -98,6 +104,10 @@ _OFFLINE_GIFT_REF_SOURCE_PREFIXES = (
     "offline_gift_source_",
     "offline_gift_src_",
 )
+
+
+def _is_expired_show_ref(ref: str) -> bool:
+    return (ref or "").strip().casefold() in _EXPIRED_SHOW_REF_VALUES
 
 
 def _is_booking_ref(ref: str) -> bool:
@@ -2154,7 +2164,12 @@ class VKBotApp:
         if cmd == "mail_fu":
             import asyncio
 
-            from bot.db.mailing import claim_mail_followup_send, get_campaign_followup
+            from bot.db.mailing import (
+                FOLLOWUP_EXPIRED_TEXT,
+                claim_mail_followup_send,
+                followup_is_booking_flow,
+                get_campaign_followup,
+            )
 
             try:
                 cid = int(payload.get("cid") or 0)
@@ -2163,6 +2178,8 @@ class VKBotApp:
             follow = (
                 await asyncio.to_thread(get_campaign_followup, cid) if cid else None
             )
+            if followup_is_booking_flow(follow):
+                follow = FOLLOWUP_EXPIRED_TEXT
             if follow:
                 if not claim_mail_followup_send(user_id=int(vk_id), text=follow):
                     logger.info(
@@ -2350,6 +2367,27 @@ class VKBotApp:
                 props=_entry_props(raw_ref, fallback_payload="raffle", source=source),
             )
             await self._send_raffle_start(peer_id, vk_id)
+            return
+
+        is_expired_show_deeplink = _is_expired_show_ref(ref) and is_start_entry and not cmd
+        if cmd in {
+            "booking_resident",
+            "pushkin",
+            "standup_booking_resident",
+            "standup_pushkin",
+        } or is_expired_show_deeplink:
+            from bot.db.mailing import FOLLOWUP_EXPIRED_TEXT
+
+            self._track(
+                vk_id,
+                EVENT_BOT_START,
+                props=_entry_props(raw_ref, fallback_payload="booking_resident", source=source),
+            )
+            await self._send_text(
+                peer_id,
+                FOLLOWUP_EXPIRED_TEXT,
+                keyboard=self._main_menu_kb(peer_id),
+            )
             return
 
         is_booking_deeplink = _is_booking_ref(ref) and is_start_entry and not cmd
