@@ -338,17 +338,15 @@ def render_mailing_tab(
     </form>
   </details>
   <form method="post" action="/admin/mailing/create" enctype="multipart/form-data" class="mailing-form" id="mailing-form">
-    <div class="mailing-grid">
+    <div class="mailing-tpl-bar">
       <label>Шаблон текста
         <select id="mail-template-key">{''.join(tpl_opts)}</select>
       </label>
       <label id="mail-show-wrap" hidden>Шоу для письма
         <select id="mail-show-id" name="mail_show_id">{''.join(show_opts)}</select>
       </label>
-      <div class="mailing-actions" style="align-items:end">
-        <button type="button" id="mail-template-apply" class="mail-secondary-btn">Подставить шаблон</button>
-        <button type="button" id="mail-template-clear" class="mail-secondary-btn">Сбросить текст</button>
-      </div>
+      <button type="button" id="mail-template-apply" class="mail-secondary-btn">Подставить шаблон</button>
+      <button type="button" id="mail-template-clear" class="mail-secondary-btn">Сбросить текст</button>
     </div>
     <p class="muted" id="mail-show-hint" hidden>Время и адрес возьмутся из этого шоу в афише BEST.</p>
     <label>Название
@@ -367,7 +365,7 @@ def render_mailing_tab(
     <label>Картинка (необязательно)
       <input type="file" name="photo" accept="image/jpeg,image/png,image/webp">
     </label>
-    <div class="mailing-grid">
+    <div class="mailing-grid mailing-grid-2">
       <label>Текст кнопки
         <input type="text" name="button_text" maxlength="40" placeholder="Забронировать">
       </label>
@@ -398,13 +396,15 @@ def render_mailing_tab(
         <input type="number" name="exclude_sent_days" value="0" min="0" max="3650" lang="en">
       </label>
     </div>
-    <fieldset class="mailing-row">
+    <fieldset class="mailing-row mailing-when">
       <legend>Когда отправить</legend>
-      <label><input type="radio" name="send_when" value="now" checked> Сразу</label>
-      <label><input type="radio" name="send_when" value="later"> Запланировать</label>
-      <label>Дата и время (МСК)
-        <input type="datetime-local" name="scheduled_at" id="mail-scheduled-at">
-      </label>
+      <div class="mailing-grid">
+        <label class="mailing-when-choice"><input type="radio" name="send_when" value="now" checked> Сразу</label>
+        <label class="mailing-when-choice"><input type="radio" name="send_when" value="later"> Запланировать</label>
+        <label class="mailing-when-at">Дата и время (МСК)
+          <input type="datetime-local" name="scheduled_at" id="mail-scheduled-at">
+        </label>
+      </div>
       <p class="muted" style="margin:6px 0 0">Аудитория считается сейчас, письма уйдут в выбранное время. Можно отменить или перенести в истории.</p>
     </fieldset>
     <details class="mailing-cut" data-persist-key="mailing:audience-filters">
@@ -430,7 +430,7 @@ def render_mailing_tab(
       <fieldset class="mailing-row">
         <legend>Дата шоу для статуса выше</legend>
         <p class="muted" style="margin:0 0 8px">Выберите дату или диапазон дат (день мероприятия в афише). Одна дата = только этот день.</p>
-        <div class="mailing-grid">
+        <div class="mailing-grid mailing-grid-2">
           <label>Дата
             <input type="date" name="date_from">
           </label>
@@ -1102,6 +1102,26 @@ var MAIL_BEST_SHOWS = """
     padding:8px 10px; border-radius:12px; border:1px solid var(--mail-line); font:inherit;
   }
   .mailing-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+  .mailing-grid-2 { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .mailing-tpl-bar {
+    display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; align-items:end;
+  }
+  .mailing-tpl-bar:has(#mail-show-wrap[hidden]) { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .mailing-compose .mailing-tpl-bar > label { margin:0; }
+  .mailing-tpl-bar > button {
+    width:100%; margin:0; min-height:46px; box-sizing:border-box; text-align:center;
+  }
+  .mailing-when .mailing-grid { align-items:end; margin-top:4px; }
+  .mailing-when-choice {
+    display:flex !important; align-items:center; gap:8px; margin:0 !important;
+    min-height:46px; padding:11px 13px; border:1px solid var(--mail-line);
+    border-radius:14px; background:#fff; font-weight:700; box-sizing:border-box;
+  }
+  .mailing-when-at {
+    display:block !important; margin:0 !important; align-items:stretch;
+    font-weight:700; color:var(--mail-ink);
+  }
+  .mailing-when-at input { display:block; width:100%; margin-top:6px; }
   .mailing-row {
     border:1px solid var(--mail-line); border-radius:16px; padding:12px 14px; margin:12px 0;
     background:var(--mail-wash);
@@ -1113,7 +1133,8 @@ var MAIL_BEST_SHOWS = """
     border-radius:16px; border:1px solid #cfe8d6; color:#355944;
   }
   .mailing-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-  .mailing-actions button, .inline-form button, .rz-cancel-add {
+  .mailing-actions button, .inline-form button, .rz-cancel-add,
+  .mailing-tpl-bar > button {
     padding:10px 16px; border-radius:999px; border:1px solid var(--mail-accent-deep,#2d7a3b);
     background:var(--mail-accent,#3b9a4c); color:#fff; cursor:pointer; font:inherit; font-weight:800;
   }
@@ -1127,7 +1148,8 @@ var MAIL_BEST_SHOWS = """
   .mailing-raffle-cancel .rz-cancel-add {
     border-color:var(--mail-accent-deep); background:var(--mail-accent); color:#fff;
   }
-  .mailing-actions button.mail-secondary-btn {
+  .mailing-actions button.mail-secondary-btn,
+  .mailing-tpl-bar > button.mail-secondary-btn {
     background:#fff; color:var(--mail-accent-deep); border-color:#cfe4d2;
   }
   .mailing-compose .mailing-actions button:not(.mail-secondary-btn),
@@ -1167,14 +1189,16 @@ var MAIL_BEST_SHOWS = """
     .mailing-compose, .mailing-test, .mailing-raffle-cancel, .mailing-history, .mailing-detail {
       padding:16px;
     }
-    .mailing-grid { grid-template-columns:1fr; }
+    .mailing-grid, .mailing-grid-2, .mailing-tpl-bar,
+    .mailing-tpl-bar:has(#mail-show-wrap[hidden]) { grid-template-columns:1fr; }
     .mailing-compose .mailing-actions, .mailing-test .mailing-actions, .mailing-raffle-cancel .mailing-actions {
       align-items:stretch;
     }
     .mailing-compose .mailing-actions button,
     .mailing-test .mailing-actions button,
     .mailing-raffle-cancel .mailing-actions button,
-    .mailing-raffle-cancel .mailing-actions .mail-secondary-btn {
+    .mailing-raffle-cancel .mailing-actions .mail-secondary-btn,
+    .mailing-tpl-bar > button {
       width:100%; text-align:center;
     }
     .mailing-history table.users,
