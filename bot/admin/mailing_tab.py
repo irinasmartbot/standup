@@ -10,6 +10,7 @@ from bot.db.mailing import (
     format_duration,
     is_campaign_scheduled,
     list_campaigns,
+    list_mailing_best_shows,
     list_mailing_templates,
     remainder_after_limit,
     to_datetime_local_value,
@@ -282,10 +283,12 @@ def render_mailing_tab(
         )
 
     templates = list_mailing_templates()
+    shows = list_mailing_best_shows()
     tpl_json = json.dumps(
         {t["key"]: t for t in templates},
         ensure_ascii=False,
     ).replace("<", "\\u003c")
+    shows_json = json.dumps(shows, ensure_ascii=False).replace("<", "\\u003c")
     tpl_opts = ['<option value="">Без шаблона — вставить вручную</option>']
     editor_blocks = []
     for t in templates:
@@ -302,6 +305,20 @@ def render_mailing_tab(
             f'<textarea name="tpl_{key}_followup" rows="2">{_h(t.get("followup_html"))}</textarea></label>'
             "</div>"
         )
+    show_opts = ['<option value="">Выберите шоу BEST</option>']
+    default_show_id = ""
+    for item in shows:
+        if item.get("is_today"):
+            default_show_id = str(item.get("id") or "")
+            break
+    if not default_show_id and shows:
+        default_show_id = str(shows[0].get("id") or "")
+    for item in shows:
+        sid = str(item.get("id") or "")
+        selected = " selected" if sid and sid == default_show_id else ""
+        show_opts.append(
+            f'<option value="{_h(sid)}"{selected}>{_h(item.get("label"))}</option>'
+        )
 
     form = f"""
 <section class="card mailing-compose">
@@ -311,7 +328,8 @@ def render_mailing_tab(
     <summary><strong>Редактировать шаблоны текстов</strong>
       <span class="details-action"><span class="closed-label">Развернуть</span>
       <span class="open-label">Свернуть</span></span></summary>
-    <p class="muted">Сохраните 4 варианта один раз — потом только выбирайте шаблон в форме.</p>
+    <p class="muted">Сохраните 4 варианта один раз — потом только выбирайте шаблон в форме.
+      В BEST оставьте {'{концерт}'}, {'{когда}'}, {'{время}'}, {'{площадка}'}, {'{адрес}'} — они заполнятся из выбранного шоу.</p>
     <form method="post" action="/admin/mailing/templates" class="mailing-form">
       {''.join(editor_blocks)}
       <div class="mailing-actions">
@@ -324,10 +342,14 @@ def render_mailing_tab(
       <label>Шаблон текста
         <select id="mail-template-key">{''.join(tpl_opts)}</select>
       </label>
+      <label id="mail-show-wrap" hidden>Шоу для письма
+        <select id="mail-show-id" name="mail_show_id">{''.join(show_opts)}</select>
+      </label>
       <div class="mailing-actions" style="align-items:end">
         <button type="button" id="mail-template-apply" class="mail-secondary-btn">Подставить шаблон</button>
       </div>
     </div>
+    <p class="muted" id="mail-show-hint" hidden>Время и адрес возьмутся из этого шоу в афише BEST.</p>
     <label>Название
       <input type="text" name="title" placeholder="Анонс пятницы" maxlength="120">
     </label>
@@ -647,6 +669,9 @@ def render_mailing_tab(
 var MAIL_TEMPLATES = """
         + tpl_json
         + """;
+var MAIL_BEST_SHOWS = """
+        + shows_json
+        + """;
 (function(){
   var form = document.getElementById('mailing-form');
   var btn = document.getElementById('mail-preview-btn');
@@ -734,23 +759,62 @@ var MAIL_TEMPLATES = """
 
   var tplSel = document.getElementById('mail-template-key');
   var tplBtn = document.getElementById('mail-template-apply');
+  var showWrap = document.getElementById('mail-show-wrap');
+  var showHint = document.getElementById('mail-show-hint');
+  var showSel = document.getElementById('mail-show-id');
+  function showById(id){
+    var sid = String(id || '');
+    for (var i = 0; i < MAIL_BEST_SHOWS.length; i++){
+      if (String(MAIL_BEST_SHOWS[i].id) === sid) return MAIL_BEST_SHOWS[i];
+    }
+    return null;
+  }
+  function fillSubs(text, subs){
+    var out = text || '';
+    if (!subs) return out;
+    Object.keys(subs).forEach(function(key){
+      out = out.split(key).join(subs[key] || '');
+    });
+    return out;
+  }
+  function syncShowWrap(){
+    var t = MAIL_TEMPLATES[tplSel && tplSel.value];
+    var on = !!(t && t.uses_show);
+    if (showWrap) showWrap.hidden = !on;
+    if (showHint) showHint.hidden = !on;
+  }
+  if (tplSel) tplSel.addEventListener('change', syncShowWrap);
+  syncShowWrap();
   if (tplBtn && tplSel) {
     tplBtn.addEventListener('click', function(){
       var key = tplSel.value;
       if (!key) return;
       var t = MAIL_TEMPLATES[key];
       if (!t) return;
+      var show = null;
+      if (t.uses_show) {
+        if (!MAIL_BEST_SHOWS.length) {
+          alert('В афише BEST нет ближайших шоу. Время и адрес не подставятся.');
+        } else {
+          show = showById(showSel && showSel.value);
+          if (!show) {
+            alert('Выберите шоу для письма');
+            return;
+          }
+        }
+      }
       var body = form.querySelector('[name=body_html]');
       if (body && body.value.trim() && !confirm('Заменить текущий текст шаблоном «' + (t.title || key) + '»?')) return;
-      if (body) body.value = t.body_html || '';
+      var subs = show && show.subs;
+      if (body) body.value = fillSubs(t.body_html || '', subs);
       var ch = form.querySelector('input[name=channel][value="' + t.channel + '"]');
       if (ch) ch.checked = true;
       var btnEl = form.querySelector('[name=button_text]');
       if (btnEl && t.button_text) btnEl.value = t.button_text;
       var fu = form.querySelector('[name=followup_html]');
-      if (fu && t.followup_html) fu.value = t.followup_html;
+      if (fu) fu.value = fillSubs(t.followup_html || '', subs);
       var title = form.querySelector('[name=title]');
-      if (title && !title.value.trim()) title.value = t.title || '';
+      if (title && !title.value.trim()) title.value = (show && show.title) || t.title || '';
       saveDraft();
     });
   }
@@ -959,6 +1023,7 @@ var MAIL_TEMPLATES = """
     color:var(--mail-muted);
   }
   .mailing-compose label, .mailing-test label { display:block; margin:12px 0; font-size:14px; font-weight:700; color:var(--mail-ink); }
+  .mailing-compose label[hidden], .mailing-compose #mail-show-hint[hidden] { display:none !important; }
   .mailing-compose input[type=text],
   .mailing-compose input[type=url],
   .mailing-compose input[type=number],

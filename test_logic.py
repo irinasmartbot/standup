@@ -126,7 +126,10 @@ def test_mailing_schedule_and_templates():
     by_key = {item["key"]: item for item in MAILING_TEMPLATE_SPECS}
     assert "хочу билет" in by_key["best_vk"]["body_html"]
     assert by_key["best_vk"]["button_text"] == "хочу билет"
-    assert "Сергия Радонежского" in by_key["best_vk"]["followup_html"]
+    assert "{адрес}" in by_key["best_vk"]["followup_html"]
+    assert "{время}" in by_key["best_vk"]["body_html"]
+    assert "{концерт}" in by_key["best_tg"]["body_html"]
+    assert by_key["best_tg"]["uses_show"] is True
     assert "@ccoverr" in by_key["best_tg"]["body_html"]
     assert not by_key["best_tg"]["followup_html"]
     assert "01 августа" in by_key["hitloto_vk"]["body_html"]
@@ -134,6 +137,70 @@ def test_mailing_schedule_and_templates():
     assert "@ccoverr" in by_key["hitloto_tg"]["body_html"]
     assert not by_key["hitloto_tg"]["followup_html"]
     print("mailing schedule and templates: OK")
+
+
+def test_mailing_best_show_fill():
+    from datetime import date
+
+    from bot.db.mailing import (
+        apply_mailing_show_fields,
+        ensure_best_placeholders,
+        mailing_place_phrase,
+        mailing_show_fields,
+    )
+
+    assert mailing_place_phrase("Escobar", "") == "Эскобаре на м.Площадь Ильича"
+    assert mailing_place_phrase("Temple Bar", "") == "Temple Bar на м.Курская"
+
+    today = date(2026, 9, 17)
+    thursday = mailing_show_fields(
+        {
+            "date_iso": "2026-09-17",
+            "date_display": "17.09.2026",
+            "time": "20:00",
+            "location": "Escobar",
+            "address": "ESCOBAR, м. Площадь Ильича, ул. Сергия Радонежского, 15-17с17",
+        },
+        today=today,
+    )
+    assert thursday["{когда}"] == "сегодня"
+    assert thursday["{концерт}"] == "СЕГОДНЯШНИЙ концерт"
+    assert thursday["{время}"] == "20:00"
+    assert "Эскобаре" in thursday["{площадка}"]
+    assert "Сергия Радонежского" in thursday["{адрес}"]
+
+    sunday = mailing_show_fields(
+        {
+            "date_iso": "2026-09-20",
+            "date_display": "20.09.2026",
+            "time": "19:00",
+            "location": "Temple Bar",
+            "address": "Temple Bar, м. Курская, Нижний Сусальный переулок, дом 5, стр. 4а",
+        },
+        today=today,
+    )
+    assert sunday["{когда}"] == "20 сентября"
+    assert sunday["{концерт}"] == "концерт 20 сентября"
+    assert sunday["{время}"] == "19:00"
+    assert "Temple Bar" in sunday["{площадка}"]
+
+    old = (
+        "билетов на СЕГОДНЯШНИЙ концерт первым\n"
+        "<b>Шоу сегодня в 20:00 в Эскобаре на м.Площадь Ильича ☝️</b>\n"
+        "начало сегодня в 20:00, успеваете?\n"
+        "📍 Адрес ESCOBAR, м. Площадь Ильича, ул. Сергия Радонежского, 15-17с17"
+    )
+    marked = ensure_best_placeholders(old)
+    assert "{концерт}" in marked
+    assert "{время}" in marked
+    assert "{адрес}" in marked
+    filled = apply_mailing_show_fields(marked, sunday)
+    assert "концерт 20 сентября" in filled
+    assert "19:00" in filled
+    assert "Temple Bar" in filled
+    assert "Сусальный" in filled
+    assert "20:00" not in filled
+    print("mailing BEST show fill: OK")
 
 
 def test_db_schema():
@@ -195,6 +262,7 @@ async def main():
     test_callback_parsing()
     test_mailing_booking_button_fields()
     test_mailing_schedule_and_templates()
+    test_mailing_best_show_fill()
     test_db_schema()
     test_vk_message_item_has_photo()
     events = await load_events()

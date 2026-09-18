@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -29,13 +30,14 @@ MAILING_TEMPLATE_SPECS = (
         "channel": "telegram",
         "button_text": "",
         "followup_html": "",
+        "uses_show": True,
         "body_html": (
-            "Привет! 😊 Дарим 15 бесплатных билетов на СЕГОДНЯШНИЙ концерт первым пятнадцати, "
+            "Привет! 😊 Дарим 15 бесплатных билетов на {концерт} первым пятнадцати, "
             "написавшим в личку "
             '<a href="https://t.me/ccoverr?text=%D0%A5%D0%BE%D1%87%D1%83%20%D0%B1%D0%B8%D0%BB%D0%B5%D1%82">'
             "<b>@ccoverr</b></a> \"хочу билет\" !!!\n"
             "\n"
-            "<b>Шоу сегодня в 20:00 в Эскобаре на м.Площадь Ильича ☝️</b>\n"
+            "<b>Шоу {когда} в {время} в {площадка} ☝️</b>\n"
             "\n"
             "Пиши прямо сейчас, не откладывай 😊\n"
             "Посмотреть, кто сегодня выступает, можно в нашем канале 😊\n"
@@ -47,23 +49,24 @@ MAILING_TEMPLATE_SPECS = (
         "title": "BEST · VK",
         "channel": "vkontakte",
         "button_text": "хочу билет",
+        "uses_show": True,
         "body_html": (
-            "Привет! 😊 Дарим 15 бесплатных билетов на СЕГОДНЯШНИЙ концерт первым пятнадцати, "
+            "Привет! 😊 Дарим 15 бесплатных билетов на {концерт} первым пятнадцати, "
             "кто нажмет кнопку \"хочу билет\"!!!\n"
             "\n"
-            "<b>Шоу сегодня в 20:00 в Эскобаре на м.Площадь Ильича ☝️</b>\n"
+            "<b>Шоу {когда} в {время} в {площадка} ☝️</b>\n"
             "\n"
             "Нажимай кнопку прямо сейчас, не откладывай 😊\n"
             "Посмотреть, кто сегодня выступает, можно в нашем сообществе 😊\n"
             "<b>https://vk.ru/moscowstandupshow</b>"
         ),
         "followup_html": (
-            "Здравствуйте, начало сегодня в 20:00, успеваете? 😊 \n"
+            "Здравствуйте, начало {когда} в {время}, успеваете? 😊 \n"
             "\n"
             "Если да, напишите Ваш номер телефона, имя и один билет нужен или два 😊\n"
             "Я внесу в списки, администратору на входе назовёте имя, он посадит 😊\n"
             "\n"
-            "📍 Адрес ESCOBAR, м. Площадь Ильича, ул. Сергия Радонежского, 15-17с17\n"
+            "📍 Адрес {адрес}\n"
             "<b>Посещение мероприятия предполагает обязательный заказ минимум одной позиции по меню 🍽 ☝️😊</b>"
         ),
     },
@@ -123,6 +126,164 @@ MAILING_TEMPLATE_SPECS = (
     },
 )
 MAILING_TEMPLATE_KEYS = tuple(item["key"] for item in MAILING_TEMPLATE_SPECS)
+MAILING_SHOW_PLACEHOLDERS = ("{концерт}", "{когда}", "{время}", "{площадка}", "{адрес}")
+_WEEKDAY_SHORT = {
+    "понедельник": "пн",
+    "вторник": "вт",
+    "среда": "ср",
+    "четверг": "чт",
+    "пятница": "пт",
+    "суббота": "сб",
+    "воскресенье": "вс",
+    "monday": "пн",
+    "tuesday": "вт",
+    "wednesday": "ср",
+    "thursday": "чт",
+    "friday": "пт",
+    "saturday": "сб",
+    "sunday": "вс",
+}
+_MONTHS_GENITIVE = {
+    1: "января",
+    2: "февраля",
+    3: "марта",
+    4: "апреля",
+    5: "мая",
+    6: "июня",
+    7: "июля",
+    8: "августа",
+    9: "сентября",
+    10: "октября",
+    11: "ноября",
+    12: "декабря",
+}
+
+
+def mailing_date_phrase(event_date: date | None, date_display: str = "") -> str:
+    d = event_date
+    if d is None:
+        raw = (date_display or "").strip()
+        try:
+            d = datetime.strptime(raw, "%d.%m.%Y").date()
+        except ValueError:
+            return raw
+    month = _MONTHS_GENITIVE.get(d.month)
+    if not month:
+        return date_display or d.isoformat()
+    return f"{d.day} {month}"
+
+
+def mailing_place_phrase(location: str = "", address: str = "") -> str:
+    blob = f"{location or ''} {address or ''}".casefold()
+    if "escobar" in blob:
+        return "Эскобаре на м.Площадь Ильича"
+    if "temple" in blob:
+        return "Temple Bar на м.Курская"
+    loc = (location or "").strip()
+    if loc:
+        return loc
+    addr = (address or "").strip()
+    return addr.split(",")[0].strip() if addr else "площадке"
+
+
+def mailing_show_fields(event: dict, *, today: date | None = None) -> dict[str, str]:
+    """Подстановки для шаблона BEST по записи афиши."""
+    today = today or now_msk().date()
+    date_iso = str(event.get("date_iso") or "").strip()
+    event_date = None
+    if date_iso:
+        try:
+            event_date = date.fromisoformat(date_iso)
+        except ValueError:
+            event_date = None
+    is_today = event_date == today
+    when = "сегодня" if is_today else mailing_date_phrase(event_date, event.get("date_display") or "")
+    concert = "СЕГОДНЯШНИЙ концерт" if is_today else f"концерт {when}"
+    time = str(event.get("time") or "").strip() or "20:00"
+    place = mailing_place_phrase(event.get("location") or "", event.get("address") or "")
+    address = str(event.get("address") or "").strip() or place
+    return {
+        "{концерт}": concert,
+        "{когда}": when,
+        "{время}": time,
+        "{площадка}": place,
+        "{адрес}": address,
+    }
+
+
+def apply_mailing_show_fields(text: str | None, fields: dict[str, str] | None) -> str:
+    out = text or ""
+    if not fields:
+        return out
+    for key, value in fields.items():
+        out = out.replace(key, str(value or ""))
+    return out
+
+
+def ensure_best_placeholders(text: str | None) -> str:
+    """Старые BEST-тексты с Эскобаром/20:00 переводим на плейсхолдеры."""
+    out = text or ""
+    if "{концерт}" not in out:
+        out = out.replace("на СЕГОДНЯШНИЙ концерт", "на {концерт}")
+    if "{площадка}" not in out:
+        out = re.sub(
+            r"Шоу сегодня в \d{1,2}:\d{2} в [^<\n]+",
+            "Шоу {когда} в {время} в {площадка}",
+            out,
+            count=1,
+        )
+    if "начало {когда}" not in out:
+        out = re.sub(
+            r"начало сегодня в \d{1,2}:\d{2}",
+            "начало {когда} в {время}",
+            out,
+            count=1,
+        )
+    if "{адрес}" not in out:
+        out = re.sub(r"📍 Адрес [^\n<]+", "📍 Адрес {адрес}", out, count=1)
+    return out
+
+
+def _weekday_short(value: str) -> str:
+    return _WEEKDAY_SHORT.get((value or "").strip().casefold(), "")
+
+
+def list_mailing_best_shows() -> list[dict]:
+    """Ближайшие активные BEST из афиши — для выбора шоу в письме."""
+    try:
+        from bot.db.events_admin import list_events_for_admin
+
+        events = list_events_for_admin("best").get("active") or []
+    except Exception:
+        logger.exception("list_mailing_best_shows failed")
+        return []
+    today = now_msk().date()
+    out: list[dict] = []
+    for ev in events:
+        event_id = str(ev.get("id") or "").strip()
+        if not event_id:
+            continue
+        fields = mailing_show_fields(ev, today=today)
+        date_iso = str(ev.get("date_iso") or "")
+        is_today = date_iso == today.isoformat()
+        loc = str(ev.get("location") or "").strip()
+        time = str(ev.get("time") or "").strip()
+        date_display = str(ev.get("date_display") or "").strip()
+        label_date = date_display[:5] if len(date_display) >= 5 else date_display
+        wd_short = _weekday_short(str(ev.get("weekday") or ""))
+        date_bit = f"{label_date} ({wd_short})" if wd_short else label_date
+        label = " · ".join(part for part in (date_bit, loc, time) if part)
+        out.append(
+            {
+                "id": event_id,
+                "label": label,
+                "is_today": is_today,
+                "title": f"BEST · {fields['{когда}']}",
+                "subs": fields,
+            }
+        )
+    return out
+
 
 # Отбивка, если нажали кнопку после даты актуальности рассылки.
 FOLLOWUP_EXPIRED_TEXT = (
@@ -1109,18 +1270,22 @@ def list_mailing_templates() -> list[dict]:
     out = []
     for spec in MAILING_TEMPLATE_SPECS:
         stored = rows.get(spec["key"]) or {}
+        body = (stored.get("body_html") or "").strip() or spec.get("body_html") or ""
+        followup = (stored.get("followup_html") or "").strip() or spec.get("followup_html") or ""
+        if spec.get("uses_show"):
+            body = ensure_best_placeholders(body)
+            followup = ensure_best_placeholders(followup)
         out.append(
             {
                 "key": spec["key"],
                 "title": spec["title"],
                 "channel": spec["channel"],
-                "body_html": (stored.get("body_html") or "").strip() or spec.get("body_html") or "",
+                "uses_show": bool(spec.get("uses_show")),
+                "body_html": body,
                 "button_text": (stored.get("button_text") or "").strip()
                 or spec.get("button_text")
                 or "",
-                "followup_html": (stored.get("followup_html") or "").strip()
-                or spec.get("followup_html")
-                or "",
+                "followup_html": followup,
             }
         )
     return out
