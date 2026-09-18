@@ -773,7 +773,7 @@ var MAIL_BEST_SHOWS = """
   function fillSubs(text, subs){
     var out = text || '';
     if (!subs) return out;
-    Object.keys(subs).forEach(function(key){
+    Object.keys(subs).sort(function(a, b){ return b.length - a.length; }).forEach(function(key){
       out = out.split(key).join(subs[key] || '');
     });
     return out;
