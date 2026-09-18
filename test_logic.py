@@ -127,11 +127,13 @@ def test_mailing_schedule_and_templates():
     assert "хочу билет" in by_key["best_vk"]["body_html"]
     assert by_key["best_vk"]["button_text"] == "Хочу билет"
     assert "{адрес}" in by_key["best_vk"]["followup_html"]
+    assert "{начало_vk}" in by_key["best_vk"]["followup_html"]
+    assert "{напишите_vk}" in by_key["best_vk"]["followup_html"]
+    assert "успеваете" not in by_key["best_vk"]["followup_html"]
     assert "{время}" in by_key["best_vk"]["body_html"]
     assert "{когда}" not in by_key["best_vk"]["body_html"]
     assert "{когда}" not in by_key["best_vk"]["followup_html"]
     assert "Шоу в {время}" in by_key["best_vk"]["body_html"]
-    assert "начало в {время}" in by_key["best_vk"]["followup_html"]
     assert "{концерт}" in by_key["best_tg"]["body_html"]
     assert "{концерт_дата}" not in by_key["best_tg"]["body_html"]
     assert "{концерт_дата}" in by_key["best_vk"]["body_html"]
@@ -174,7 +176,8 @@ def test_mailing_best_show_fill():
     assert thursday["{когда}"] == "сегодня"
     assert thursday["{концерт}"] == "СЕГОДНЯШНИЙ концерт"
     assert thursday["{концерт_дата}"] == "СЕГОДНЯШНИЙ концерт"
-    assert thursday["{время}"] == "20:00"
+    assert thursday["{начало_vk}"] == "начало в 20:00, успеваете?"
+    assert thursday["{напишите_vk}"] == "Если да, напишите"
     assert "Эскобаре" in thursday["{площадка}"]
     assert "Сергия Радонежского" in thursday["{адрес}"]
 
@@ -192,6 +195,9 @@ def test_mailing_best_show_fill():
     assert sunday["{концерт}"] == "концерт"
     assert sunday["{концерт_дата}"] == "концерт 20 сентября"
     assert sunday["{время}"] == "19:00"
+    assert sunday["{начало_vk}"] == "начало в 19:00, 20 сентября"
+    assert sunday["{напишите_vk}"] == "Напишите"
+    assert "успеваете" not in sunday["{начало_vk}"]
     assert "Temple Bar" in sunday["{площадка}"]
 
     old = (
@@ -218,9 +224,17 @@ def test_mailing_best_show_fill():
     vk_follow = apply_mailing_show_fields(ensure_best_vk_once(vk["followup_html"]), sunday)
     assert vk_body.count("20 сентября") == 1
     assert "на концерт 20 сентября" in vk_body
-    assert "20 сентября" not in vk_follow
+    assert "начало в 19:00, 20 сентября" in vk_follow
+    assert "успеваете" not in vk_follow
+    assert "Если да" not in vk_follow
+    assert vk_follow.startswith("Здравствуйте, начало в 19:00, 20 сентября")
+    assert "Напишите Ваш номер" in vk_follow
     assert "Шоу в 19:00" in vk_body
-    assert "начало в 19:00" in vk_follow
+
+    vk_follow_today = apply_mailing_show_fields(ensure_best_vk_once(vk["followup_html"]), thursday)
+    assert "успеваете" in vk_follow_today
+    assert "Если да, напишите" in vk_follow_today
+    assert "17 сентября" not in vk_follow_today
 
     tg = {item["key"]: item for item in MAILING_TEMPLATE_SPECS}["best_tg"]
     tg_body = apply_mailing_show_fields(tg["body_html"], sunday)

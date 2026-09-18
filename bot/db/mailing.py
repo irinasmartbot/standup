@@ -61,9 +61,9 @@ MAILING_TEMPLATE_SPECS = (
             "<b>https://vk.ru/moscowstandupshow</b>"
         ),
         "followup_html": (
-            "Здравствуйте, начало в {время}, успеваете? 😊 \n"
+            "Здравствуйте, {начало_vk} 😊 \n"
             "\n"
-            "Если да, напишите Ваш номер телефона, имя и один билет нужен или два 😊\n"
+            "{напишите_vk} Ваш номер телефона, имя и один билет нужен или два 😊\n"
             "Я внесу в списки, администратору на входе назовёте имя, он посадит 😊\n"
             "\n"
             "📍 Адрес {адрес}\n"
@@ -129,6 +129,8 @@ MAILING_TEMPLATE_KEYS = tuple(item["key"] for item in MAILING_TEMPLATE_SPECS)
 MAILING_SHOW_PLACEHOLDERS = (
     "{концерт_дата}",
     "{концерт}",
+    "{начало_vk}",
+    "{напишите_vk}",
     "{когда}",
     "{время}",
     "{площадка}",
@@ -210,9 +212,17 @@ def mailing_show_fields(event: dict, *, today: date | None = None) -> dict[str, 
     time = str(event.get("time") or "").strip() or "20:00"
     place = mailing_place_phrase(event.get("location") or "", event.get("address") or "")
     address = str(event.get("address") or "").strip() or place
+    if is_today:
+        vk_start = f"начало в {time}, успеваете?"
+        vk_ask = "Если да, напишите"
+    else:
+        vk_start = f"начало в {time}, {when}"
+        vk_ask = "Напишите"
     return {
         "{концерт_дата}": concert_dated,
         "{концерт}": concert,
+        "{начало_vk}": vk_start,
+        "{напишите_vk}": vk_ask,
         "{когда}": when,
         "{время}": time,
         "{площадка}": place,
@@ -254,12 +264,23 @@ def ensure_best_placeholders(text: str | None) -> str:
 
 
 def ensure_best_vk_once(text: str | None) -> str:
-    """В VK дата только в первой строке; шоу и followup — время и адрес."""
+    """В VK дата только в первой строке; followup зависит от «сегодня / не сегодня»."""
     out = ensure_best_placeholders(text)
     if "{концерт_дата}" not in out:
         out = out.replace("на {концерт}", "на {концерт_дата}")
     out = out.replace("Шоу {когда} в {время} в {площадка}", "Шоу в {время} в {площадка}")
     out = out.replace("начало {когда} в {время}", "начало в {время}")
+    if "{начало_vk}" not in out:
+        out = out.replace(
+            "Здравствуйте, начало в {время}, успеваете?",
+            "Здравствуйте, {начало_vk}",
+        )
+        out = out.replace("Здравствуйте, начало в {время}", "Здравствуйте, {начало_vk}")
+    if "{напишите_vk}" not in out:
+        if "Если да, напишите" in out:
+            out = out.replace("Если да, напишите", "{напишите_vk}")
+        elif "Напишите Ваш номер" in out:
+            out = out.replace("Напишите Ваш номер", "{напишите_vk} Ваш номер")
     return out
 
 
