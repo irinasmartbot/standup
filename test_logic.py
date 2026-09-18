@@ -125,9 +125,13 @@ def test_mailing_schedule_and_templates():
 
     by_key = {item["key"]: item for item in MAILING_TEMPLATE_SPECS}
     assert "хочу билет" in by_key["best_vk"]["body_html"]
-    assert by_key["best_vk"]["button_text"] == "хочу билет"
+    assert by_key["best_vk"]["button_text"] == "Хочу билет"
     assert "{адрес}" in by_key["best_vk"]["followup_html"]
     assert "{время}" in by_key["best_vk"]["body_html"]
+    assert "{когда}" not in by_key["best_vk"]["body_html"]
+    assert "{когда}" not in by_key["best_vk"]["followup_html"]
+    assert "Шоу в {время}" in by_key["best_vk"]["body_html"]
+    assert "начало в {время}" in by_key["best_vk"]["followup_html"]
     assert "{концерт}" in by_key["best_tg"]["body_html"]
     assert by_key["best_tg"]["uses_show"] is True
     assert "@ccoverr" in by_key["best_tg"]["body_html"]
@@ -143,8 +147,10 @@ def test_mailing_best_show_fill():
     from datetime import date
 
     from bot.db.mailing import (
+        MAILING_TEMPLATE_SPECS,
         apply_mailing_show_fields,
         ensure_best_placeholders,
+        ensure_best_vk_once,
         mailing_place_phrase,
         mailing_show_fields,
     )
@@ -200,6 +206,14 @@ def test_mailing_best_show_fill():
     assert "Temple Bar" in filled
     assert "Сусальный" in filled
     assert "20:00" not in filled
+
+    vk = {item["key"]: item for item in MAILING_TEMPLATE_SPECS}["best_vk"]
+    vk_body = apply_mailing_show_fields(ensure_best_vk_once(vk["body_html"]), sunday)
+    vk_follow = apply_mailing_show_fields(ensure_best_vk_once(vk["followup_html"]), sunday)
+    assert vk_body.count("20 сентября") == 1
+    assert "20 сентября" not in vk_follow
+    assert "Шоу в 19:00" in vk_body
+    assert "начало в 19:00" in vk_follow
     print("mailing BEST show fill: OK")
 
 

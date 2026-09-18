@@ -48,20 +48,20 @@ MAILING_TEMPLATE_SPECS = (
         "key": "best_vk",
         "title": "BEST · VK",
         "channel": "vkontakte",
-        "button_text": "хочу билет",
+        "button_text": "Хочу билет",
         "uses_show": True,
         "body_html": (
             "Привет! 😊 Дарим 15 бесплатных билетов на {концерт} первым пятнадцати, "
             "кто нажмет кнопку \"хочу билет\"!!!\n"
             "\n"
-            "<b>Шоу {когда} в {время} в {площадка} ☝️</b>\n"
+            "<b>Шоу в {время} в {площадка} ☝️</b>\n"
             "\n"
             "Нажимай кнопку прямо сейчас, не откладывай 😊\n"
             "Посмотреть, кто сегодня выступает, можно в нашем сообществе 😊\n"
             "<b>https://vk.ru/moscowstandupshow</b>"
         ),
         "followup_html": (
-            "Здравствуйте, начало {когда} в {время}, успеваете? 😊 \n"
+            "Здравствуйте, начало в {время}, успеваете? 😊 \n"
             "\n"
             "Если да, напишите Ваш номер телефона, имя и один билет нужен или два 😊\n"
             "Я внесу в списки, администратору на входе назовёте имя, он посадит 😊\n"
@@ -98,7 +98,7 @@ MAILING_TEMPLATE_SPECS = (
         "key": "hitloto_vk",
         "title": "Музлото · VK",
         "channel": "vkontakte",
-        "button_text": "хочу билет",
+        "button_text": "Хочу билет",
         "body_html": (
             "<b>Бесплатные билеты на музыкальное лото с комиком от Moscow StandUp Show!!</b>\n"
             "\n"
@@ -241,6 +241,14 @@ def ensure_best_placeholders(text: str | None) -> str:
         )
     if "{адрес}" not in out:
         out = re.sub(r"📍 Адрес [^\n<]+", "📍 Адрес {адрес}", out, count=1)
+    return out
+
+
+def ensure_best_vk_once(text: str | None) -> str:
+    """В VK дата только в {концерт}: строка шоу и followup — время и адрес."""
+    out = ensure_best_placeholders(text)
+    out = out.replace("Шоу {когда} в {время} в {площадка}", "Шоу в {время} в {площадка}")
+    out = out.replace("начало {когда} в {время}", "начало в {время}")
     return out
 
 
@@ -1273,8 +1281,16 @@ def list_mailing_templates() -> list[dict]:
         body = (stored.get("body_html") or "").strip() or spec.get("body_html") or ""
         followup = (stored.get("followup_html") or "").strip() or spec.get("followup_html") or ""
         if spec.get("uses_show"):
-            body = ensure_best_placeholders(body)
-            followup = ensure_best_placeholders(followup)
+            if spec["key"] == "best_vk":
+                body = ensure_best_vk_once(body)
+                followup = ensure_best_vk_once(followup)
+            else:
+                body = ensure_best_placeholders(body)
+                followup = ensure_best_placeholders(followup)
+        button = (stored.get("button_text") or "").strip() or spec.get("button_text") or ""
+        spec_btn = (spec.get("button_text") or "").strip()
+        if spec_btn and button.casefold() == spec_btn.casefold():
+            button = spec_btn
         out.append(
             {
                 "key": spec["key"],
@@ -1282,9 +1298,7 @@ def list_mailing_templates() -> list[dict]:
                 "channel": spec["channel"],
                 "uses_show": bool(spec.get("uses_show")),
                 "body_html": body,
-                "button_text": (stored.get("button_text") or "").strip()
-                or spec.get("button_text")
-                or "",
+                "button_text": button,
                 "followup_html": followup,
             }
         )

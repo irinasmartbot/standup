@@ -347,6 +347,7 @@ def render_mailing_tab(
       </label>
       <div class="mailing-actions" style="align-items:end">
         <button type="button" id="mail-template-apply" class="mail-secondary-btn">Подставить шаблон</button>
+        <button type="button" id="mail-template-clear" class="mail-secondary-btn">Сбросить текст</button>
       </div>
     </div>
     <p class="muted" id="mail-show-hint" hidden>Время и адрес возьмутся из этого шоу в афише BEST.</p>
@@ -785,10 +786,42 @@ var MAIL_BEST_SHOWS = """
   }
   if (tplSel) tplSel.addEventListener('change', syncShowWrap);
   syncShowWrap();
+  function clearTemplateFields(){
+    var body = form.querySelector('[name=body_html]');
+    var fu = form.querySelector('[name=followup_html]');
+    var title = form.querySelector('[name=title]');
+    var btnEl = form.querySelector('[name=button_text]');
+    var urlEl = form.querySelector('[name=button_url]');
+    var untilEl = form.querySelector('[name=followup_until]');
+    var photoEl = form.querySelector('[name=photo]');
+    var hasText = !!(
+      (body && body.value.trim()) ||
+      (fu && fu.value.trim()) ||
+      (title && title.value.trim()) ||
+      (btnEl && btnEl.value.trim())
+    );
+    if (hasText && !confirm('Очистить текст письма и поля шаблона?')) return false;
+    if (tplSel) tplSel.value = '';
+    if (body) body.value = '';
+    if (fu) fu.value = '';
+    if (title) title.value = '';
+    if (btnEl) btnEl.value = '';
+    if (urlEl) urlEl.value = '';
+    if (untilEl) untilEl.value = '';
+    if (photoEl) photoEl.value = '';
+    var tg = form.querySelector('input[name=channel][value="telegram"]');
+    if (tg) tg.checked = true;
+    syncShowWrap();
+    saveDraft();
+    return true;
+  }
   if (tplBtn && tplSel) {
     tplBtn.addEventListener('click', function(){
       var key = tplSel.value;
-      if (!key) return;
+      if (!key) {
+        clearTemplateFields();
+        return;
+      }
       var t = MAIL_TEMPLATES[key];
       if (!t) return;
       var show = null;
@@ -818,6 +851,8 @@ var MAIL_BEST_SHOWS = """
       saveDraft();
     });
   }
+  var tplClear = document.getElementById('mail-template-clear');
+  if (tplClear) tplClear.addEventListener('click', clearTemplateFields);
 
   function syncSendWhen(){
     var later = form.querySelector('input[name=send_when][value=later]');
