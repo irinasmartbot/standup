@@ -34,6 +34,16 @@ STATUS_LABELS = {
     "done": "готово",
     "cancelled": "отменена",
 }
+CHANNEL_LABELS = {
+    "telegram": "телеграм",
+    "vkontakte": "вк",
+    "both": "оба",
+}
+
+
+def _channel_label(value) -> str:
+    raw = str(value or "").strip()
+    return CHANNEL_LABELS.get(raw, raw)
 
 
 def render_mailing_tab(
@@ -114,19 +124,20 @@ def render_mailing_tab(
             )
         rows.append(
             "<tr>"
-            f"<td>{cid}</td>"
-            f"<td>{_h(c.get('title'))}<br><span class='muted'>{_h(c.get('channel'))}</span></td>"
-            f"<td>{_h(status_label)}"
+            f"<td data-label=\"id\">{cid}</td>"
+            f"<td data-label=\"Название\">{_h(c.get('title'))}<br>"
+            f"<span class='muted'>{_h(_channel_label(c.get('channel')))}</span></td>"
+            f"<td data-label=\"Статус / время\">{_h(status_label)}"
             f"<br><span class='muted'>{_h(when_label)}</span></td>"
-            f"<td>{sent}/{total}"
+            f"<td data-label=\"Прогресс\">{sent}/{total}"
             f"<br><span class='muted'>ошибки {failed}</span></td>"
-            f"<td>{_h(eta)}</td>"
+            f"<td data-label=\"Осталось ≈\">{_h(eta)}</td>"
             f"<td class='mailing-actions'>{''.join(actions)}</td>"
             "</tr>"
         )
 
     history = (
-        '<section class="card">'
+        '<section class="card mailing-history">'
         '<details data-persist-key="mailing:history">'
         "<summary><strong>История рассылок</strong>"
         '<span class="details-action"><span class="closed-label">Развернуть</span>'
@@ -220,7 +231,7 @@ def render_mailing_tab(
             until_val = str(until_raw)[:10]
         msg_meta = (
             f"<p class='muted'>Кнопка: {_h(btn) or '—'} · "
-            f"URL: {_h(btn_url) or 'нет'} · "
+            f"ссылка: {_h(btn_url) or 'нет'} · "
             f"превью ссылок: {'выкл' if preview_off else 'вкл'} · "
             f"кнопка до: {_h(until_val) or 'не задано'}</p>"
         )
@@ -249,10 +260,10 @@ def render_mailing_tab(
                 "</form>"
             )
         detail_html = (
-            '<section class="card">'
+            '<section class="card mailing-detail">'
             f"<h2>Кампания #{_h(cid)} · {_h(detail.get('title'))}</h2>"
             f"<p class='muted'>Статус: {_h(STATUS_LABELS.get(detail.get('status'), detail.get('status')))} · "
-            f"канал {_h(detail.get('channel'))} · интервал {_h(detail.get('interval_sec'))} сек"
+            f"канал {_h(_channel_label(detail.get('channel')))} · интервал {_h(detail.get('interval_sec'))} сек"
             f"{(' · план ' + format_admin_datetime(detail.get('scheduled_at'))) if detail.get('scheduled_at') else ''}</p>"
             f"<p><b>Статистика:</b> отправлено {sent} / {total_c} · ошибки {failed}</p>"
             f"{rem_form}"
@@ -295,7 +306,7 @@ def render_mailing_tab(
     form = f"""
 <section class="card mailing-compose">
   <h2>Новая рассылка</h2>
-  <p class="muted">HTML: &lt;b&gt;жирный&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;, &lt;a href="..."&gt;ссылка&lt;/a&gt;. TG и VK.</p>
+  <p class="muted">Можно выделить жирным, курсивом или поставить ссылку. Телеграм и ВК.</p>
   <details data-persist-key="mailing:templates-edit">
     <summary><strong>Редактировать шаблоны текстов</strong>
       <span class="details-action"><span class="closed-label">Развернуть</span>
@@ -322,26 +333,26 @@ def render_mailing_tab(
     </label>
     <fieldset class="mailing-row">
       <legend>Канал</legend>
-      <label><input type="radio" name="channel" value="telegram" checked> Telegram</label>
-      <label><input type="radio" name="channel" value="vkontakte"> VK</label>
+      <label><input type="radio" name="channel" value="telegram" checked> Телеграм</label>
+      <label><input type="radio" name="channel" value="vkontakte"> ВК</label>
       <label><input type="radio" name="channel" value="both"> Оба</label>
-      <p class="muted" style="margin:6px 0 0">VK-бронь попадёт в расчёт только если выбран <b>VK</b> или <b>Оба</b>.</p>
+      <p class="muted" style="margin:6px 0 0">Бронь ВК попадёт в расчёт только если выбран <b>ВК</b> или <b>Оба</b>.</p>
     </fieldset>
     <label>Текст сообщения
       <textarea name="body_html" rows="8" placeholder="Привет! В эту пятницу..."></textarea>
     </label>
-    <label>Картинка (необяз.)
+    <label>Картинка (необязательно)
       <input type="file" name="photo" accept="image/jpeg,image/png,image/webp">
     </label>
     <div class="mailing-grid">
       <label>Текст кнопки
         <input type="text" name="button_text" maxlength="40" placeholder="Забронировать">
       </label>
-      <label>Ссылка кнопки (URL)
-        <input type="url" name="button_url" placeholder="https://...">
+      <label>Ссылка кнопки
+        <input type="url" name="button_url" placeholder="https://…">
       </label>
     </div>
-    <label>После нажатия кнопки (если нет URL) — доп. текст
+    <label>После нажатия кнопки (если нет ссылки) — доп. текст
       <textarea name="followup_html" rows="3" placeholder="Отлично! Вот детали..."></textarea>
     </label>
     <label>Кнопка актуальна до (дата шоу)
@@ -349,9 +360,9 @@ def render_mailing_tab(
       <span class="muted">После этой даты по кнопке — «мероприятие уже неактуально». Если пусто, возьмём дату шоу из фильтров ниже.</span>
     </label>
     <fieldset class="mailing-row">
-      <legend>Превью ссылок в Telegram</legend>
+      <legend>Превью ссылок в Телеграме</legend>
       <label><input type="checkbox" name="disable_link_preview" value="1"> Отключить превью ссылки в письме</label>
-      <p class="muted" style="margin:6px 0 0">Работает для TG. В VK превью управляет сам мессенджер.</p>
+      <p class="muted" style="margin:6px 0 0">Работает для Телеграма. В ВК превью управляет сам мессенджер.</p>
     </fieldset>
     <div class="mailing-grid">
       <label>Интервал, сек
@@ -440,12 +451,12 @@ def render_mailing_tab(
     raffle_cancel = f"""
 <section class="card mailing-raffle-cancel">
   <details data-persist-key="mailing:raffle-cancel">
-  <summary><strong>Отмена шоу + даты розыгрыша (Telegram)</strong>
+  <summary><strong>Отмена шоу + даты розыгрыша (Телеграм)</strong>
     <span class="details-action"><span class="closed-label">Развернуть</span>
     <span class="open-label">Свернуть</span></span></summary>
   <p class="muted">
     Сбрасывает блок розыгрыша у гостя, шлёт ваш текст и меню дат <b>BEST</b>
-    (без сегодняшней даты) — как в боте розыгрыша. Только Telegram.
+    (без сегодняшней даты) — как в боте розыгрыша. Только Телеграм.
     Можно слать по одному человеку.
   </p>
   <label>Текст сообщения
@@ -517,7 +528,7 @@ def render_mailing_tab(
   function addUser(u){{
     if (!u || !u.id) return;
     if (!u.telegram_id) {{
-      statusEl.innerHTML = '<span class="events-error">У этого гостя нет Telegram id</span>';
+      statusEl.innerHTML = '<span class="events-error">У этого гостя нет id Телеграма</span>';
       return;
     }}
     if (selected.some(function(x){{ return x.id === u.id; }})) return;
@@ -808,7 +819,7 @@ var MAIL_TEMPLATES = """
         var n = d.capped_total || 0;
         var eta = (n > 0) ? fmt((n-1)*interval) : '0 сек';
         var sel = d.selected_channel || fd.get('channel') || 'telegram';
-        var chLabel = {telegram:'Telegram', vkontakte:'VK', both:'Оба'}[sel] || sel;
+        var chLabel = {telegram:'телеграм', vkontakte:'вк', both:'оба'}[sel] || sel;
         var f = d.filters || {};
         var statuses = (f.booking_statuses || []).join(', ') || 'без фильтра по броням';
         var df = f.date_from || '';
@@ -817,19 +828,19 @@ var MAIL_TEMPLATES = """
         var db = d.db_totals || {};
         var hint = '';
         if (n === 0 && ((db.telegram||0) + (db.vkontakte||0)) > 0) {
-          hint = '<br><span class="events-error">В базе есть пользователи (TG ' +
-            (db.telegram||0) + ' · VK ' + (db.vkontakte||0) +
+          hint = '<br><span class="events-error">В базе есть пользователи (телеграм ' +
+            (db.telegram||0) + ' · вк ' + (db.vkontakte||0) +
             '), но фильтры отсеяли всех. Нажмите «Сбросить фильтры».</span>';
         } else if (n === 0) {
-          hint = '<br><span class="events-error">В базе 0 пользователей с TG/VK id — проверьте DATABASE_URL у admin.</span>';
+          hint = '<br><span class="events-error">В базе 0 пользователей с id телеграма или вк — проверьте DATABASE_URL у admin.</span>';
         }
         var html =
           '<b>К отправке (' + chLabel + '): ' + n + '</b>' +
-          ' <span class="muted">(по фильтрам TG ' + (d.telegram||0) + ' · VK ' + (d.vkontakte||0) +
+          ' <span class="muted">(по фильтрам телеграм ' + (d.telegram||0) + ' · вк ' + (d.vkontakte||0) +
           (d.batch_limit ? (', лимит ' + d.batch_limit) : '') +
-          '; в базе всего TG ' + (db.telegram||0) + ' · VK ' + (db.vkontakte||0) +
+          '; в базе всего телеграм ' + (db.telegram||0) + ' · вк ' + (db.vkontakte||0) +
           ')</span><br>Примерное время: <b>' + eta + '</b> при интервале ' + interval + ' сек' +
-          '<br><span class="muted">Время ≈ только паузы между сообщениями. Если Telegram попросит подождать (flood) — растянется. Картинка грузится один раз на всю рассылку.</span>' +
+          '<br><span class="muted">Время ≈ только паузы между сообщениями. Если телеграм попросит подождать — растянется. Картинка грузится один раз на всю рассылку.</span>' +
           '<br><span class="muted">Считаем по: ' + statuses + ' · ' + dateLabel +
           ' · exclude ' + (f.exclude_sent_days || 0) + ' дн.' +
           (f.exclude_today_bookings ? ' · без сегодняшних шоу' : '') +
@@ -935,7 +946,19 @@ var MAIL_TEMPLATES = """
 
     styles = """
 <style>
-  .mailing-compose label { display:block; margin:10px 0; font-size:14px; }
+  .mailing-compose, .mailing-test, .mailing-raffle-cancel, .mailing-history, .mailing-detail {
+    --mail-ink:#243328; --mail-muted:#6b7d6e; --mail-accent:#3b9a4c; --mail-accent-deep:#2d7a3b;
+    --mail-blush:#f7faf6; --mail-wash:#f2f7f1; --mail-mint:#eef8f2; --mail-line:#d5e4d6;
+    border-color:var(--mail-line);
+    background:linear-gradient(180deg,#fff 0%, var(--mail-blush) 140%);
+    box-shadow:0 10px 28px rgba(45,122,59,.08);
+    padding:22px 22px 20px;
+  }
+  .mailing-compose h2, .mailing-test h2, .mailing-detail h2 { color:var(--mail-ink); letter-spacing:-0.02em; }
+  .mailing-compose > .muted, .mailing-test > .muted, .mailing-raffle-cancel .muted, .mailing-detail .muted {
+    color:var(--mail-muted);
+  }
+  .mailing-compose label, .mailing-test label { display:block; margin:12px 0; font-size:14px; font-weight:700; color:var(--mail-ink); }
   .mailing-compose input[type=text],
   .mailing-compose input[type=url],
   .mailing-compose input[type=number],
@@ -943,67 +966,146 @@ var MAIL_TEMPLATES = """
   .mailing-compose input[type=datetime-local],
   .mailing-compose select,
   .mailing-compose textarea,
-  .mailing-compose input[type=file] {
-    display:block; width:100%; margin-top:4px; padding:8px 10px;
-    border:1px solid var(--line); border-radius:10px; font:inherit;
+  .mailing-compose input[type=file],
+  .mailing-test input[type=search],
+  .mailing-raffle-cancel textarea,
+  .mailing-raffle-cancel input[type=search],
+  .mailing-detail input[type=date] {
+    display:block; width:100%; margin-top:6px; padding:11px 13px;
+    border:1px solid var(--mail-line); border-radius:14px; font:inherit; font-weight:500;
+    background:#fff; color:var(--mail-ink);
+  }
+  .mailing-compose textarea { min-height:88px; line-height:1.45; }
+  .mailing-compose input:focus, .mailing-compose select:focus, .mailing-compose textarea:focus,
+  .mailing-test input:focus, .mailing-raffle-cancel textarea:focus, .mailing-raffle-cancel input:focus,
+  .mailing-detail input:focus {
+    outline:0; border-color:#8ec896; box-shadow:0 0 0 4px rgba(59,154,76,.16);
   }
   .mailing-compose details { margin:12px 0; }
-  .mailing-compose summary, .mailing-raffle-cancel summary {
+  .mailing-compose summary, .mailing-raffle-cancel summary, .mailing-history summary {
     cursor:pointer; display:flex; justify-content:space-between; align-items:center;
-    gap:12px; list-style:none;
+    gap:12px; list-style:none; padding:10px 12px; border-radius:14px;
+    background:var(--mail-wash); border:1px solid var(--mail-line); color:var(--mail-ink);
   }
   .mailing-compose summary::-webkit-details-marker,
-  .mailing-raffle-cancel summary::-webkit-details-marker { display:none; }
-  .mailing-tpl-edit {
-    margin:12px 0; padding:12px; border:1px solid var(--line); border-radius:12px; background:#f8fafc;
+  .mailing-raffle-cancel summary::-webkit-details-marker,
+  .mailing-history summary::-webkit-details-marker { display:none; }
+  .mailing-compose .details-action, .mailing-raffle-cancel .details-action, .mailing-history .details-action {
+    background:transparent; color:var(--mail-accent-deep); padding:0;
   }
-  .mailing-tpl-edit h3 { margin:0 0 8px; font-size:15px; }
-  .mailing-reschedule { display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .mailing-tpl-edit {
+    margin:12px 0; padding:14px; border:1px solid var(--mail-line); border-radius:16px; background:#fff;
+  }
+  .mailing-tpl-edit h3 { margin:0 0 8px; font-size:15px; color:var(--mail-ink); }
+  .mailing-reschedule { display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .mailing-reschedule input[type=datetime-local] {
-    padding:6px 8px; border-radius:8px; border:1px solid var(--line); font:inherit;
+    padding:8px 10px; border-radius:12px; border:1px solid var(--mail-line); font:inherit;
   }
   .mailing-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
-  .mailing-row { border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin:12px 0; }
-  .mailing-row legend { padding:0 6px; font-weight:600; }
-  .mailing-row label { display:inline-flex; gap:6px; align-items:center; margin:4px 12px 4px 0; }
-  .mailing-preview { margin:14px 0; padding:12px 14px; background:#f8fafc; border-radius:12px; border:1px solid var(--line); }
+  .mailing-row {
+    border:1px solid var(--mail-line); border-radius:16px; padding:12px 14px; margin:12px 0;
+    background:var(--mail-wash);
+  }
+  .mailing-row legend { padding:0 6px; font-weight:800; color:var(--mail-ink); }
+  .mailing-row label { display:inline-flex; gap:6px; align-items:center; margin:4px 14px 4px 0; font-weight:600; color:#355944; }
+  .mailing-preview {
+    margin:14px 0; padding:14px 16px; background:var(--mail-mint);
+    border-radius:16px; border:1px solid #cfe8d6; color:#355944;
+  }
   .mailing-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-  .mailing-actions button, .inline-form button {
-    padding:8px 12px; border-radius:10px; border:1px solid #111827; background:#111827; color:#fff; cursor:pointer;
+  .mailing-actions button, .inline-form button, .rz-cancel-add {
+    padding:10px 16px; border-radius:999px; border:1px solid var(--mail-accent-deep,#2d7a3b);
+    background:var(--mail-accent,#3b9a4c); color:#fff; cursor:pointer; font:inherit; font-weight:800;
+  }
+  .mailing-compose .mailing-actions button,
+  .mailing-test .mailing-actions button,
+  .mailing-raffle-cancel .mailing-actions button,
+  .mailing-history .mailing-actions button,
+  .mailing-detail .mailing-actions button,
+  .mailing-history .inline-form button,
+  .mailing-detail .inline-form button,
+  .mailing-raffle-cancel .rz-cancel-add {
+    border-color:var(--mail-accent-deep); background:var(--mail-accent); color:#fff;
   }
   .mailing-actions button.mail-secondary-btn {
-    background:#fff; color:#111827;
+    background:#fff; color:var(--mail-accent-deep); border-color:#cfe4d2;
+  }
+  .mailing-compose .mailing-actions button:not(.mail-secondary-btn),
+  .mailing-test .mailing-actions button,
+  .mailing-raffle-cancel .mailing-actions button:not(.mail-secondary-btn) {
+    background:var(--mail-accent); color:#fff; border-color:var(--mail-accent-deep);
   }
   .inline-form { display:inline; margin:0; }
-  .inline-form button { background:#fff; color:#111827; }
   .events-error { color:#b91c1c; }
   .mail-test-results { margin-top:10px; }
   .mail-test-list { display:flex; flex-direction:column; gap:6px; }
   .mail-test-item {
-    display:flex; gap:10px; align-items:flex-start; margin:0; padding:8px 10px;
-    border:1px solid var(--line); border-radius:10px; background:#fff; cursor:pointer;
+    display:flex; gap:10px; align-items:flex-start; margin:0; padding:10px 12px;
+    border:1px solid var(--mail-line); border-radius:14px; background:#fff; cursor:pointer;
   }
   .mail-test-item input { margin-top:3px; }
   .mailing-msg-preview {
-    margin:8px 0 14px; padding:12px 14px; background:#f8fafc; border:1px solid var(--line);
-    border-radius:12px; white-space:pre-wrap; word-break:break-word; font-size:14px;
+    margin:8px 0 14px; padding:12px 14px; background:var(--mail-mint);
+    border:1px solid #cfe8d6; border-radius:16px; white-space:pre-wrap; word-break:break-word; font-size:14px;
   }
-  .mailing-raffle-cancel label { display:block; margin:10px 0; font-size:14px; }
-  .mailing-raffle-cancel textarea,
-  .mailing-raffle-cancel input[type=search] {
-    display:block; width:100%; margin-top:4px; padding:8px 10px;
-    border:1px solid var(--line); border-radius:10px; font:inherit; box-sizing:border-box;
+  .mailing-history .pill, .mailing-detail .pill {
+    background:#fff; border-color:var(--mail-line); color:var(--mail-ink);
   }
+  .mailing-history .table-wrap { overflow-x:auto; }
+  .mailing-history table.users td { white-space:normal; }
+  .mailing-history table.users td.mailing-actions { white-space:normal; }
+  .mailing-raffle-cancel label { display:block; margin:10px 0; font-size:14px; font-weight:700; color:var(--mail-ink); }
   .rz-cancel-chips { display:flex; flex-wrap:wrap; gap:8px; }
   .rz-cancel-chip {
     display:inline-flex; align-items:center; gap:6px; padding:6px 10px;
-    background:#ecfdf5; border:1px solid #a7f3d0; border-radius:999px; font-size:13px;
+    background:#e5f4e8; border:1px solid #cfe8d6; border-radius:999px; font-size:13px;
   }
   .rz-cancel-chip-x {
     border:0; background:transparent; cursor:pointer; font-size:16px; line-height:1; padding:0 2px;
   }
-  .rz-cancel-add { padding:6px 10px; border-radius:8px; border:1px solid #111827; background:#fff; cursor:pointer; }
-  @media (max-width:900px){ .mailing-grid { grid-template-columns:1fr; } }
+  @media (max-width:900px) {
+    .mailing-compose, .mailing-test, .mailing-raffle-cancel, .mailing-history, .mailing-detail {
+      padding:16px;
+    }
+    .mailing-grid { grid-template-columns:1fr; }
+    .mailing-compose .mailing-actions, .mailing-test .mailing-actions, .mailing-raffle-cancel .mailing-actions {
+      align-items:stretch;
+    }
+    .mailing-compose .mailing-actions button,
+    .mailing-test .mailing-actions button,
+    .mailing-raffle-cancel .mailing-actions button,
+    .mailing-raffle-cancel .mailing-actions .mail-secondary-btn {
+      width:100%; text-align:center;
+    }
+    .mailing-history table.users,
+    .mailing-history thead,
+    .mailing-history tbody,
+    .mailing-history th,
+    .mailing-history td,
+    .mailing-history tr { display:block; width:100%; }
+    .mailing-history thead { display:none; }
+    .mailing-history tbody tr {
+      margin:0 0 12px; padding:12px; border:1px solid var(--mail-line);
+      border-radius:16px; background:#fff;
+    }
+    .mailing-history td { border:0; padding:6px 0; white-space:normal; }
+    .mailing-history td[data-label]::before {
+      content:attr(data-label); display:block; font-size:12px;
+      color:var(--mail-muted); font-weight:700; margin-bottom:2px;
+    }
+    .mailing-history td.mailing-actions {
+      display:flex; flex-direction:column; align-items:stretch; gap:8px; padding-top:10px;
+    }
+    .mailing-history td.mailing-actions .pill,
+    .mailing-history td.mailing-actions .inline-form,
+    .mailing-history td.mailing-actions button {
+      width:100%; display:block; text-align:center; box-sizing:border-box;
+    }
+    .mailing-history td.mailing-actions .inline-form {
+      display:flex; flex-direction:column; gap:8px;
+    }
+    .mailing-history .mailing-reschedule { width:100%; flex-direction:column; align-items:stretch; }
+  }
 </style>
 """
     return styles + flash_html + error_html + detail_html + form + raffle_cancel + history
