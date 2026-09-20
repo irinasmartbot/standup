@@ -8,6 +8,7 @@ from bot.db.mailing import (
     estimate_duration_sec,
     format_admin_datetime,
     format_duration,
+    get_mailing_test_defaults,
     is_campaign_scheduled,
     list_campaigns,
     list_mailing_best_shows,
@@ -284,11 +285,16 @@ def render_mailing_tab(
 
     templates = list_mailing_templates()
     shows = list_mailing_best_shows()
+    try:
+        test_defaults = get_mailing_test_defaults()
+    except Exception:
+        test_defaults = {}
     tpl_json = json.dumps(
         {t["key"]: t for t in templates},
         ensure_ascii=False,
     ).replace("<", "\\u003c")
     shows_json = json.dumps(shows, ensure_ascii=False).replace("<", "\\u003c")
+    test_defaults_json = json.dumps(test_defaults, ensure_ascii=False).replace("<", "\\u003c")
     tpl_opts = ['<option value="">Без шаблона — вставить вручную</option>']
     editor_blocks = []
     for t in templates:
@@ -382,7 +388,7 @@ def render_mailing_tab(
     </label>
     <fieldset class="mailing-row">
       <legend>Превью ссылок в Телеграме</legend>
-      <label><input type="checkbox" name="disable_link_preview" value="1"> Отключить превью ссылки в письме</label>
+      <label><input type="checkbox" name="disable_link_preview" value="1" checked> Отключить превью ссылки в письме</label>
       <p class="muted" style="margin:6px 0 0">Работает для Телеграма. В ВК превью управляет сам мессенджер.</p>
     </fieldset>
     <div class="mailing-grid">
@@ -414,9 +420,9 @@ def render_mailing_tab(
       <p class="muted">Нужны редко: статус брони, дата шоу, телефон, «не слать у кого сегодня шоу».</p>
       <fieldset class="mailing-row">
         <legend>Фильтры аудитории</legend>
-        <label><input type="checkbox" name="exclude_blocked" value="1" checked> Исключить заблокировавших TG-бота</label>
+        <label><input type="checkbox" name="exclude_blocked" value="1" checked> Исключить заблокировавших бота (TG и VK)</label>
         <label><input type="checkbox" name="has_phone" value="1"> Только с телефоном</label>
-        <label><input type="checkbox" name="exclude_today_bookings" value="1"> Не слать тем, у кого сегодня шоу (активная бронь или билет)</label>
+        <label><input type="checkbox" name="exclude_today_bookings" value="1" checked> Не слать тем, у кого сегодня шоу (активная бронь или билет)</label>
       </fieldset>
       <fieldset class="mailing-row">
         <legend>Статус брони</legend>
@@ -673,12 +679,15 @@ var MAIL_TEMPLATES = """
 var MAIL_BEST_SHOWS = """
         + shows_json
         + """;
+var MAIL_TEST_DEFAULTS = """
+        + test_defaults_json
+        + """;
 (function(){
   var form = document.getElementById('mailing-form');
   var btn = document.getElementById('mail-preview-btn');
   var box = document.getElementById('mail-preview');
   if (!form || !btn || !box) return;
-  var STORAGE_KEY = 'admin-mailing-draft-v7';
+  var STORAGE_KEY = 'admin-mailing-draft-v8';
   try {
     sessionStorage.removeItem('admin-mailing-draft-v1');
     sessionStorage.removeItem('admin-mailing-draft-v2');
@@ -686,6 +695,7 @@ var MAIL_BEST_SHOWS = """
     sessionStorage.removeItem('admin-mailing-draft-v4');
     sessionStorage.removeItem('admin-mailing-draft-v5');
     sessionStorage.removeItem('admin-mailing-draft-v6');
+    sessionStorage.removeItem('admin-mailing-draft-v7');
   } catch (e) {}
 
   function saveDraft(){
@@ -786,6 +796,16 @@ var MAIL_BEST_SHOWS = """
   }
   if (tplSel) tplSel.addEventListener('change', syncShowWrap);
   syncShowWrap();
+  if (showSel) {
+    showSel.addEventListener('change', function(){
+      var t = MAIL_TEMPLATES[tplSel && tplSel.value];
+      if (!(t && t.uses_show)) return;
+      var show = showById(showSel.value);
+      var untilEl = form.querySelector('[name=followup_until]');
+      if (untilEl && show && show.date_iso) untilEl.value = show.date_iso;
+      saveDraft();
+    });
+  }
   function clearTemplateFields(){
     var body = form.querySelector('[name=body_html]');
     var fu = form.querySelector('[name=followup_html]');
@@ -848,6 +868,9 @@ var MAIL_BEST_SHOWS = """
       if (fu) fu.value = fillSubs(t.followup_html || '', subs);
       var title = form.querySelector('[name=title]');
       if (title && !title.value.trim()) title.value = (show && show.title) || t.title || '';
+      var untilEl = form.querySelector('[name=followup_until]');
+      if (untilEl && show && show.date_iso) untilEl.value = show.date_iso;
+      applyTestDefault();
       saveDraft();
     });
   }
@@ -872,7 +895,7 @@ var MAIL_BEST_SHOWS = """
     resetBtn.addEventListener('click', function(){
       form.querySelectorAll('input[name="booking_statuses"]').forEach(function(el){ el.checked = false; });
       form.querySelectorAll('input[name="has_phone"]').forEach(function(el){ el.checked = false; });
-      form.querySelectorAll('input[name="exclude_today_bookings"]').forEach(function(el){ el.checked = false; });
+      form.querySelectorAll('input[name="exclude_today_bookings"]').forEach(function(el){ el.checked = true; });
       form.querySelectorAll('input[name="exclude_blocked"]').forEach(function(el){ el.checked = true; });
       ['date_from','date_to','batch_limit'].forEach(function(name){
         var el = form.querySelector('[name="'+name+'"]');
@@ -975,6 +998,9 @@ var MAIL_BEST_SHOWS = """
       testResults.innerHTML = '<span class="muted">Никого не найдено</span>';
       return;
     }
+    var pick = String(testUserId.value || '');
+    if (!pick && rows[0]) pick = String(rows[0].id);
+    testUserId.value = pick;
     var html = '<div class="mail-test-list">';
     for (var i = 0; i < rows.length; i++){
       var u = rows[i];
@@ -982,8 +1008,9 @@ var MAIL_BEST_SHOWS = """
       var ch = [];
       if (u.telegram_id) ch.push('TG');
       if (u.vk_id) ch.push('VK');
+      var checked = String(u.id) === pick ? ' checked' : '';
       html += '<label class="mail-test-item">' +
-        '<input type="radio" name="mail_test_pick" value="' + u.id + '">' +
+        '<input type="radio" name="mail_test_pick" value="' + u.id + '"' + checked + '>' +
         '<span><b>' + (u.name || 'Без имени') + '</b> · id ' + u.id +
         (uname ? (' · ' + uname) : '') +
         (u.phone ? (' · ' + u.phone) : '') +
@@ -995,6 +1022,22 @@ var MAIL_BEST_SHOWS = """
     testResults.querySelectorAll('input[name="mail_test_pick"]').forEach(function(r){
       r.addEventListener('change', function(){ testUserId.value = r.value; });
     });
+  }
+
+  function applyTestDefault(){
+    var ch = selectedChannel();
+    var rows = [];
+    if (ch === 'both') {
+      if (MAIL_TEST_DEFAULTS.telegram) rows.push(MAIL_TEST_DEFAULTS.telegram);
+      if (MAIL_TEST_DEFAULTS.vkontakte) rows.push(MAIL_TEST_DEFAULTS.vkontakte);
+    } else if (MAIL_TEST_DEFAULTS[ch]) {
+      rows.push(MAIL_TEST_DEFAULTS[ch]);
+    }
+    if (!rows.length) return;
+    var u = rows[0];
+    if (testQ) testQ.value = u.username ? ('@' + u.username) : (u.name || '');
+    testUserId.value = String(u.id);
+    renderTestUsers(rows);
   }
 
   testSearchBtn.addEventListener('click', function(){
@@ -1038,6 +1081,11 @@ var MAIL_BEST_SHOWS = """
       })
       .catch(function(){ testStatus.innerHTML = '<span class="events-error">Ошибка отправки теста</span>'; });
   });
+
+  form.querySelectorAll('input[name="channel"]').forEach(function(el){
+    el.addEventListener('change', applyTestDefault);
+  });
+  applyTestDefault();
 })();
 </script>
 """

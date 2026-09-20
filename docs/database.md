@@ -76,6 +76,9 @@
 | name | TEXT | Имя (из профиля или введённое вручную) |
 | phone | TEXT | Номер телефона |
 | source | TEXT | Источник: telegram / vkontakte |
+| is_blocked | BOOLEAN | Telegram: пользователь остановил бота |
+| vk_is_blocked | BOOLEAN | VK: не разрешил сообщения сообществу (ошибка рассылки 901) |
+| vk_blocked_at | TIMESTAMPTZ | Когда зафиксирован VK-отказ |
 | rozygrysh_used | INTEGER | Использовал розыгрыш: 0 = нет, 1 = да |
 | consent_accepted_at | TIMESTAMPTZ | Когда принято согласие на обработку ПДн |
 | consent_version | TEXT | Версия текста согласия (`consent_v1_short`) |

@@ -161,6 +161,18 @@ def ensure_analytics_tables() -> None:
                 ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS vk_is_blocked BOOLEAN NOT NULL DEFAULT false
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS vk_blocked_at TIMESTAMPTZ
+                """
+            )
         conn.commit()
 
 
@@ -897,9 +909,9 @@ def fetch_analytics_report(
                             WHERE telegram_id IS NOT NULL AND NOT COALESCE(is_blocked, false)
                         )::int AS telegram_mailable,
                         COUNT(*) FILTER (WHERE vk_id IS NOT NULL)::int AS vk_users,
-                        COUNT(*) FILTER (WHERE vk_id IS NOT NULL AND COALESCE(is_blocked, false))::int AS vk_blocked,
+                        COUNT(*) FILTER (WHERE vk_id IS NOT NULL AND COALESCE(vk_is_blocked, false))::int AS vk_blocked,
                         COUNT(*) FILTER (
-                            WHERE vk_id IS NOT NULL AND NOT COALESCE(is_blocked, false)
+                            WHERE vk_id IS NOT NULL AND NOT COALESCE(vk_is_blocked, false)
                         )::int AS vk_mailable
                     FROM users
                     """

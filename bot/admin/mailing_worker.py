@@ -14,7 +14,9 @@ from bot.db.mailing import (
     finalize_if_complete,
     fetch_pending_recipients,
     get_campaign,
+    mailing_error_is_vk_denied,
     mark_recipient,
+    set_user_vk_blocked,
 )
 
 logger = logging.getLogger(__name__)
@@ -294,6 +296,12 @@ async def mailing_worker_loop() -> None:
                         await asyncio.to_thread(
                             mark_recipient, int(recipient["id"]), status="sent"
                         )
+                        if recipient.get("channel") == "vkontakte" and recipient.get("user_id"):
+                            await asyncio.to_thread(
+                                set_user_vk_blocked,
+                                int(recipient["user_id"]),
+                                blocked=False,
+                            )
                     except Exception as exc:
                         logger.warning(
                             "mailing send fail campaign=%s recipient=%s: %s",
@@ -307,6 +315,16 @@ async def mailing_worker_loop() -> None:
                             status="failed",
                             error=str(exc)[:500],
                         )
+                        if (
+                            recipient.get("channel") == "vkontakte"
+                            and recipient.get("user_id")
+                            and mailing_error_is_vk_denied(str(exc))
+                        ):
+                            await asyncio.to_thread(
+                                set_user_vk_blocked,
+                                int(recipient["user_id"]),
+                                blocked=True,
+                            )
                     sent_in_run += 1
                     if interval > 0:
                         await asyncio.sleep(interval)

@@ -3637,7 +3637,10 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         f'<div class="metric"><span>VK · всего</span><b>{audience.get("vk_users", 0)}</b></div>'
         f'<div class="metric"><span>VK · можно слать</span><b>{audience.get("vk_mailable", 0)}</b></div>'
         f'<div class="metric"><span>VK · заблокировали</span><b>{audience.get("vk_blocked", 0)}</b></div>'
-        "</div></section>"
+        "</div>"
+        '<p class="muted">Telegram — стоп у бота. VK — не разрешили сообщения сообществу '
+        "(в рассылке это ошибка «Can&#39;t send messages…»).</p>"
+        "</section>"
     )
 
     filters_bar = f"""

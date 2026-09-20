@@ -22,6 +22,23 @@ CHANNELS = ("telegram", "vkontakte", "both")
 CAMPAIGN_STATUSES = ("draft", "queued", "running", "paused", "done", "cancelled")
 # Не слать служебные аккаунты в массовых рассылках.
 MAIL_SKIP_USERNAMES = ("nastya_stand_up", "ccoverr")
+# Тестовые получатели в админке (Ирина TG / VK).
+MAILING_TEST_USER_IDS = {"telegram": 243, "vkontakte": 20622}
+
+
+def mailing_error_is_vk_denied(error: str | None) -> bool:
+    """VK refused the message: user has not allowed community DMs."""
+    text = (error or "").strip().casefold()
+    if not text or "contact not found" in text:
+        return False
+    return (
+        "without permission" in text
+        or "can't send" in text
+        or "cant send" in text
+        or " 901" in text
+        or text.startswith("901")
+    )
+
 
 MAILING_TEMPLATE_SPECS = (
     {
@@ -318,6 +335,7 @@ def list_mailing_best_shows() -> list[dict]:
                 "id": event_id,
                 "label": label,
                 "is_today": is_today,
+                "date_iso": date_iso,
                 "title": f"BEST · {fields['{когда}']}",
                 "subs": fields,
             }
@@ -471,6 +489,40 @@ def ensure_mailing_tables() -> None:
                     """
                     ALTER TABLE users
                     ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT false
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE users
+                    ADD COLUMN IF NOT EXISTS vk_is_blocked BOOLEAN NOT NULL DEFAULT false
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE users
+                    ADD COLUMN IF NOT EXISTS vk_blocked_at TIMESTAMPTZ
+                    """
+                )
+                cur.execute(
+                    """
+                    UPDATE users u
+                    SET vk_is_blocked = true,
+                        vk_blocked_at = COALESCE(u.vk_blocked_at, NOW())
+                    FROM (
+                        SELECT DISTINCT ON (r.user_id) r.user_id, r.status, r.error
+                        FROM mailing_recipients r
+                        WHERE r.channel = 'vkontakte'
+                          AND r.status IN ('sent', 'failed')
+                        ORDER BY r.user_id, r.id DESC
+                    ) last_vk
+                    WHERE last_vk.user_id = u.id
+                      AND COALESCE(u.vk_is_blocked, false) = false
+                      AND last_vk.status = 'failed'
+                      AND (
+                          last_vk.error ILIKE '%%without permission%%'
+                          OR last_vk.error ILIKE '%%can''t send%%'
+                          OR last_vk.error ILIKE '%%cant send%%'
+                      )
                     """
                 )
                 cur.execute(
@@ -709,6 +761,8 @@ def _audience_sql(channel: str, filters: dict) -> tuple[str, dict]:
     else:
         where.append("u.vk_id IS NOT NULL")
         peer_expr = "u.vk_id"
+        if filters.get("exclude_blocked"):
+            where.append("COALESCE(u.vk_is_blocked, false) = false")
 
     if filters.get("has_phone"):
         where.append("NULLIF(TRIM(COALESCE(u.phone, '')), '') IS NOT NULL")
@@ -1496,6 +1550,28 @@ def mark_recipient(
         conn.commit()
 
 
+def set_user_vk_blocked(user_id: int, *, blocked: bool = True) -> None:
+    """VK-only block flag. Telegram is_blocked stays untouched."""
+    if not _use_postgres() or not user_id:
+        return
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET vk_is_blocked = %(blocked)s,
+                    vk_blocked_at = CASE
+                        WHEN %(blocked)s THEN COALESCE(vk_blocked_at, NOW())
+                        ELSE NULL
+                    END
+                WHERE id = %(id)s
+                  AND COALESCE(vk_is_blocked, false) IS DISTINCT FROM %(blocked)s
+                """,
+                {"id": int(user_id), "blocked": bool(blocked)},
+            )
+        conn.commit()
+
+
 def finalize_if_complete(campaign_id: int) -> dict | None:
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
@@ -1698,3 +1774,21 @@ def get_user_for_mailing(user_id: int) -> dict | None:
             )
             row = cur.fetchone()
             return dict(row) if row else None
+
+
+def get_mailing_test_defaults() -> dict[str, dict]:
+    """TG/VK users preselected in the mailing test box."""
+    out: dict[str, dict] = {}
+    for channel, user_id in MAILING_TEST_USER_IDS.items():
+        row = get_user_for_mailing(int(user_id))
+        if not row:
+            continue
+        out[channel] = {
+            "id": int(row["id"]),
+            "name": row.get("name") or "",
+            "username": row.get("username") or "",
+            "phone": row.get("phone") or "",
+            "telegram_id": int(row["telegram_id"]) if row.get("telegram_id") else None,
+            "vk_id": int(row["vk_id"]) if row.get("vk_id") else None,
+        }
+    return out

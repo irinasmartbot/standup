@@ -244,6 +244,21 @@ def test_mailing_best_show_fill():
     print("mailing BEST show fill: OK")
 
 
+def test_mailing_vk_denied_and_defaults():
+    from bot.db.mailing import MAILING_TEST_USER_IDS, mailing_error_is_vk_denied
+
+    assert mailing_error_is_vk_denied(
+        "messages.send: Can't send messages for users without permission"
+    )
+    assert mailing_error_is_vk_denied("VKAPIError 901")
+    assert not mailing_error_is_vk_denied("messages.send: Contact not found")
+    assert not mailing_error_is_vk_denied("")
+    assert not mailing_error_is_vk_denied(None)
+    assert MAILING_TEST_USER_IDS["telegram"] == 243
+    assert MAILING_TEST_USER_IDS["vkontakte"] == 20622
+    print("mailing vk denied and defaults: OK")
+
+
 def test_db_schema():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         path = tmp.name
@@ -304,6 +319,7 @@ async def main():
     test_mailing_booking_button_fields()
     test_mailing_schedule_and_templates()
     test_mailing_best_show_fill()
+    test_mailing_vk_denied_and_defaults()
     test_db_schema()
     test_vk_message_item_has_photo()
     events = await load_events()
