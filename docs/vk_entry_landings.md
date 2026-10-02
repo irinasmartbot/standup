@@ -17,7 +17,7 @@ https://go.moscowstandupshow.ru/vk/offline-gift
 https://go.moscowstandupshow.ru/vk/posters/<имя_файла>.jpg
 ```
 
-Пример (резиденты / сольники):
+Пример (резиденты / сольник Егора Константинова):
 
 ```text
 https://go.moscowstandupshow.ru/vk/posters/residents_egor_konstantinov.jpg
