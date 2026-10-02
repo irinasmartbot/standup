@@ -433,6 +433,7 @@ def _dates_keyboard(
     page: int,
     back_cmd: str,
     venues_cmd: str | None = None,
+    back_label: str = "В главное меню",
 ) -> str:
     start = page * DATES_PAGE_SIZE
     end = start + DATES_PAGE_SIZE
@@ -446,7 +447,7 @@ def _dates_keyboard(
         kb.button("➡️", _payload(f"{command_prefix}_page", page=page + 1))
     if venues_cmd:
         kb.button("🗓 Выбрать по площадкам", _payload(venues_cmd))
-    kb.button("В главное меню", _payload(back_cmd))
+    kb.button(back_label, _payload(back_cmd))
     widths = [2] * (len(shown) // 2)
     if len(shown) % 2:
         widths.append(1)
@@ -4438,7 +4439,9 @@ class VKBotApp:
         max_page = max(0, (len(dates) - 1) // DATES_PAGE_SIZE)
         page = max(0, min(int(page or 0), max_page))
         text = RESIDENTS_ENTRY_TEXT if entry else "Выбирай дату 👇"
-        keyboard = _dates_keyboard(dates, "residents_date", page, "book")
+        keyboard = _dates_keyboard(
+            dates, "residents_date", page, "book", back_label="◀️ Назад"
+        )
         await self._send_or_edit_dates_card(
             peer_id,
             text,
