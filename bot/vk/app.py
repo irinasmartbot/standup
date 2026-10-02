@@ -682,6 +682,13 @@ class VKBotApp:
                     file_name,
                 )
                 return uploaded
+        if keys:
+            logger.warning(
+                "VK requested cover missing peer_id=%s keys=%s",
+                peer_id,
+                keys,
+            )
+            return None
         att = await resolve_booking_cover_attachment(self.client, peer_id, self.settings)
         if not att:
             logger.warning(
@@ -955,7 +962,9 @@ class VKBotApp:
         """
         del edit  # листание больше не через in-place edit
         peer = int(peer_id)
-        keep_att = attachment or self._random_cover_attachment()
+        keep_att = attachment
+        if not keep_att:
+            keep_att = self._random_cover_attachment()
         if not keep_att:
             keep_att = await self._ensure_cover_attachment(peer_id)
         if keep_att:
@@ -4334,7 +4343,7 @@ class VKBotApp:
             peer_id,
             text,
             keyboard=keyboard,
-            attachment=await self._ensure_cover_attachment(peer_id, "hitloto_start", "show_cover"),
+            attachment=await self._ensure_cover_attachment(peer_id, "hitloto_start"),
             edit=edit,
         )
 
@@ -4350,7 +4359,7 @@ class VKBotApp:
             peer_id,
             f"Хитлото на {_date_label(date)}:",
             keyboard=_events_keyboard(events, "hitloto_event", "hitloto"),
-            attachment=await self._ensure_cover_attachment(peer_id, "hitloto_start", "show_cover"),
+            attachment=await self._ensure_cover_attachment(peer_id, "hitloto_start"),
         )
 
     async def _send_hitloto_event(self, peer_id: int, event_id: Any, *, vk_id: int | None = None) -> None:
@@ -4432,9 +4441,7 @@ class VKBotApp:
             peer_id,
             text,
             keyboard=keyboard,
-            attachment=await self._ensure_cover_attachment(
-                peer_id, "residents_start", "show_cover"
-            ),
+            attachment=await self._ensure_cover_attachment(peer_id, "residents_start"),
             edit=edit,
         )
 
