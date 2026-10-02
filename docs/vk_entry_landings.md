@@ -27,10 +27,12 @@ Mini App (канонические ссылки — внутри VK):
 
 ```text
 https://vk.com/app54704296_-225298932#flow=booking
-https://vk.ru/app54704296_-225298932#flow=residents
+https://vk.ru/app54704296#flow=residents
 https://vk.com/app54704296_-225298932#flow=raffle
 https://vk.com/app54704296_-225298932#flow=offline_gift
 ```
+
+Для `residents` только короткая без `_-group`: на ПК иначе теряется hash и открывается общее меню.
 
 `225298932` — `VK_GROUP_ID` сообщества, к которому привязан mini app.  
 `54704296` — `VK_MINI_APP_ID`.
@@ -79,21 +81,29 @@ https://t.me/StandUp_Show_bot?start=pushkin
 
 Постоянный формат «Резиденты стендап» — другие ссылки, не 15.09.
 
-Публичная ссылка для сайта / рассылок / клиентов (телефон и ПК):
+Публичная ссылка для сайта / рассылок / клиентов:
 
 ```text
 https://go.moscowstandupshow.ru/vk/residents
 ```
 
-На телефоне уводит в `vk.ru/app…#flow=residents`, на ПК — в `vk.com/app…_-{group}#flow=residents`.
-Не используем `write-…?ref=standup_residents` как основную: на ПК открывается криво.
+Она всегда уводит в короткую рабочую форму (как booking):
 
-Прямые mini app (внутри VK — пост, сторис):
+```text
+https://vk.ru/app54704296#flow=residents
+```
+
+Именно эта форма на ПК даёт экран «Резиденты стендап» → «Открыть диалог VK».
+Ссылки с `_-225298932` на ПК часто теряют `#flow=residents` и показывают общее меню
+(бронь / розыгрыш / подарок) — их для резидентов не даём.
+
+`write-…?ref=standup_residents` как основную тоже не используем: на ПК открывается криво.
+
+Прямые ссылки внутри VK (пост/сторис) — только короткая без group:
 
 ```text
 https://t.me/StandUp_Show_bot?start=residents
 https://vk.ru/app54704296#flow=residents
-https://vk.com/app54704296_-225298932#flow=residents
 ```
 
 ## Тест передачи источника в VK-бот

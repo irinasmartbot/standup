@@ -836,20 +836,19 @@ async def landing_offline_gift(request: web.Request) -> web.Response:
 
 
 async def landing_residents(request: web.Request) -> web.Response:
-    """Единая публичная ссылка: телефон и ПК → свой формат mini app."""
+    """Публичная ссылка → короткая mini app #flow=residents.
+
+    Важно: на ПК форма vk.com/app{id}_-{group}#flow=… часто теряет hash
+    и открывает общее меню (бронь/розыгрыш/подарок). Рабочая форма —
+    vk.ru/app{id}#flow=residents (как у booking).
+    """
     cid = _request_cid(request)
     source = _request_source(request)
     settings = load_vk_settings()
-    if _is_mobile_request(request):
-        # Как booking: короткая vk.ru/app{id}#flow=… — на телефоне стабильнее.
-        target = _mini_app_vk_url(
-            settings, "residents", short=True, cid=cid, source=source
-        )
-    else:
-        # ПК: vk.com/app{id}_-{group}#flow=… — hash реже теряется, чем у write-/коротких.
-        target = _mini_app_vk_url(
-            settings, "residents", short=False, cid=cid, source=source
-        )
+    _remember_mini_flow(request, "residents")
+    target = _mini_app_vk_url(
+        settings, "residents", short=True, cid=cid, source=source
+    )
     return _html_response(_mobile_vk_jump_html("residents", target))
 
 
@@ -1709,9 +1708,15 @@ def _mini_app_html(default_flow: str = "") -> str:
     }});
   }}
 
-  // Не стартуем сразу из server handoff: в VK hash часто приходит чуть позже
-  // через GetLaunchParams, иначе все ссылки уезжают в booking.
+  // Не стартуем сразу из server handoff для обычных кнопок меню:
+  // в VK hash часто приходит чуть позже через GetLaunchParams,
+  // иначе все ссылки уезжают в booking.
+  // Для DIRECT flows (residents) handoff можно взять сразу — иначе при потере
+  // hash на ПК мелькает/залипает общее меню.
   var earlyFlow = flowFromLocation();
+  if (!earlyFlow && serverFlow && directFlows.indexOf(serverFlow) !== -1) {{
+    earlyFlow = parseFlowValue(serverFlow);
+  }}
   detectedCid = cidFromLocation();
   detectedSource = sourceFromLocation();
   if (expiredFromLocation()) {{
