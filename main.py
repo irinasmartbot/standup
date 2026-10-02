@@ -14,7 +14,7 @@ from bot.config import MODERATION_CHAT_ID, TECH_CHAT_ID, bot, dp
 from bot.db.models import init_db
 from bot.db.analytics import ensure_analytics_tables
 from bot.db.crud import ensure_help_tables, ensure_offline_gift_tables, ensure_raffle_tables
-from bot.handlers import start, formats, booking, rozygrysh, offline_gift, manager_stata
+from bot.handlers import start, formats, booking, residents, rozygrysh, offline_gift, manager_stata
 from bot.handlers import mailing_callbacks, fallback, tech_ops
 from bot.db.mailing import ensure_mailing_tables
 from bot.handlers.reminders import reminder_loop
@@ -83,6 +83,9 @@ async def main():
     ensure_offline_gift_tables()
     ensure_analytics_tables()
     ensure_mailing_tables()
+    from bot.db.events_admin import ensure_residents_format
+
+    ensure_residents_format()
     try:
         await start.setup_bot_commands(bot)
     except (TelegramNetworkError, TelegramServerError) as exc:
@@ -111,6 +114,7 @@ async def main():
     dp.include_router(offline_gift.router)
     dp.include_router(rozygrysh.router)
     dp.include_router(formats.router)
+    dp.include_router(residents.router)
     dp.include_router(booking.router)
     dp.include_router(mailing_callbacks.router)
     # Последним: неизвестные callback-кнопки → меню (не перехватывать раньше).

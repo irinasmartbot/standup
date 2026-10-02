@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS events (
     id BIGSERIAL PRIMARY KEY,
-    format TEXT NOT NULL CHECK (format IN ('proverka', '1plus1', 'best', 'masterclass', 'hitloto')),
+    format TEXT NOT NULL CHECK (format IN ('proverka', '1plus1', 'best', 'masterclass', 'hitloto', 'residents')),
     event_date DATE NOT NULL,
     weekday TEXT,
     event_time TIME NOT NULL,
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     event_id BIGINT NOT NULL REFERENCES events(id) ON DELETE RESTRICT,
     guests INTEGER NOT NULL CHECK (guests BETWEEN 1 AND 4),
-    format TEXT NOT NULL CHECK (format IN ('proverka', '1plus1', 'rozygrysh')),
+    format TEXT NOT NULL CHECK (format IN ('proverka', '1plus1', 'rozygrysh', 'residents')),
     source TEXT NOT NULL DEFAULT 'telegram' CHECK (source IN ('telegram', 'vkontakte', 'import')),
     status TEXT NOT NULL DEFAULT 'booked' CHECK (status IN ('booked', 'confirmed', 'cancelled', 'annulled')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

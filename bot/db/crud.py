@@ -629,13 +629,23 @@ def update_booking_guests(booking_id, guests):
     conn.close()
 
 
-def get_total_guests(event_date, event_time, exclude_id=None):
+def get_total_guests(event_date, event_time, exclude_id=None, *, event_id=None, event_format=None):
     """Guests that already took seats: only confirmed tickets count."""
     if _use_postgres():
-        params = [_parse_event_date(event_date), _parse_event_time(event_time)]
-        exclude_sql = ""
+        params = []
+        where = ["b.status = 'confirmed'"]
+        if event_id:
+            where.append("e.id = %s")
+            params.append(int(event_id))
+        else:
+            where.append("e.event_date = %s")
+            where.append("e.event_time = %s")
+            params.extend([_parse_event_date(event_date), _parse_event_time(event_time)])
+            if event_format:
+                where.append("e.format = %s")
+                params.append(event_format)
         if exclude_id:
-            exclude_sql = " AND b.id != %s"
+            where.append("b.id != %s")
             params.append(exclude_id)
 
         with _pg_connect() as conn:
@@ -645,10 +655,7 @@ def get_total_guests(event_date, event_time, exclude_id=None):
                     SELECT COALESCE(SUM(b.guests), 0)
                     FROM bookings b
                     JOIN events e ON e.id = b.event_id
-                    WHERE e.event_date = %s
-                      AND e.event_time = %s
-                      AND b.status = 'confirmed'
-                      {exclude_sql}
+                    WHERE {' AND '.join(where)}
                     """,
                     params,
                 )
@@ -1053,7 +1060,7 @@ def get_user_bookings_for_commands(telegram_id=None, status=None, *, vk_id=None)
                 JOIN users u ON u.id = b.user_id
                 JOIN events e ON e.id = b.event_id
                 WHERE {user_sql}
-                  AND b.format IN ('proverka', 'rozygrysh')
+                  AND b.format IN ('proverka', 'rozygrysh', 'residents')
                   {status_sql}
                   AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
                 ORDER BY e.event_date ASC, e.event_time ASC, b.id ASC
@@ -2568,11 +2575,18 @@ def get_confirmed_raffle_past_for_cleanup():
             return [row[0] for row in cur.fetchall()]
 
 
-def get_manager_stata_dates(limit: int = 16, *, event_format: str = "proverka") -> list[str]:
+def get_manager_stata_dates(
+    limit: int = 16,
+    *,
+    event_format: str = "proverka",
+    event_formats: tuple[str, ...] | list[str] | None = None,
+) -> list[str]:
     """Ближайшие даты с активными шоу нужного формата (кнопки менеджера)."""
     if not _use_postgres():
         return []
-    fmt = (event_format or "proverka").strip().lower() or "proverka"
+    fmts = [str(x).strip().lower() for x in (event_formats or (event_format,)) if str(x).strip()]
+    if not fmts:
+        fmts = ["proverka"]
     with _pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -2580,13 +2594,13 @@ def get_manager_stata_dates(limit: int = 16, *, event_format: str = "proverka") 
                 SELECT to_char(e.event_date, 'DD.MM.YYYY') AS event_date
                 FROM events e
                 WHERE e.status = 'active'
-                  AND e.format = %s
+                  AND e.format = ANY(%s)
                   AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
                 GROUP BY e.event_date
                 ORDER BY e.event_date
                 LIMIT %s
                 """,
-                (fmt, int(limit)),
+                (fmts, int(limit)),
             )
             return [row[0] for row in cur.fetchall() if row and row[0]]
 
@@ -2597,6 +2611,8 @@ def get_manager_stata_bookings_for_date(
     booking_format: str = "proverka",
     event_format: str = "proverka",
     statuses: tuple[str, ...] | list[str] | None = None,
+    event_formats: tuple[str, ...] | list[str] | None = None,
+    booking_formats: tuple[str, ...] | list[str] | None = None,
 ) -> list[dict]:
     """Брони на дату по шоу.
 
@@ -2609,8 +2625,12 @@ def get_manager_stata_bookings_for_date(
         parsed = _parse_event_date(event_date)
     except (TypeError, ValueError):
         return []
-    b_fmt = (booking_format or "proverka").strip().lower() or "proverka"
-    e_fmt = (event_format or "proverka").strip().lower() or "proverka"
+    e_fmts = [str(x).strip().lower() for x in (event_formats or (event_format,)) if str(x).strip()]
+    b_fmts = [str(x).strip().lower() for x in (booking_formats or (booking_format,)) if str(x).strip()]
+    if not e_fmts:
+        e_fmts = ["proverka"]
+    if not b_fmts:
+        b_fmts = ["proverka"]
     status_list = [str(s).strip().lower() for s in (statuses or ("confirmed",)) if str(s).strip()]
     if not status_list:
         status_list = ["confirmed"]
@@ -2620,6 +2640,7 @@ def get_manager_stata_bookings_for_date(
                 """
                 SELECT
                     e.id AS event_id,
+                    e.format AS event_format,
                     to_char(e.event_time, 'HH24:MI') AS event_time,
                     COALESCE(e.location, '') AS location,
                     COALESCE(e.address, '') AS address,
@@ -2632,27 +2653,28 @@ def get_manager_stata_bookings_for_date(
                 JOIN users u ON u.id = b.user_id
                 JOIN events e ON e.id = b.event_id
                 WHERE e.event_date = %s
-                  AND e.format = %s
-                  AND b.format = %s
+                  AND e.format = ANY(%s)
+                  AND b.format = ANY(%s)
                   AND b.status = ANY(%s)
                 ORDER BY e.event_time, e.location,
                          CASE b.status WHEN 'confirmed' THEN 0 WHEN 'booked' THEN 1 ELSE 2 END,
                          b.id
                 """,
-                (parsed, e_fmt, b_fmt, status_list),
+                (parsed, e_fmts, b_fmts, status_list),
             )
             rows = cur.fetchall()
     return [
         {
             "event_id": int(row[0]),
-            "event_time": row[1] or "",
-            "location": row[2] or "",
-            "address": row[3] or "",
-            "name": row[4] or "",
-            "phone": row[5] or "",
-            "guests": int(row[6] or 0),
-            "status": row[7] or "",
-            "booking_id": int(row[8]),
+            "event_format": row[1] or "",
+            "event_time": row[2] or "",
+            "location": row[3] or "",
+            "address": row[4] or "",
+            "name": row[5] or "",
+            "phone": row[6] or "",
+            "guests": int(row[7] or 0),
+            "status": row[8] or "",
+            "booking_id": int(row[9]),
         }
         for row in rows
     ]

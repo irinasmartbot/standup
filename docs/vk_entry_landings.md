@@ -6,6 +6,7 @@
 
 ```text
 https://go.moscowstandupshow.ru/vk/booking
+https://go.moscowstandupshow.ru/vk/residents
 https://go.moscowstandupshow.ru/vk/raffle
 https://go.moscowstandupshow.ru/vk/offline-gift
 ```
@@ -14,6 +15,7 @@ Mini App (канонические ссылки — внутри VK):
 
 ```text
 https://vk.com/app54704296_-225298932#flow=booking
+https://vk.ru/app54704296_-225298932#flow=residents
 https://vk.com/app54704296_-225298932#flow=raffle
 https://vk.com/app54704296_-225298932#flow=offline_gift
 ```
@@ -33,6 +35,7 @@ https://go.moscowstandupshow.ru/vk-mini
 
 ```text
 https://go.moscowstandupshow.ru/vk-mini/start/booking
+https://go.moscowstandupshow.ru/vk-mini/start/residents
 https://go.moscowstandupshow.ru/vk-mini/start/raffle
 https://go.moscowstandupshow.ru/vk-mini/start/offline_gift
 ```
@@ -61,6 +64,14 @@ https://t.me/StandUp_Show_bot?start=pushkin
 ```
 
 То же для `ref`/`cmd` `booking_resident` / `pushkin` в VK и для старых кнопок рассылки с маркером `__flow:booking_resident__`. Новые рассылки эту бронь больше не ставят.
+
+Постоянный формат «Резиденты стендап» — другие ссылки, не 15.09:
+
+```text
+https://t.me/StandUp_Show_bot?start=residents
+https://go.moscowstandupshow.ru/vk/residents
+https://vk.ru/app54704296_-225298932#flow=residents
+```
 
 ## Тест передачи источника в VK-бот
 

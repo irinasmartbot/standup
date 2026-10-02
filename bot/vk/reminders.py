@@ -271,6 +271,12 @@ async def process_due_vk_reminders(client: VKClient, *, community_link: str, man
     )
     await _process_format_reminders(
         client,
+        booking_format="residents",
+        community_link=community_link,
+        manager_link=manager_link,
+    )
+    await _process_format_reminders(
+        client,
         booking_format="rozygrysh",
         community_link=community_link,
         manager_link=manager_link,

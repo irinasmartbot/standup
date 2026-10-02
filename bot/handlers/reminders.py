@@ -116,7 +116,8 @@ async def process_due_reminders():
     from bot.utils.reminder_schedule import plan_booking_reminders
 
     now = now_msk().replace(tzinfo=None)
-    for row in get_booked_for_reminders():
+    rows = list(get_booked_for_reminders("proverka")) + list(get_booked_for_reminders("residents"))
+    for row in rows:
         if not _is_telegram_reminder_row(row):
             continue
         booking_id = row[0]

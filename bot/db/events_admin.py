@@ -10,20 +10,62 @@ import psycopg
 from psycopg.rows import dict_row
 
 from bot.config import BOOKINGS_SOURCE, DATABASE_URL
+from bot.utils.show_formats import EVENT_FORMAT_CHECK, RESIDENTS
 from bot.utils.ticket import WEEKDAYS_RU
 
 logger = logging.getLogger(__name__)
 
-AFISHA_FORMATS = ("best", "proverka", "hitloto")
+AFISHA_FORMATS = ("best", "proverka", "hitloto", "residents")
 AFISHA_FORMAT_LABELS = {
     "best": "BEST",
     "proverka": "Проверка",
     "hitloto": "Hit Loto",
+    "residents": "Резиденты",
 }
+_FREE_AFISHA = {"proverka", "residents"}
 
 
 def _use_postgres() -> bool:
     return BOOKINGS_SOURCE == "postgres" and bool(DATABASE_URL)
+
+
+def ensure_residents_format() -> None:
+    """Widen events/bookings format CHECKs so residents can be stored."""
+    if not _use_postgres():
+        return
+    event_vals = ", ".join(f"'{x}'" for x in EVENT_FORMAT_CHECK)
+    booking_vals = ", ".join(
+        f"'{x}'" for x in ("proverka", "1plus1", "rozygrysh", RESIDENTS)
+    )
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                for table, values in (
+                    ("events", event_vals),
+                    ("bookings", booking_vals),
+                ):
+                    cur.execute(
+                        """
+                        SELECT conname
+                        FROM pg_constraint
+                        WHERE conrelid = %s::regclass
+                          AND contype = 'c'
+                          AND pg_get_constraintdef(oid) ILIKE '%%format%%IN%%'
+                        """,
+                        (table,),
+                    )
+                    names = [row[0] for row in cur.fetchall() if row and row[0]]
+                    for name in names:
+                        if not str(name).replace("_", "").isalnum():
+                            continue
+                        cur.execute(f'ALTER TABLE {table} DROP CONSTRAINT IF EXISTS "{name}"')
+                    cur.execute(
+                        f"ALTER TABLE {table} ADD CONSTRAINT {table}_format_check "
+                        f"CHECK (format IN ({values}))"
+                    )
+            conn.commit()
+    except Exception:
+        logger.exception("ensure_residents_format failed")
 
 
 def weekday_ru_from_date(value: date) -> str:
@@ -473,7 +515,7 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
     try:
         max_seats = max(0, int(raw.get("max_seats") or 0))
     except (TypeError, ValueError):
-        max_seats = 60 if event_format == "proverka" else 0
+        max_seats = 60 if event_format in _FREE_AFISHA else 0
 
     row_ref = f"#{event_id}" if event_id else "новая строка"
     if image_url and not _is_http_url(image_url):
@@ -502,7 +544,7 @@ def _save_one(cur, event_format: str, raw: dict, result: dict) -> None:
         )
         return
 
-    if event_format == "proverka":
+    if event_format in _FREE_AFISHA:
         price = 0
         payment_url = None
         host = None

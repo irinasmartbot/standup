@@ -18,6 +18,7 @@ POSTGRES_CONNECT_TIMEOUT = 5
 EVENTS_FROM_POSTGRES_SQL = """
 SELECT
     id,
+    format,
     event_date,
     weekday,
     event_time,
@@ -45,6 +46,7 @@ def _format_event_time(value):
 def _row_to_event(row):
     return {
         "id": row["id"],
+        "format": row.get("format") or "",
         "date": row["event_date"].strftime("%d.%m.%Y"),
         "weekday": row["weekday"] or "",
         "time": _format_event_time(row["event_time"]),
@@ -159,10 +161,29 @@ async def _load_events_from_sheets(event_format="proverka"):
 async def load_events(event_format="proverka"):
     if EVENTS_SOURCE == "postgres" and DATABASE_URL:
         return await load_events_from_postgres(event_format)
-
+    if event_format == "residents":
+        return []
     return await _load_events_from_sheets(event_format)
 
 
 async def get_event(event_date, event_time, event_format="proverka"):
     events = await load_events(event_format)
     return next((e for e in events if e["date"] == event_date and e["time"] == event_time), None)
+
+
+async def get_event_by_id(event_id, event_format: str | None = None):
+    if event_id is None or event_id == "":
+        return None
+    formats = (event_format,) if event_format else ("proverka", "residents", "best", "hitloto")
+    for fmt in formats:
+        if not fmt:
+            continue
+        found = next(
+            (e for e in await load_events(fmt) if str(e.get("id")) == str(event_id)),
+            None,
+        )
+        if found:
+            if not found.get("format"):
+                found["format"] = fmt
+            return found
+    return None

@@ -483,6 +483,12 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
         await check_format_entry(message)
         return
 
+    if payload_key == "residents":
+        from bot.handlers.residents import residents_format_entry
+
+        await residents_format_entry(message, telegram_id=message.from_user.id)
+        return
+
     if payload_key in {
         "booking_resident",
         "pushkin",

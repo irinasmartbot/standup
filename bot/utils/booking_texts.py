@@ -8,6 +8,7 @@ from bot.utils.ticket import format_date, now_msk
 
 _FORMAT_LABELS = {
     "proverka": "проверка материала",
+    "residents": "резиденты стендап",
     "rozygrysh": "розыгрыш",
     "best": "StandUp BEST",
     "hitloto": "Хитлото",

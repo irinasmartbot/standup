@@ -13,6 +13,7 @@ from bot.db.analytics import (
     EVENT_BRANCH_BEST,
     EVENT_BRANCH_HITLOTO,
     EVENT_BRANCH_PROVERKA,
+    EVENT_BRANCH_RESIDENTS,
     EVENT_BOOKING_START,
     EVENT_BROWSE_DATES,
     EVENT_BROWSE_VENUES,
@@ -45,6 +46,7 @@ from bot.handlers.booking import BOOKING_RULES_TEXT as TG_BOOKING_RULES_TEXT
 from bot.handlers.formats import (
     BUY_TICKET_TEXT as TG_BUY_TICKET_TEXT,
     FORMATS_TEXT as TG_FORMATS_TEXT,
+    FREE_FORMATS_TEXT as TG_FREE_FORMATS_TEXT,
     RULES_TEXT as TG_RULES_TEXT,
     VENUE_CARDS,
     VENUES_INTRO_TEXT as TG_VENUES_INTRO_TEXT,
@@ -81,6 +83,7 @@ VK_CHANNEL = "vkontakte"
 # (ссылка вида vk.com/club...?ref= НЕ передаёт ref в message_new).
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
 _BOOKING_REF_VALUES = frozenset({"standup_book", "booking", "book", "бронь", "proverka"})
+_RESIDENTS_REF_VALUES = frozenset({"standup_residents", "residents", "rezidenty"})
 _EXPIRED_SHOW_REF_VALUES = frozenset({
     "standup_booking_resident",
     "booking_resident",
@@ -108,6 +111,10 @@ _OFFLINE_GIFT_REF_SOURCE_PREFIXES = (
 
 def _is_expired_show_ref(ref: str) -> bool:
     return (ref or "").strip().casefold() in _EXPIRED_SHOW_REF_VALUES
+
+
+def _is_residents_ref(ref: str) -> bool:
+    return (ref or "").strip().casefold() in _RESIDENTS_REF_VALUES
 
 
 def _is_booking_ref(ref: str) -> bool:
@@ -253,7 +260,10 @@ def in_evening_offline_gift_window(when: datetime | None = None) -> bool:
     """True с 19:00 до 22:00 по Москве (час шоу / офлайн-розыгрыша)."""
     dt = when or now_msk()
     return _EVENING_GIFT_HINT_HOUR_START <= int(dt.hour) < _EVENING_GIFT_HINT_HOUR_END
+
+
 FORMATS_TEXT = TG_FORMATS_TEXT
+FREE_FORMATS_TEXT = TG_FREE_FORMATS_TEXT
 BUY_TICKET_TEXT = TG_BUY_TICKET_TEXT
 RULES_TEXT = TG_RULES_TEXT
 BOOKING_RULES_TEXT = TG_BOOKING_RULES_TEXT
@@ -271,6 +281,11 @@ HITLOTO_ENTRY_TEXT = (
     "Привет 😊 Я помогу тебе выбрать билеты на <b>Хитлото</b> "
     "от Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
 )
+RESIDENTS_ENTRY_TEXT = (
+    "Привет 😊 Я помогу тебе забронировать места на <b>Резиденты стендап</b> "
+    "от Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
+)
+RESIDENTS_EMPTY_TEXT = "Скоро даты появятся 😊"
 
 
 def _payload(value: str, **extra) -> dict[str, Any]:
@@ -369,6 +384,15 @@ def paid_formats_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("STANDUP BEST", _payload("best"), color="primary")
     kb.button("Хитлото", _payload("hitloto"), color="primary")
+    kb.button("В главное меню", _payload("main_menu"))
+    kb.adjust(1)
+    return kb.as_json()
+
+
+def free_formats_keyboard() -> str:
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button("Проверка материала", _payload("check"), color="primary")
+    kb.button("Резиденты стендап", _payload("residents"), color="primary")
     kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
@@ -1053,7 +1077,7 @@ class VKBotApp:
             EVENT_BOOKING_START,
             event_id=event.get("id"),
             props={
-                "format": "proverka",
+                "format": event.get("format") or "proverka",
                 "browse": self.peer_browse.get(peer_id, "date"),
                 "date": event_date,
                 "time": event_time,
@@ -1597,18 +1621,25 @@ class VKBotApp:
             if ticket_mid and ticket_mid != confirm_mid:
                 await self._strip_inline_keyboard(peer_id, ticket_mid)
             vk_mb.clear_manage_session(self.manage_sessions, vk_id)
-            self.peer_context[peer_id] = "check"
-            self._track(vk_id, EVENT_BRANCH_PROVERKA, props={"via": "change_date"})
-            await self._send_text(
-                peer_id,
-                "Бронь отменена. Выбери новую дату 👇",
-                keyboard=event_search_keyboard(
-                    "check_date_page",
-                    "check_venues",
-                    dates_label="📅 Выбрать по дате",
-                    venues_label="📍 Выбор по площадке",
-                ),
-            )
+            from bot.db.crud import get_booking_format as _gbf
+
+            fmt = (_gbf(booking_id) or "").strip().lower()
+            if fmt == "residents":
+                self._track(vk_id, EVENT_BRANCH_RESIDENTS, props={"via": "change_date"})
+                await self._send_residents_dates(peer_id, 0, entry=False, vk_id=vk_id)
+            else:
+                self.peer_context[peer_id] = "check"
+                self._track(vk_id, EVENT_BRANCH_PROVERKA, props={"via": "change_date"})
+                await self._send_text(
+                    peer_id,
+                    "Бронь отменена. Выбери новую дату 👇",
+                    keyboard=event_search_keyboard(
+                        "check_date_page",
+                        "check_venues",
+                        dates_label="📅 Выбрать по дате",
+                        venues_label="📍 Выбор по площадке",
+                    ),
+                )
             return True
 
         if cmd == "mb_change_guests_confirm":
@@ -2247,7 +2278,7 @@ class VKBotApp:
                 "выбор по датам",
                 "выбрать по датам",
             }:
-                cmd = f"{context}_date_page" if context in {"best", "check", "hitloto"} else "check_date_page"
+                cmd = f"{context}_date_page" if context in {"best", "check", "hitloto", "residents"} else "check_date_page"
             if not cmd and text_key in {
                 "📍 выбор по площадке",
                 "выбор по площадке",
@@ -2390,10 +2421,20 @@ class VKBotApp:
             )
             return
 
+        is_residents_deeplink = _is_residents_ref(ref) and is_start_entry and not cmd
+        if cmd == "residents" or is_residents_deeplink:
+            if is_residents_deeplink:
+                self._track(
+                    vk_id,
+                    EVENT_BOT_START,
+                    props=_entry_props(raw_ref, fallback_payload="residents", source=source),
+                )
+            await self._send_residents_dates(peer_id, 0, entry=True, vk_id=vk_id)
+            return
+
         is_booking_deeplink = _is_booking_ref(ref) and is_start_entry and not cmd
-        if cmd == "book" or is_booking_deeplink:
-            # Как в TG: бесплатная бронь сразу открывает Проверку материала
-            # (deep link с лендинга /vk/booking — до общего Start-меню)
+        if is_booking_deeplink:
+            # Ссылка /vk/booking по-прежнему сразу открывает проверку.
             self._track(
                 vk_id,
                 EVENT_BOT_START,
@@ -2411,6 +2452,13 @@ class VKBotApp:
                     venues_label="📍 Выбор по площадке",
                 ),
                 attachment=await self._ensure_cover_attachment(peer_id),
+            )
+            return
+        if cmd == "book":
+            await self._send_text(
+                peer_id,
+                FREE_FORMATS_TEXT,
+                keyboard=free_formats_keyboard(),
             )
             return
 
@@ -2458,10 +2506,11 @@ class VKBotApp:
         if cmd == "booking_rules":
             event_id = payload.get("event_id")
             kb = VKKeyboardBuilder(inline=True)
+            back_cmd = "residents_event" if self.peer_context.get(peer_id) == "residents" else "check_event"
             if event_id is not None:
-                kb.button("Назад к карточке", _payload("check_event", event_id=event_id))
+                kb.button("Назад к карточке", _payload(back_cmd, event_id=event_id))
             else:
-                kb.button("Назад", _payload("check"))
+                kb.button("Назад", _payload("residents" if back_cmd == "residents_event" else "check"))
             kb.adjust(1)
             # Keep event card visible, like Telegram; only remove the button-click message.
             await self._delete_pending(peer_id)
@@ -2606,6 +2655,18 @@ class VKBotApp:
             return
         if cmd == "hitloto_event":
             await self._send_hitloto_event(peer_id, payload.get("event_id"), vk_id=vk_id)
+            return
+        if cmd in {"residents_date_page"}:
+            page = int(payload.get("page") or 0)
+            await self._send_residents_dates(peer_id, page, edit="page" in payload, vk_id=vk_id)
+            return
+        if cmd == "residents_date":
+            self.peer_browse[peer_id] = "date"
+            self._clear_dates_card(peer_id)
+            await self._send_residents_date(peer_id, payload.get("date") or "", vk_id=vk_id)
+            return
+        if cmd == "residents_event":
+            await self._send_residents_event(peer_id, payload.get("event_id"), vk_id=vk_id)
             return
 
         if await self._handle_raffle_flow(peer_id, vk_id, cmd=cmd, payload=payload):
@@ -4309,6 +4370,110 @@ class VKBotApp:
         await self._send_text(
             peer_id,
             _hitloto_event_text_vk(event),
+            keyboard=kb.as_json(),
+            attachment=attachment,
+        )
+
+    async def _send_residents_dates(
+        self,
+        peer_id: int,
+        page: int = 0,
+        *,
+        entry: bool = False,
+        edit: bool = False,
+        vk_id: int | None = None,
+    ) -> None:
+        self.peer_context[peer_id] = "residents"
+        self.peer_browse[peer_id] = "date"
+        if vk_id and entry:
+            self._track(vk_id, EVENT_BRANCH_RESIDENTS)
+        try:
+            events = await self._load_events("residents")
+        except Exception:
+            logger.exception("Failed to load residents events")
+            self._clear_dates_card(peer_id)
+            await self.client.send_message(
+                peer_id,
+                "Не удалось загрузить даты. Попробуй ещё раз через минуту.",
+                keyboard=free_formats_keyboard(),
+            )
+            return
+        dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
+        if not dates:
+            self._clear_dates_card(peer_id)
+            kb = VKKeyboardBuilder(inline=True)
+            kb.button("В главное меню", _payload("main_menu"))
+            kb.adjust(1)
+            await self.client.send_message(
+                peer_id,
+                RESIDENTS_EMPTY_TEXT,
+                keyboard=kb.as_json(),
+            )
+            return
+        max_page = max(0, (len(dates) - 1) // DATES_PAGE_SIZE)
+        page = max(0, min(int(page or 0), max_page))
+        text = RESIDENTS_ENTRY_TEXT if entry else "Выбирай дату 👇"
+        keyboard = _dates_keyboard(dates, "residents_date", page, "book")
+        await self._send_or_edit_dates_card(
+            peer_id,
+            text,
+            keyboard=keyboard,
+            attachment=None,
+            edit=edit,
+        )
+
+    async def _send_residents_date(self, peer_id: int, date: str, *, vk_id: int | None = None) -> None:
+        events = [e for e in await self._load_events("residents") if e["date"] == date]
+        if not events:
+            await self.client.send_message(
+                peer_id,
+                "Эта дата уже недоступна.",
+                keyboard=free_formats_keyboard(),
+            )
+            return
+        if len(events) == 1:
+            await self._send_residents_event(peer_id, events[0]["id"], vk_id=vk_id or peer_id)
+            return
+        await self._send_text(
+            peer_id,
+            f"Резиденты на {_date_label(date)}:",
+            keyboard=_events_keyboard(events, "residents_event", "residents"),
+        )
+
+    async def _send_residents_event(self, peer_id: int, event_id: Any, *, vk_id: int | None = None) -> None:
+        event = next(
+            (e for e in await self._load_events("residents") if str(e["id"]) == str(event_id)),
+            None,
+        )
+        if not event:
+            await self.client.send_message(
+                peer_id,
+                "Мероприятие уже недоступно.",
+                keyboard=self._main_menu_kb(peer_id),
+            )
+            return
+        user_id = vk_id or peer_id
+        self._track(
+            user_id,
+            EVENT_SHOW_CARD,
+            event_id=event.get("id"),
+            props={
+                "format": "residents",
+                "browse": self.peer_browse.get(peer_id, "date"),
+                "date": event.get("date"),
+                "time": event.get("time"),
+                "location": event.get("location"),
+            },
+        )
+        kb = VKKeyboardBuilder(inline=True)
+        kb.button("Забронировать", _payload("check_booking_start", event_id=event["id"]), color="primary")
+        kb.button("Правила бронирования", _payload("booking_rules", event_id=event["id"]))
+        kb.button("Назад к датам", _payload("residents_date_page"))
+        kb.adjust(1)
+        attachment = await self._event_poster_attachment(peer_id, event)
+        await self._send_text(
+            peer_id,
+            _event_text(event),
             keyboard=kb.as_json(),
             attachment=attachment,
         )

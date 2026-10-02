@@ -64,6 +64,9 @@ BUY_TICKET_TEXT = (
     "🎟 Билеты — от <b>990 ₽</b>."
 )
 
+FREE_FORMATS_TEXT = "<b>Выбирай формат шоу</b>"
+FREE_FORMATS_RICH_HTML = "<h2>Выбирай формат шоу</h2>"
+
 # Rich Messages HTML: крупные заголовки как в редакторе Telegram
 FORMATS_RICH_HTML = """
 <h2>🎭 Наши форматы шоу</h2>
@@ -693,6 +696,25 @@ def _paid_formats_kb():
     return kb.as_markup()
 
 
+def _free_formats_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Проверка материала", callback_data="check")
+    kb.button(text="Резиденты стендап", callback_data="residents")
+    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+async def send_free_formats(message):
+    """Бесплатная бронь: проверка или резиденты."""
+    await _send_rich_or_html(
+        message,
+        rich_html=FREE_FORMATS_RICH_HTML,
+        fallback_html=FREE_FORMATS_TEXT,
+        reply_markup=_free_formats_kb(),
+    )
+
+
 async def send_all_formats(message, *, from_deep_link: bool = False):
     """Все форматы: кнопка «Наши форматы ШОУ» и deep link ?start=quick_booking."""
     # Приветствие — только по deep link; из меню сразу «Наши форматы»
@@ -722,14 +744,12 @@ async def send_buy_ticket_formats(message):
 
 @router.callback_query(lambda c: c.data == "book")
 async def book(call: CallbackQuery, state: FSMContext):
-    """Бесплатная бронь: сразу экран Проверки материала."""
-    from bot.handlers.booking import check_format_entry
-
+    """Бесплатная бронь: выбор проверки или резидентов."""
     await call.answer()
     await state.clear()
     await delete_booking_nav(call.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
-    await check_format_entry(call.message)
+    await send_free_formats(call.message)
 
 
 @router.callback_query(lambda c: c.data == "buy_ticket")

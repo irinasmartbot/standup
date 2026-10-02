@@ -255,9 +255,9 @@ def render_events_tab(
     fmt = event_format if event_format in AFISHA_FORMATS else "best"
     bundle = bundle or {"active": [], "past": [], "hidden": []}
     paid = fmt in {"best", "hitloto"}
-    show_seats = fmt == "proverka"
+    show_seats = fmt in {"proverka", "residents"}
     # Hit Loto: no per-row «билеты»; Update still available for all formats.
-    show_tickets = can_resend_tickets and fmt in {"best", "proverka"}
+    show_tickets = can_resend_tickets and fmt in {"best", "proverka", "residents"}
     sub = "".join(
         f'<a class="pill {"active" if key == fmt else ""}" href="{_events_link(key)}">{label}</a>'
         for key, label in AFISHA_FORMAT_LABELS.items()
@@ -287,6 +287,14 @@ def render_events_tab(
             "Пустые <b>верхние</b> строки — для быстрого добавления (после «Обновить» дата встанет в общий список).<br>"
             "<b>Смена времени или площадки:</b> правьте нужную строку и нажмите «Обновить» — "
             f"изменения появятся в боте.<br>{hide_delete_note}</p>"
+        )
+    elif fmt == "residents":
+        help_body = (
+            "<p class=\"muted\">Резиденты — бесплатное шоу, бронь как у проверки. "
+            "В боте гости выбирают только дату (без площадки). День недели не фиксирован — "
+            "можно среда или другой день.<br>"
+            "Картинка не обязательна. Пустые <b>верхние</b> строки — быстро добавить шоу.<br>"
+            f"{hide_delete_note}</p>"
         )
     else:
         help_body = (

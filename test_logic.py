@@ -314,6 +314,30 @@ def test_vk_message_item_has_photo():
     print("vk message photo check: OK")
 
 
+def test_residents_format():
+    from bot.db.events_admin import AFISHA_FORMATS, AFISHA_FORMAT_LABELS
+    from bot.handlers.formats import FREE_FORMATS_TEXT, FORMATS_TEXT
+    from bot.utils.show_formats import (
+        BOOKING_FORMAT_CHECK,
+        EVENT_FORMAT_CHECK,
+        MANAGER_STATA_FORMATS,
+        MY_BOOKINGS_FORMATS,
+        RESIDENTS,
+        RESIDENTS_LABEL,
+    )
+
+    assert RESIDENTS == "residents"
+    assert RESIDENTS in AFISHA_FORMATS
+    assert AFISHA_FORMAT_LABELS[RESIDENTS] == "Резиденты"
+    assert RESIDENTS in EVENT_FORMAT_CHECK
+    assert RESIDENTS in BOOKING_FORMAT_CHECK
+    assert RESIDENTS in MANAGER_STATA_FORMATS
+    assert RESIDENTS in MY_BOOKINGS_FORMATS
+    assert "Выбирай формат шоу" in FREE_FORMATS_TEXT
+    assert RESIDENTS_LABEL not in FORMATS_TEXT
+    print("residents format: OK")
+
+
 async def main():
     test_callback_parsing()
     test_mailing_booking_button_fields()
@@ -322,6 +346,7 @@ async def main():
     test_mailing_vk_denied_and_defaults()
     test_db_schema()
     test_vk_message_item_has_photo()
+    test_residents_format()
     events = await load_events()
     print(f"events loaded: {len(events)}")
     if not events:

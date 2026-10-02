@@ -18,6 +18,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.crud import get_manager_stata_bookings_for_date, get_manager_stata_dates
+from bot.utils.show_formats import MANAGER_STATA_FORMATS, RESIDENTS
 from bot.utils.ticket import now_msk
 
 router = Router()
@@ -29,12 +30,12 @@ ROZYGR_DATE_BUTTONS = 3
 
 CHOOSE_DATE_TEXT_PROVERKA = (
     "Выбери дату, на которую нужно получить список гостей "
-    "с билетом на проверку материала.\n\n"
+    "с билетом на проверку материала и резидентов.\n\n"
     "Если нужной даты нет — напиши в формате DD.MM.YYYY"
 )
 CHOOSE_DATE_TEXT_ALL = (
     "Выбери дату, на которую нужно получить полный список броней "
-    "на проверку материала (все / подтверждённые / не подтвердили).\n\n"
+    "на проверку материала и резидентов (все / подтверждённые / не подтвердили).\n\n"
     "Если нужной даты нет — напиши в формате DD.MM.YYYY"
 )
 CHOOSE_DATE_TEXT_ROZYGR = (
@@ -88,6 +89,8 @@ def _rolling_calendar_dates(count: int = ROZYGR_DATE_BUTTONS) -> list[str]:
 def _dates_for_mode(mode: str) -> list[str]:
     if mode == "rozygr":
         return _rolling_calendar_dates()
+    if mode in {"proverka", "all"}:
+        return get_manager_stata_dates(event_formats=MANAGER_STATA_FORMATS)
     _, event_format, *_ = _mode_cfg(mode)
     return get_manager_stata_dates(event_format=event_format)
 
@@ -144,11 +147,13 @@ def _show_header(row: dict) -> str:
         venue = f"{location}, {address}"
     else:
         venue = location or address
+    fmt = (row.get("event_format") or "").strip().lower()
+    suffix = " · резиденты" if fmt == RESIDENTS else ""
     if time and venue:
-        return f"{escape(time)} - {escape(venue)}"
+        return f"{escape(time)} - {escape(venue)}{suffix}"
     if time:
-        return escape(time)
-    return escape(venue or "Шоу")
+        return f"{escape(time)}{suffix}"
+    return escape(venue or "Шоу") + suffix
 
 
 def _group_by_show(rows: list[dict]) -> list[tuple[dict, list[dict]]]:
@@ -325,12 +330,19 @@ async def _send_report(message: Message, state: FSMContext, event_date: str, mod
     await state.set_state(_state_for_mode(mode))
     await state.update_data(stata_mode=mode)
     _, event_format, booking_format, _, empty_text = _mode_cfg(mode)
+    extra = {}
+    if mode in {"proverka", "all"}:
+        extra = {
+            "event_formats": MANAGER_STATA_FORMATS,
+            "booking_formats": MANAGER_STATA_FORMATS,
+        }
     if mode == "all":
         rows = get_manager_stata_bookings_for_date(
             event_date,
             booking_format=booking_format,
             event_format=event_format,
             statuses=("booked", "confirmed"),
+            **extra,
         )
         text = build_stata_report_all(rows, empty_text=empty_text)
     else:
@@ -338,6 +350,7 @@ async def _send_report(message: Message, state: FSMContext, event_date: str, mod
             event_date,
             booking_format=booking_format,
             event_format=event_format,
+            **extra,
         )
         text = build_stata_report(rows, empty_text=empty_text)
     chunks = _split_text(text)

@@ -19,10 +19,11 @@ logger = logging.getLogger(__name__)
 MSK = timezone(timedelta(hours=3))
 STATUSES = ("booked", "confirmed", "cancelled", "annulled")
 ACTIVE_STATUSES = {"booked", "confirmed"}
-FORMAT_OPTIONS = ("proverka", "rozygrysh")
+FORMAT_OPTIONS = ("proverka", "rozygrysh", "residents")
 FORMAT_LABELS = {
     "proverka": "проверка",
     "rozygrysh": "розыгрыш",
+    "residents": "резиденты",
 }
 STATUS_LABELS = {
     "booked": "Забронировано",
@@ -42,6 +43,7 @@ ADMIN_COOKIE_MAX_AGE = 60 * 60 * 24 * 30
 ACTIVITY_SHORT_LABELS = {
     "bot_start": "Вход в бот",
     "branch_proverka": "Ветка · Проверка",
+    "branch_residents": "Ветка · Резиденты",
     "branch_best": "Ветка · BEST",
     "branch_hitloto": "Ветка · Hit Loto",
     "browse_dates": "Выбор по дате",
@@ -84,6 +86,7 @@ LAST_PLACE_LABELS = {
     "help_open": "Помощь / FAQ",
     "help_question": "Написал в поддержку",
     "branch_proverka": "Ветка «Проверка»",
+    "branch_residents": "Ветка «Резиденты»",
     "branch_best": "Ветка BEST",
     "branch_hitloto": "Ветка Hit Loto",
     "browse_dates": "Выбор даты",
@@ -264,7 +267,7 @@ def _normalize_status(value):
 
 
 def _format_filter_sql(filters: dict, params: dict, include_empty_events: bool) -> str:
-    """Restrict admin to проверка/розыгрыш; hide hitloto and other sheet formats."""
+    """Restrict admin to проверка/розыгрыш/резиденты; hide paid sheet formats."""
     fmt = filters.get("format")
     if fmt in FORMAT_OPTIONS:
         params["format"] = fmt
@@ -275,7 +278,7 @@ def _format_filter_sql(filters: dict, params: dict, include_empty_events: bool) 
             return "(b.format = %(format)s OR (b.id IS NULL AND e.format = %(format)s))"
         return "b.format = %(format)s"
 
-    # «Все форматы» в админке = только проверка + розыгрыш (не hitloto/best без таких броней)
+    # «Все форматы» в админке = проверка + розыгрыш + резиденты (не hitloto/best без таких броней)
     params["admin_formats"] = list(FORMAT_OPTIONS)
     if include_empty_events:
         return (
@@ -2336,6 +2339,7 @@ def _user_activity_html(activity_counts: list[dict], recent: list[dict] | None =
         "cmd_help",
         "cmd_channel",
         "branch_proverka",
+        "branch_residents",
         "branch_best",
         "branch_hitloto",
         "browse_dates",
@@ -3077,6 +3081,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "branch_best": "BEST · вход",
         "branch_hitloto": "Hit Loto · вход",
         "branch_proverka": "Проверка · вход",
+        "branch_residents": "Резиденты · вход",
         "buy_click": "Нажали «Купить»",
         "raffle_enter": "Вход в розыгрыш",
         "raffle_branch": "Выбор ветки",
@@ -3114,7 +3119,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
                 "cmd_channel",
             ],
         ),
-        ("Ветки", ["branch_proverka", "branch_best", "branch_hitloto"]),
+        ("Ветки", ["branch_proverka", "branch_residents", "branch_best", "branch_hitloto"]),
         ("Карточки концертов", []),  # filled from show_cards breakdown below
         ("Помощь", ["help_question"]),
         (
@@ -3189,7 +3194,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         event_groups.append(("Другое", other_names))
 
     show_card_rows = []
-    format_titles = {"best": "BEST", "hitloto": "Hit Loto", "proverka": "Проверка"}
+    format_titles = {"best": "BEST", "hitloto": "Hit Loto", "proverka": "Проверка", "residents": "Резиденты"}
     browse_titles = {"date": "поиск по дате", "venue": "поиск по площадке"}
     for row in report.get("show_cards") or []:
         fmt = row.get("format") or ""
@@ -4808,7 +4813,7 @@ def _filters_from_request(request: web.Request) -> dict:
         date_from = ""
         date_to = ""
     ef = request.query.get("ef", "").strip()
-    if ef not in ("best", "proverka", "hitloto"):
+    if ef not in ("best", "proverka", "hitloto", "residents"):
         ef = "best" if tab == "events" else ""
     return {
         "tab": tab,
@@ -5451,7 +5456,7 @@ async def events_resend_ticket_page(request: web.Request) -> web.Response:
 
     post = await request.post()
     event_format = (post.get("ef") or "best").strip()
-    if event_format not in {"best", "proverka", "hitloto"}:
+    if event_format not in {"best", "proverka", "hitloto", "residents"}:
         event_format = "best"
     updated = (post.get("updated") or "1").strip() != "0"
     extra_note = (post.get("extra_note") or "").strip()
@@ -5790,7 +5795,7 @@ async def events_restore_page(request: web.Request) -> web.Response:
 
     post = await request.post()
     event_format = (post.get("ef") or "best").strip()
-    if event_format not in {"best", "proverka", "hitloto"}:
+    if event_format not in {"best", "proverka", "hitloto", "residents"}:
         event_format = "best"
     ids = post.getall("e_restore") if hasattr(post, "getall") else []
     result = await asyncio.get_running_loop().run_in_executor(
@@ -6610,6 +6615,9 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app = web.Application(client_max_size=20 * 1024 * 1024)
     app["config"] = config or load_config()
     ensure_mailing_tables()
+    from bot.db.events_admin import ensure_residents_format
+
+    ensure_residents_format()
     start_mailing_worker(app)
     app.router.add_get("/", index_page)
     app.router.add_get("/admin", admin_page)

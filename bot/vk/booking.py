@@ -360,12 +360,14 @@ def raffle_ticket_manage_keyboard(
 
 
 async def find_event(event_id: Any) -> dict[str, Any] | None:
-    for fmt in ("proverka", "best"):
+    for fmt in ("proverka", "residents", "best"):
         found = next(
             (e for e in await load_events(fmt) if str(e["id"]) == str(event_id)),
             None,
         )
         if found:
+            if not found.get("format"):
+                found["format"] = fmt
             return found
     return None
 
@@ -382,6 +384,8 @@ def start_session(sessions: dict[int, dict], vk_id: int, event: dict[str, Any]) 
         "max_seats": event.get("max_seats") or 0,
         "name": "",
         "phone": "",
+        "event_format": event.get("format") or "proverka",
+        "booking_format": event.get("format") or "proverka",
     }
     sessions[vk_id] = session
     return session
@@ -408,7 +412,12 @@ async def complete_booking(
     event = await find_event(session["event_id"])
     max_seats = (event or {}).get("max_seats") or session.get("max_seats") or 0
     if max_seats:
-        total = get_total_guests(event_date, event_time)
+        total = get_total_guests(
+            event_date,
+            event_time,
+            event_id=session.get("event_id") or (event or {}).get("id"),
+            event_format=session.get("event_format") or (event or {}).get("format"),
+        )
         if total + guests > max_seats:
             available = max_seats - total
             if available <= 0:
@@ -592,6 +601,12 @@ async def issue_ticket(
         (e for e in events if e.get("date") == event_date and e.get("time") == event_time),
         None,
     )
+    if not event:
+        events = await load_events("residents")
+        event = next(
+            (e for e in events if e.get("date") == event_date and e.get("time") == event_time),
+            None,
+        )
     if not event:
         events = await load_events("best")
         event = next(

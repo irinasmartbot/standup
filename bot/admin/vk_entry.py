@@ -54,12 +54,19 @@ FLOWS: dict[str, dict[str, Any]] = {
         "lead": "Разрешите сообщения — пришлём список на подарок в личку VK.",
         "ref": "offline_gift",
     },
+    "residents": {
+        "title": "Резиденты",
+        "headline": "Резиденты стендап",
+        "button": "Забронировать резидентов",
+        "lead": "Разрешите сообщения — пришлём даты резидентского шоу в личку VK.",
+        "ref": "standup_residents",
+    },
 }
 
 # После модерации снова показываем все входные сценарии mini app.
 MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking", "raffle", "offline_gift")
 # Прямые ссылки с сайта, без кнопки в общем меню mini app.
-MINI_APP_DIRECT_FLOWS: tuple[str, ...] = ()
+MINI_APP_DIRECT_FLOWS: tuple[str, ...] = ("residents",)
 EXPIRED_DIRECT_FLOWS: frozenset[str] = frozenset(
     {
         "booking_resident",
@@ -321,6 +328,7 @@ def _mini_start_bridge_html(flow_key: str, target_url: str) -> str:
 def _gift_format_label(value: str) -> str:
     return {
         "proverka": "Проверка",
+        "residents": "Резиденты",
         "best": "BEST",
         "hitloto": "Хитлото",
     }.get(value or "", value or "Шоу")
@@ -533,6 +541,42 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
                 venues_label="📍 Выбор по площадке",
             ),
             attachment=cover,
+        )
+        return
+
+    if flow_key == "residents":
+        from datetime import datetime
+
+        from bot.db.analytics import EVENT_BRANCH_RESIDENTS
+        from bot.services.sheets import load_events
+        from bot.vk.app import (
+            RESIDENTS_EMPTY_TEXT,
+            RESIDENTS_ENTRY_TEXT,
+            _dates_keyboard,
+        )
+        from bot.vk.keyboards import VKKeyboardBuilder as _KB
+
+        track_event(
+            EVENT_BRANCH_RESIDENTS,
+            vk_id=int(vk_id),
+            channel="vkontakte",
+            props={"via": "mini_app_flow"},
+        )
+        events = await load_events("residents")
+        dates = sorted(
+            {e["date"] for e in events},
+            key=lambda d: datetime.strptime(d, "%d.%m.%Y"),
+        )
+        if not dates:
+            kb = _KB(inline=True)
+            kb.button("В главное меню", {"cmd": "main_menu"})
+            kb.adjust(1)
+            await client.send_message(vk_id, RESIDENTS_EMPTY_TEXT, keyboard=kb.as_json())
+            return
+        await client.send_message(
+            vk_id,
+            RESIDENTS_ENTRY_TEXT,
+            keyboard=_dates_keyboard(dates, "residents_date", 0, "book"),
         )
         return
 
@@ -789,6 +833,17 @@ async def landing_offline_gift(request: web.Request) -> web.Response:
     settings = load_vk_settings()
     target = _mini_app_vk_url(settings, "offline_gift", short=True, cid=cid, source=source)
     return _html_response(_mobile_vk_jump_html("offline_gift", target))
+
+
+async def landing_residents(request: web.Request) -> web.Response:
+    cid = _request_cid(request)
+    source = _request_source(request)
+    settings = load_vk_settings()
+    # Как ссылки с сайта: vk.ru/app{id}_-{group}#flow=residents
+    target = _mini_app_vk_url(
+        settings, "residents", short=True, with_group=True, cid=cid, source=source
+    )
+    return _html_response(_mobile_vk_jump_html("residents", target))
 
 
 async def landing_booking_resident(request: web.Request) -> web.Response:
@@ -1073,7 +1128,9 @@ def _mini_app_html(default_flow: str = "") -> str:
     rozygrysh: "raffle",
     standup_rozygr: "raffle",
     gift: "offline_gift",
-    offline_gift: "offline_gift"
+    offline_gift: "offline_gift",
+    residents: "residents",
+    standup_residents: "residents"
   }};
   var EXPIRED_FLOWS = {{
     booking_resident: true,
@@ -2023,6 +2080,7 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/vk-mini/start/{flow}", mini_app_start)
     app.router.add_get("/vk-mini", mini_app_page)
     app.router.add_get("/vk/booking", landing_booking)
+    app.router.add_get("/vk/residents", landing_residents)
     app.router.add_get("/vk/raffle", landing_raffle)
     app.router.add_get("/vk/offline-gift", landing_offline_gift)
     app.router.add_get("/vk/booking_resident", landing_booking_resident)

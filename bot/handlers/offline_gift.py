@@ -16,6 +16,7 @@ router = Router()
 
 FORMAT_LABELS = {
     "proverka": "Проверка",
+    "residents": "Резиденты",
     "best": "BEST",
     "hitloto": "Хитлото",
 }

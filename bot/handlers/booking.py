@@ -13,7 +13,13 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import bot, MANAGER_LINK, CHANNEL_LINK, MANAGER_PHONE, TICKET_TEMPLATE
-from bot.db.analytics import EVENT_BRANCH_PROVERKA, EVENT_SHOW_CARD, browse_mode_from_callback, track_event
+from bot.db.analytics import (
+    EVENT_BRANCH_PROVERKA,
+    EVENT_BRANCH_RESIDENTS,
+    EVENT_SHOW_CARD,
+    browse_mode_from_callback,
+    track_event,
+)
 from bot.db.crud import (
     get_booking, get_active_booking_by_id, get_booking_by_id, create_booking,
     update_booking_status, update_booking_guests, get_total_guests,
@@ -27,7 +33,8 @@ from bot.pdn_consent import (
     CB_CONSENT_BOOKING,
     CONSENT_TEXT,
 )
-from bot.services.sheets import load_events, get_event
+from bot.services.sheets import load_events, get_event, get_event_by_id
+from bot.utils.show_formats import RESIDENTS
 from bot.utils.bot_commands import refresh_user_commands
 from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
 from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
@@ -259,7 +266,7 @@ async def check_format_entry(message):
     kb = InlineKeyboardBuilder()
     kb.button(text="📅 Выбрать по дате", callback_data="check_dates")
     kb.button(text="📍 Выбор по площадке", callback_data="by_venue")
-    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    kb.button(text="◀️ Назад", callback_data="book")
     kb.adjust(1)
     await _answer_with_check_photo(
         message,
@@ -515,7 +522,7 @@ async def start_booking(call: CallbackQuery, state: FSMContext):
         await call.answer()
         return
 
-    await state.update_data(event_date=event_date, event_time=event_time)
+    await state.update_data(event_date=event_date, event_time=event_time, event_format="proverka", booking_format="proverka")
     name = " ".join(
         p for p in (call.from_user.first_name or "", call.from_user.last_name or "") if p
     ).strip()
@@ -730,15 +737,32 @@ async def _create_booking_after_guests(
     name = data.get("name", "")
     phone = data.get("phone", "")
 
-    event = await get_event(event_date, event_time)
+    event_id = data.get("event_id")
+    event_format = data.get("event_format") or "proverka"
+    booking_format = data.get("booking_format") or "proverka"
+    event = None
+    if event_id:
+        event = await get_event_by_id(event_id, event_format)
+    if not event:
+        event = await get_event(event_date, event_time, event_format)
     if event:
-        total = get_total_guests(event_date, event_time)
+        total = get_total_guests(
+            event_date,
+            event_time,
+            event_id=event.get("id"),
+            event_format=event_format,
+        )
         if total + guests > event["max_seats"]:
             available = event["max_seats"] - total
             if available <= 0:
+                dates_kb = await check_dates_kb()
+                if event_format == RESIDENTS:
+                    from bot.handlers.residents import residents_dates_kb
+
+                    dates_kb, _ = await residents_dates_kb()
                 await message.answer(
                     "К сожалению, на это мероприятие места закончились 😔 Выбери другую дату!",
-                    reply_markup=await check_dates_kb(),
+                    reply_markup=dates_kb,
                 )
                 await state.clear()
                 return
@@ -760,6 +784,9 @@ async def _create_booking_after_guests(
         event_address,
         event_location,
         guests,
+        booking_format=booking_format,
+        event_format=event_format,
+        event_id=event.get("id") if event else event_id,
     )
 
     date_str = format_date(event_date)
@@ -1115,17 +1142,32 @@ async def cancel_do(call: CallbackQuery):
 @router.callback_query(F.data.startswith("change_date_do_"))
 async def change_date_do(call: CallbackQuery):
     booking_id = int(call.data.replace("change_date_do_", ""))
+    fmt = (get_booking_format(booking_id) or "").strip().lower()
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
     await refresh_user_commands(call.message.bot, call.from_user.id)
     await delete_my_bookings_messages(call.message.bot, call.message.chat.id)
     await _delete_previous_menu_message(call)
-    track_event(
-        EVENT_BRANCH_PROVERKA,
-        telegram_id=call.from_user.id,
-        props={"via": "change_date"},
-    )
-    await call.message.answer("Бронь отменена. Выбери новую дату 👇", reply_markup=await check_dates_kb())
+    if fmt == RESIDENTS:
+        from bot.handlers.residents import residents_dates_kb, residents_format_entry
+
+        track_event(
+            EVENT_BRANCH_RESIDENTS,
+            telegram_id=call.from_user.id,
+            props={"via": "change_date"},
+        )
+        kb, dates = await residents_dates_kb()
+        if not dates:
+            await residents_format_entry(call.message, telegram_id=call.from_user.id)
+        else:
+            await call.message.answer("Бронь отменена. Выбери новую дату 👇", reply_markup=kb)
+    else:
+        track_event(
+            EVENT_BRANCH_PROVERKA,
+            telegram_id=call.from_user.id,
+            props={"via": "change_date"},
+        )
+        await call.message.answer("Бронь отменена. Выбери новую дату 👇", reply_markup=await check_dates_kb())
     await call.answer()
 
 
@@ -1320,9 +1362,17 @@ async def _apply_new_guests(message: Message, state: FSMContext, guests: int) ->
         await state.clear()
         return
 
-    event = await get_event(booking[5], booking[6])
+    fmt = (get_booking_format(booking_id) or "").strip().lower()
+    event_format = "best" if fmt == "rozygrysh" else (fmt or "proverka")
+    event = await get_event(booking[5], booking[6], event_format)
     if event:
-        total = get_total_guests(booking[5], booking[6], exclude_id=booking_id)
+        total = get_total_guests(
+            booking[5],
+            booking[6],
+            exclude_id=booking_id,
+            event_id=event.get("id"),
+            event_format=event_format,
+        )
         if total + guests > event["max_seats"]:
             await message.answer(
                 f"К сожалению, доступно только {event['max_seats'] - total} мест. "

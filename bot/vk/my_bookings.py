@@ -227,7 +227,8 @@ async def delete_ticket_message(client, peer_id: int, booking_id: int) -> None:
 async def apply_new_guests(*, booking_id: int, guests: int) -> tuple[bool, str]:
     from bot.db.crud import get_booking_format
 
-    if (get_booking_format(booking_id) or "").strip().lower() == "rozygrysh":
+    fmt = (get_booking_format(booking_id) or "").strip().lower()
+    if fmt == "rozygrysh":
         return False, "В розыгрыше бронь только на 1 гостя — изменить количество нельзя."
     booking = get_active_booking_by_id(booking_id)
     if not booking:
@@ -235,13 +236,20 @@ async def apply_new_guests(*, booking_id: int, guests: int) -> tuple[bool, str]:
     if guests < 1 or guests > 4:
         return False, "Максимум 4 человека. Выберите число от 1 до 4."
 
-    events = await load_events("proverka")
+    event_format = "best" if fmt == "rozygrysh" else (fmt or "proverka")
+    events = await load_events(event_format)
     event = next(
         (e for e in events if e.get("date") == booking[5] and e.get("time") == booking[6]),
         None,
     )
     if event:
-        total = get_total_guests(booking[5], booking[6], exclude_id=booking_id)
+        total = get_total_guests(
+            booking[5],
+            booking[6],
+            exclude_id=booking_id,
+            event_id=event.get("id"),
+            event_format=event_format,
+        )
         available = max(0, int(event.get("max_seats") or 0) - total)
         if guests > available:
             return False, f"К сожалению, доступно только {available} мест. Укажите меньшее количество."

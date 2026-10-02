@@ -33,6 +33,9 @@ async def main():
     ensure_help_tables()
     ensure_raffle_tables()
     ensure_mailing_tables()
+    from bot.db.events_admin import ensure_residents_format
+
+    ensure_residents_format()
     from bot.db.crud import ensure_offline_gift_tables
 
     ensure_offline_gift_tables()
