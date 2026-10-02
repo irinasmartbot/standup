@@ -55,10 +55,10 @@ FLOWS: dict[str, dict[str, Any]] = {
         "ref": "offline_gift",
     },
     "residents": {
-        "title": "Резиденты",
-        "headline": "Резиденты стендап",
-        "button": "Забронировать резидентов",
-        "lead": "Разрешите сообщения — пришлём даты резидентского шоу в личку VK.",
+        "title": "Сольники",
+        "headline": "Сольники от резидентов",
+        "button": "Сольники от резидентов",
+        "lead": "Разрешите сообщения — пришлём даты сольников от резидентов в личку VK.",
         "ref": "standup_residents",
     },
 }
@@ -328,7 +328,7 @@ def _mini_start_bridge_html(flow_key: str, target_url: str) -> str:
 def _gift_format_label(value: str) -> str:
     return {
         "proverka": "Проверка",
-        "residents": "Резиденты",
+        "residents": "Сольники",
         "best": "BEST",
         "hitloto": "Хитлото",
     }.get(value or "", value or "Шоу")

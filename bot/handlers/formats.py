@@ -17,7 +17,7 @@ from bot.db.analytics import (
     browse_mode_from_callback,
     track_event,
 )
-from bot.services.sheets import load_events
+from bot.utils.show_formats import RESIDENTS_BUTTON, RESIDENTS_MENU_BUTTON
 from bot.utils.ticket import MONTHS, format_date
 from bot.utils.nav_messages import remember_booking_nav, forget_booking_nav, delete_booking_nav
 
@@ -34,6 +34,7 @@ SYSTEM_PHOTO_FILES = {
     "photo_2026-07-21_01-59-43.jpg",
     "residents_start.jpg",
     "photo_2026-10-02_19-50-45.jpg",
+    "pushkin-2026-09-15.jpg",
 }
 _VENUE_ALBUM_MESSAGE_IDS = {}
 BEST_DATES_PAGE_SIZE = 10
@@ -51,6 +52,11 @@ FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
 
 🎤 <b>StandUp Проверка материала</b>
 5–7 опытных комиков, участников известных проектов ТНТ и YouTube, рассказывают по 10–15 минут свежих, но не проверенных шуток. Вы услышите настоящий эксклюзив и поможете комикам понять, что смешно, а что стоит убрать из материала 🙈
+🆓 Вход <b>бесплатный</b>
+
+🎤 <b>StandUp Сольники от резидентов</b>
+Каждую среду бесплатные сольные стендап-концерты от резидентов проекта.
+Целый вечер уникального юмора с индивидуальным стилем и подачей от комиков, проверенных эфирами на ТВ, десятками площадок и годами опыта.
 🆓 Вход <b>бесплатный</b>."""
 
 BUY_TICKET_TEXT = (
@@ -66,8 +72,29 @@ BUY_TICKET_TEXT = (
     "🎟 Билеты — от <b>990 ₽</b>."
 )
 
-FREE_FORMATS_TEXT = "<b>Выбирай формат шоу</b>"
-FREE_FORMATS_RICH_HTML = "<h2>Выбирай формат шоу</h2>"
+FREE_FORMATS_TEXT = (
+    "<b>Выбирай формат шоу</b>\n\n"
+    "🎤 <b>StandUp Проверка материала</b>\n"
+    "<i>5–7 опытных комиков, участников известных проектов ТНТ и YouTube, "
+    "рассказывают по 10–15 минут свежих, но не проверенных шуток. "
+    "Вы услышите настоящий эксклюзив и поможете комикам понять, что смешно, "
+    "а что стоит убрать из материала 🙈</i>\n"
+    "🆓 Вход <b>бесплатный</b>\n\n"
+    "🎤 <b>StandUp Сольники от резидентов</b>\n"
+    "<i>Каждую среду бесплатные сольные стендап-концерты от резидентов проекта. "
+    "Целый вечер уникального юмора с индивидуальным стилем и подачей от комиков, "
+    "проверенных эфирами на ТВ, десятками площадок и годами опыта.</i>\n"
+    "🆓 Вход <b>бесплатный</b>."
+)
+FREE_FORMATS_RICH_HTML = """
+<h2>Выбирай формат шоу</h2>
+<h3>🎤 StandUp Проверка материала</h3>
+<p><i>5–7 опытных комиков, участников известных проектов ТНТ и YouTube, рассказывают по 10–15 минут свежих, но не проверенных шуток. Вы услышите настоящий эксклюзив и поможете комикам понять, что смешно, а что стоит убрать из материала 🙈</i></p>
+<p>🆓 Вход <b>бесплатный</b></p>
+<h3>🎤 StandUp Сольники от резидентов</h3>
+<p><i>Каждую среду бесплатные сольные стендап-концерты от резидентов проекта. Целый вечер уникального юмора с индивидуальным стилем и подачей от комиков, проверенных эфирами на ТВ, десятками площадок и годами опыта.</i></p>
+<p>🆓 Вход <b>бесплатный</b></p>
+"""
 
 # Rich Messages HTML: крупные заголовки как в редакторе Telegram
 FORMATS_RICH_HTML = """
@@ -80,6 +107,9 @@ FORMATS_RICH_HTML = """
 <p>🎟 Билеты — от <b>990 ₽</b></p>
 <h3>🎤 StandUp Проверка материала</h3>
 <p>5–7 опытных комиков, участников известных проектов ТНТ и YouTube, рассказывают по 10–15 минут свежих, но не проверенных шуток. Вы услышите настоящий эксклюзив и поможете комикам понять, что смешно, а что стоит убрать из материала 🙈</p>
+<p>🆓 Вход <b>бесплатный</b></p>
+<h3>🎤 StandUp Сольники от резидентов</h3>
+<p>Каждую среду бесплатные сольные стендап-концерты от резидентов проекта. Целый вечер уникального юмора с индивидуальным стилем и подачей от комиков, проверенных эфирами на ТВ, десятками площадок и годами опыта.</p>
 <p>🆓 Вход <b>бесплатный</b></p>
 """
 
@@ -238,6 +268,7 @@ def _random_format_photo():
             and f.lower() not in SYSTEM_PHOTO_FILES
             and not f.lower().startswith("rozygrysh_otzyv")
             and not f.lower().startswith("hitloto")
+            and not f.lower().startswith("pushkin")
         ]
     except FileNotFoundError:
         files = []
@@ -709,7 +740,7 @@ def _all_formats_kb(*, from_deep_link: bool = False):
     kb.button(text="STANDUP BEST", callback_data="best")
     kb.button(text="Хитлото", callback_data="hitloto")
     kb.button(text="StandUp Проверка материала", callback_data="check")
-    # По deep link нет «предыдущего» экрана — сразу в главное меню
+    kb.button(text=RESIDENTS_MENU_BUTTON, callback_data="residents")
     back_text = "В главное меню" if from_deep_link else "◀️ Назад в меню"
     kb.button(text=back_text, callback_data="main_menu")
     kb.adjust(1)
@@ -728,16 +759,26 @@ def _paid_formats_kb():
 def _free_formats_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="Проверка материала", callback_data="check")
-    kb.button(text="Резиденты стендап", callback_data="residents")
+    kb.button(text=RESIDENTS_BUTTON, callback_data="residents")
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     kb.adjust(1)
     return kb.as_markup()
 
 
 async def send_free_formats(message):
-    """Бесплатная бронь: проверка или резиденты — с рандомным баннером как у проверки."""
+    """Бесплатная бронь: проверка или сольники — текст как у «Купить билет»."""
     from bot.handlers.booking import _answer_with_check_photo
 
+    try:
+        sent = await message.bot.send_rich_message(
+            chat_id=message.chat.id,
+            rich_message=InputRichMessage(html=FREE_FORMATS_RICH_HTML),
+            reply_markup=_free_formats_kb(),
+        )
+        remember_booking_nav(message.chat.id, sent.message_id)
+        return
+    except Exception:
+        logger.exception("send_rich_message failed for free formats; falling back to photo/HTML")
     await _answer_with_check_photo(
         message,
         FREE_FORMATS_TEXT,

@@ -74,6 +74,7 @@ SYSTEM_PHOTO_FILES = {
     "photo_2026-07-21_01-59-43.jpg",
     "residents_start.jpg",
     "photo_2026-10-02_19-50-45.jpg",
+    "pushkin-2026-09-15.jpg",
 }
 MAX_RANDOM_PHOTO_SIZE = 10 * 1024 * 1024
 
@@ -90,6 +91,7 @@ def _random_check_photo():
             and f.lower() not in SYSTEM_PHOTO_FILES
             and not f.lower().startswith("rozygrysh_otzyv")
             and not f.lower().startswith("hitloto")
+            and not f.lower().startswith("pushkin")
             and os.path.getsize(os.path.join(PHOTOS_DIR, f)) <= MAX_RANDOM_PHOTO_SIZE
         ]
     except FileNotFoundError:

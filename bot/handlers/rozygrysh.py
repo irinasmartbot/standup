@@ -116,6 +116,7 @@ SYSTEM_PHOTO_FILES = {
     "photo_2026-07-21_01-59-43.jpg",
     "residents_start.jpg",
     "photo_2026-10-02_19-50-45.jpg",
+    "pushkin-2026-09-15.jpg",
 }
 RAFFLE_DATES_PAGE_SIZE = 10
 RAFFLE_DATES_CAPTION = "Выбирай дату мероприятия в рамках розыгрыша 👇"
@@ -289,6 +290,7 @@ def _random_photo():
             and f.lower() not in SYSTEM_PHOTO_FILES
             and not f.lower().startswith("rozygrysh_otzyv")
             and not f.lower().startswith("hitloto")
+            and not f.lower().startswith("pushkin")
         ]
     except FileNotFoundError:
         files = []

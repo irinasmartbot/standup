@@ -107,6 +107,7 @@ _EXCLUDED_RANDOM_COVER_KEYS = frozenset(
         "photo_2026-07-21_01-59-43",
         "residents_start",
         "photo_2026-10-02_19-50-45",
+        "pushkin-2026-09-15",
         "rozygrysh_otzyv_1",
         "rozygrysh_otzyv_2",
     }
@@ -121,6 +122,7 @@ _EXCLUDED_RANDOM_COVER_NAMES = frozenset(
         "photo_2026-07-21_01-59-43.jpg",
         "residents_start.jpg",
         "photo_2026-10-02_19-50-45.jpg",
+        "pushkin-2026-09-15.jpg",
     }
 )
 
@@ -175,7 +177,7 @@ def _is_random_cover_file(path: Path) -> bool:
         return False
     if name in _EXCLUDED_RANDOM_COVER_NAMES:
         return False
-    if name.startswith("hitloto") or name.startswith("rozygrysh_otzyv"):
+    if name.startswith("hitloto") or name.startswith("rozygrysh_otzyv") or name.startswith("pushkin"):
         return False
     if "ticket" in name:
         return False

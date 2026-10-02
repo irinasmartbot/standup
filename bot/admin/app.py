@@ -2190,7 +2190,7 @@ def _bookings_tab(dashboard: dict, filters: dict) -> str:
     sections = []
     for fmt, title in (
         ("proverka", "Проверка материала"),
-        ("residents", "Резиденты стендап"),
+        ("residents", "StandUp Сольники от резидентов"),
         ("rozygrysh", "Розыгрыш"),
     ):
         if filters.get("format") and filters["format"] != fmt:

@@ -333,8 +333,10 @@ def test_residents_format():
     assert RESIDENTS in BOOKING_FORMAT_CHECK
     assert RESIDENTS in MANAGER_STATA_FORMATS
     assert RESIDENTS in MY_BOOKINGS_FORMATS
-    assert "Выбирай формат шоу" in FREE_FORMATS_TEXT
-    assert RESIDENTS_LABEL not in FORMATS_TEXT
+    assert RESIDENTS_LABEL == "StandUp Сольники от резидентов"
+    assert "StandUp Сольники от резидентов" in FORMATS_TEXT
+    assert "StandUp Проверка материала" in FREE_FORMATS_TEXT
+    assert "StandUp Сольники от резидентов" in FREE_FORMATS_TEXT
     print("residents format: OK")
 
 

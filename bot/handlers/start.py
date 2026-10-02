@@ -173,10 +173,14 @@ def _link_kb(text: str, url: str):
 
 
 def _format_label(format_name: str) -> str:
+    from bot.utils.show_formats import RESIDENTS_LABEL
+
     if format_name == "rozygrysh":
         return "Розыгрыш"
     if format_name == "proverka":
         return "Проверка материала"
+    if format_name == "residents":
+        return RESIDENTS_LABEL
     return format_name
 
 

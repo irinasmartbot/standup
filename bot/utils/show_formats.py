@@ -6,8 +6,10 @@ ROZYGRYSH = "rozygrysh"
 BEST = "best"
 HITLOTO = "hitloto"
 
-RESIDENTS_LABEL = "Резиденты стендап"
-RESIDENTS_LABEL_SHORT = "резиденты"
+RESIDENTS_LABEL = "StandUp Сольники от резидентов"
+RESIDENTS_LABEL_SHORT = "Сольники от резидентов"
+RESIDENTS_BUTTON = "Сольники от резидентов"
+RESIDENTS_MENU_BUTTON = "StandUp Сольники от резидентов"
 
 # Free seat booking (name → phone → guests → ticket).
 FREE_BOOKING_FORMATS = (PROVERKA, RESIDENTS)

@@ -22,15 +22,15 @@ from bot.handlers.booking import (
 from bot.services.sheets import load_events
 from bot.utils.booking_texts import same_day_booking_warning
 from bot.utils.nav_messages import remember_booking_nav
-from bot.utils.show_formats import RESIDENTS, RESIDENTS_LABEL
+from bot.utils.show_formats import RESIDENTS, RESIDENTS_LABEL_SHORT
 from bot.utils.ticket import MONTHS, format_date, now_msk
 
 router = Router()
 
 EMPTY_TEXT = "Скоро даты появятся 😊"
 ENTRY_TEXT = (
-    f"Привет 😊 Я помогу тебе забронировать места на <b>{RESIDENTS_LABEL}</b> "
-    "от Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
+    "Привет 😊 Я помогу тебе забронировать места на "
+    f"<b>{RESIDENTS_LABEL_SHORT}</b> Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
 )
 
 

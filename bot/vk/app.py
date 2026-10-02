@@ -52,7 +52,7 @@ from bot.handlers.formats import (
     VENUES_INTRO_TEXT as TG_VENUES_INTRO_TEXT,
 )
 from bot.services.sheets import load_events
-from bot.utils.booking_texts import same_day_booking_warning
+from bot.utils.show_formats import RESIDENTS_BUTTON, RESIDENTS_LABEL_SHORT
 from bot.utils.free_text import is_meaningful_free_text
 from bot.utils.phone import normalize_phone
 from bot.utils.ticket import MONTHS, format_date, now_msk
@@ -226,6 +226,7 @@ def _is_offline_gift_ref(ref: str) -> bool:
 def _gift_format_label(value: str) -> str:
     return {
         "proverka": "Проверка",
+        "residents": "Сольники",
         "best": "BEST",
         "hitloto": "Хитлото",
     }.get(value or "", value or "Шоу")
@@ -294,8 +295,8 @@ HITLOTO_ENTRY_TEXT = (
     "от Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
 )
 RESIDENTS_ENTRY_TEXT = (
-    "Привет 😊 Я помогу тебе забронировать места на <b>Резиденты стендап</b> "
-    "от Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
+    f"Привет 😊 Я помогу тебе забронировать места на <b>{RESIDENTS_LABEL_SHORT}</b> "
+    "Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
 )
 RESIDENTS_EMPTY_TEXT = "Скоро даты появятся 😊"
 
@@ -387,6 +388,7 @@ def formats_keyboard() -> str:
     kb.button("STANDUP BEST", _payload("best"), color="primary")
     kb.button("Хитлото", _payload("hitloto"), color="primary")
     kb.button("StandUp Проверка материала", _payload("check"), color="primary")
+    kb.button("StandUp Сольники от резидентов", _payload("residents"), color="primary")
     kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
@@ -404,7 +406,7 @@ def paid_formats_keyboard() -> str:
 def free_formats_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("Проверка материала", _payload("check"), color="primary")
-    kb.button("Резиденты стендап", _payload("residents"), color="primary")
+    kb.button(RESIDENTS_BUTTON, _payload("residents"), color="primary")
     kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
