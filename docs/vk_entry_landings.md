@@ -11,6 +11,18 @@ https://go.moscowstandupshow.ru/vk/raffle
 https://go.moscowstandupshow.ru/vk/offline-gift
 ```
 
+Публичные афиши для поля «URL картинки» в админке (файлы из `фото/afisha/`):
+
+```text
+https://go.moscowstandupshow.ru/vk/posters/<имя_файла>.jpg
+```
+
+Пример (резиденты / сольник Егора Константинова):
+
+```text
+https://go.moscowstandupshow.ru/vk/posters/residents_egor_konstantinov.jpg
+```
+
 Mini App (канонические ссылки — внутри VK):
 
 ```text

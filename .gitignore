@@ -20,6 +20,10 @@ data/mailing/
 !фото/*.jpg
 !фото/*.jpeg
 !фото/*.png
+!фото/afisha/
+!фото/afisha/*.jpg
+!фото/afisha/*.jpeg
+!фото/afisha/*.png
 
 # рабочие документы — не часть кода
 *.docx

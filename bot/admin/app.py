@@ -6644,6 +6644,9 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_get("/admin/logout", logout_page)
     # Публичные VK-ленды (без admin auth); nginx не закрывает /vk/*
     vk_entry.register_routes(app)
+    from bot.admin import posters as admin_posters
+
+    admin_posters.register_routes(app)
     return app
 
 
