@@ -706,12 +706,15 @@ def _free_formats_kb():
 
 
 async def send_free_formats(message):
-    """Бесплатная бронь: проверка или резиденты."""
-    await _send_rich_or_html(
+    """Бесплатная бронь: проверка или резиденты — с рандомным баннером как у проверки."""
+    from bot.handlers.booking import _answer_with_check_photo
+
+    await _answer_with_check_photo(
         message,
-        rich_html=FREE_FORMATS_RICH_HTML,
-        fallback_html=FREE_FORMATS_TEXT,
+        FREE_FORMATS_TEXT,
         reply_markup=_free_formats_kb(),
+        parse_mode="HTML",
+        track_nav=True,
     )
 
 

@@ -2459,6 +2459,7 @@ class VKBotApp:
                 peer_id,
                 FREE_FORMATS_TEXT,
                 keyboard=free_formats_keyboard(),
+                attachment=await self._ensure_cover_attachment(peer_id),
             )
             return
 
