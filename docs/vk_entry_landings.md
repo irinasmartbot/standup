@@ -77,12 +77,23 @@ https://t.me/StandUp_Show_bot?start=pushkin
 
 То же для `ref`/`cmd` `booking_resident` / `pushkin` в VK и для старых кнопок рассылки с маркером `__flow:booking_resident__`. Новые рассылки эту бронь больше не ставят.
 
-Постоянный формат «Резиденты стендап» — другие ссылки, не 15.09:
+Постоянный формат «Резиденты стендап» — другие ссылки, не 15.09.
+
+Публичная ссылка для сайта / рассылок / клиентов (телефон и ПК):
+
+```text
+https://go.moscowstandupshow.ru/vk/residents
+```
+
+На телефоне уводит в `vk.ru/app…#flow=residents`, на ПК — в `vk.com/app…_-{group}#flow=residents`.
+Не используем `write-…?ref=standup_residents` как основную: на ПК открывается криво.
+
+Прямые mini app (внутри VK — пост, сторис):
 
 ```text
 https://t.me/StandUp_Show_bot?start=residents
-https://go.moscowstandupshow.ru/vk/residents
-https://vk.ru/app54704296_-225298932#flow=residents
+https://vk.ru/app54704296#flow=residents
+https://vk.com/app54704296_-225298932#flow=residents
 ```
 
 ## Тест передачи источника в VK-бот

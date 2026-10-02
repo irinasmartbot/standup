@@ -836,13 +836,20 @@ async def landing_offline_gift(request: web.Request) -> web.Response:
 
 
 async def landing_residents(request: web.Request) -> web.Response:
+    """Единая публичная ссылка: телефон и ПК → свой формат mini app."""
     cid = _request_cid(request)
     source = _request_source(request)
     settings = load_vk_settings()
-    # Как ссылки с сайта: vk.ru/app{id}_-{group}#flow=residents
-    target = _mini_app_vk_url(
-        settings, "residents", short=True, with_group=True, cid=cid, source=source
-    )
+    if _is_mobile_request(request):
+        # Как booking: короткая vk.ru/app{id}#flow=… — на телефоне стабильнее.
+        target = _mini_app_vk_url(
+            settings, "residents", short=True, cid=cid, source=source
+        )
+    else:
+        # ПК: vk.com/app{id}_-{group}#flow=… — hash реже теряется, чем у write-/коротких.
+        target = _mini_app_vk_url(
+            settings, "residents", short=False, cid=cid, source=source
+        )
     return _html_response(_mobile_vk_jump_html("residents", target))
 
 
