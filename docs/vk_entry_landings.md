@@ -87,19 +87,10 @@ https://t.me/StandUp_Show_bot?start=pushkin
 https://go.moscowstandupshow.ru/vk/residents
 ```
 
-Она всегда уводит в короткую рабочую форму (как booking):
+- **ПК** → `https://vk.ru/app54704296#flow=residents` (экран «Резиденты» → диалог).
+- **Телефон** → `https://vk.com/write-225298932?ref=standup_residents` (сразу нативный диалог приложения; mini app в мобильном браузере часто не умеет увести в app).
 
-```text
-https://vk.ru/app54704296#flow=residents
-```
-
-Именно эта форма на ПК даёт экран «Резиденты стендап» → «Открыть диалог VK».
-Ссылки с `_-225298932` на ПК часто теряют `#flow=residents` и показывают общее меню
-(бронь / розыгрыш / подарок) — их для резидентов не даём.
-
-`write-…?ref=standup_residents` как основную тоже не используем: на ПК открывается криво.
-
-Прямые ссылки внутри VK (пост/сторис) — только короткая без group:
+Прямая короткая mini app (лучше внутри VK, не из Safari/Chrome):
 
 ```text
 https://t.me/StandUp_Show_bot?start=residents

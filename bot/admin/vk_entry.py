@@ -836,15 +836,21 @@ async def landing_offline_gift(request: web.Request) -> web.Response:
 
 
 async def landing_residents(request: web.Request) -> web.Response:
-    """Публичная ссылка → короткая mini app #flow=residents.
+    """Публичная ссылка: ПК → mini app, телефон → write- в диалог приложения.
 
-    Важно: на ПК форма vk.com/app{id}_-{group}#flow=… часто теряет hash
-    и открывает общее меню (бронь/розыгрыш/подарок). Рабочая форма —
-    vk.ru/app{id}#flow=residents (как у booking).
+    На телефоне mini app часто остаётся в браузере: сообщение уходит в app
+    фоном, а редиректа в диалог нет. write-?ref=standup_residents открывает
+    нативный чат. На ПК write- кривой — там короткая #flow=residents.
     """
+    from bot.vk.app import residents_entry_link
+
     cid = _request_cid(request)
     source = _request_source(request)
     settings = load_vk_settings()
+    if _is_mobile_request(request):
+        target = residents_entry_link(settings)
+        # cid/source в ref write- не тащим — отдельный трекинг через mini app.
+        return _html_response(_mobile_vk_jump_html("residents", target))
     _remember_mini_flow(request, "residents")
     target = _mini_app_vk_url(
         settings, "residents", short=True, cid=cid, source=source
@@ -1021,6 +1027,19 @@ def _mini_app_html(default_flow: str = "") -> str:
     return "https://vk.com/im?sel=-" + groupId;
   }}
 
+  function dialogAppUrl() {{
+    // Deeplink в нативное приложение — нужен, когда mini app открыт в мобильном браузере.
+    return "vk://vk.com/im?sel=-" + groupId;
+  }}
+
+  function dialogAndroidIntent() {{
+    return (
+      "intent://vk.com/im?sel=-" + groupId +
+      "#Intent;scheme=https;package=com.vkontakte.android;" +
+      "S.browser_fallback_url=" + encodeURIComponent(dialogUrl()) + ";end"
+    );
+  }}
+
   function openViaWindow(url) {{
     try {{
       var w = window.open(url, "_blank", "noopener,noreferrer");
@@ -1050,12 +1069,16 @@ def _mini_app_html(default_flow: str = "") -> str:
 
   function setDialogLinkButton() {{
     var url = dialogUrl();
-    uiBusy = false;
     var mobile = isMobilePlatform();
+    var href = url;
+    if (mobile) {{
+      href = isAndroidPlatform() ? dialogAndroidIntent() : dialogAppUrl();
+    }}
+    uiBusy = false;
     actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
       if (button.hidden || button.style.display === "none") return;
       if (button.tagName === "A") {{
-        button.href = url;
+        button.href = href;
         // На мобилке внутри VK надёжнее тот же webview, не _blank.
         if (mobile) {{
           button.removeAttribute("target");
@@ -1071,7 +1094,7 @@ def _mini_app_html(default_flow: str = "") -> str:
       }}
       var a = document.createElement("a");
       a.className = button.className || "cta";
-      a.href = url;
+      a.href = href;
       if (!mobile) {{
         a.target = "_blank";
         a.rel = "noopener noreferrer";
@@ -1414,23 +1437,24 @@ def _mini_app_html(default_flow: str = "") -> str:
       }}
     }}
 
-    // Мобилка: только OpenURL. Без Close — иначе выкидывает туда, откуда открыли ссылку.
+    // Мобилка: OpenURL, затем deeplink в приложение (если открыли из браузера).
     if (isMobilePlatform()) {{
       var waitMs = fromUserTap ? 1600 : 500;
+      var appLink = isAndroidPlatform() ? dialogAndroidIntent() : dialogAppUrl();
       viaBridge(chatUrl, waitMs)
         .catch(function () {{ return viaBridge(chatUrlRu, waitMs); }})
         .then(function () {{
           dialogOpened = true;
         }})
-        .catch(function () {{
-          if (fromUserTap) {{
-            try {{
-              window.location.replace(chatUrl);
-            }} catch (_) {{}}
-          }}
+        .catch(function () {{}})
+        .then(function () {{
+          try {{
+            window.location.href = appLink;
+            dialogOpened = true;
+          }} catch (_) {{}}
           setDialogLinkButton();
           setStatus(
-            "Сообщение уже в личке. Нажмите «Открыть диалог VK».",
+            "Сообщение уже в личке. Если диалог не открылся — нажмите «Открыть диалог VK».",
             true
           );
         }});
