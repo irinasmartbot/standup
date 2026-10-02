@@ -1040,22 +1040,12 @@ def _mini_app_html(default_flow: str = "") -> str:
   var titleEl = document.getElementById("title");
 
   function dialogUrl() {{
-    // Только прямой peer чата. vk.me/* даёт промежуточный экран
-    // «Написать сообщение / Перейти к странице» — его не показываем.
-    return "https://vk.com/im?sel=-" + groupId;
+    // write- надёжнее im?sel=- : на мобильном VK im часто открывает ленту.
+    return "https://vk.com/write-" + groupId;
   }}
 
-  function dialogAppUrl() {{
-    // Deeplink в нативное приложение — нужен, когда mini app открыт в мобильном браузере.
-    return "vk://vk.com/im?sel=-" + groupId;
-  }}
-
-  function dialogAndroidIntent() {{
-    return (
-      "intent://vk.com/im?sel=-" + groupId +
-      "#Intent;scheme=https;package=com.vkontakte.android;" +
-      "S.browser_fallback_url=" + encodeURIComponent(dialogUrl()) + ";end"
-    );
+  function dialogUrlRu() {{
+    return "https://vk.ru/write-" + groupId;
   }}
 
   function openViaWindow(url) {{
@@ -1086,18 +1076,13 @@ def _mini_app_html(default_flow: str = "") -> str:
   }}
 
   function setDialogLinkButton() {{
-    var url = dialogUrl();
+    var href = dialogUrl();
     var mobile = isMobilePlatform();
-    var href = url;
-    if (mobile) {{
-      href = isAndroidPlatform() ? dialogAndroidIntent() : dialogAppUrl();
-    }}
     uiBusy = false;
     actionsEl.querySelectorAll("[data-flow]").forEach(function (button) {{
       if (button.hidden || button.style.display === "none") return;
       if (button.tagName === "A") {{
         button.href = href;
-        // На мобилке внутри VK надёжнее тот же webview, не _blank.
         if (mobile) {{
           button.removeAttribute("target");
         }} else {{
@@ -1434,10 +1419,10 @@ def _mini_app_html(default_flow: str = "") -> str:
       setStatus("Не задан id сообщества. Откройте диалог вручную.", false);
       return;
     }}
-    // Только прямой peer чата — без vk.me / write- / intent / vk:// / VKWebAppClose.
-    // Close без реального перехода возвращает к источнику ссылки (файл/пост).
-    var chatUrl = "https://vk.com/im?sel=-" + groupId;
-    var chatUrlRu = "https://vk.ru/im?sel=-" + groupId;
+    // Только https write- / OpenURL. vk:// и intent:// внутри приложения VK
+    // часто открывают ленту, а не диалог сообщества.
+    var chatUrl = dialogUrl();
+    var chatUrlRu = dialogUrlRu();
     var urls = [chatUrl, chatUrlRu];
 
     function viaBridge(url, ms) {{
@@ -1455,21 +1440,22 @@ def _mini_app_html(default_flow: str = "") -> str:
       }}
     }}
 
-    // Мобилка: OpenURL, затем deeplink в приложение (если открыли из браузера).
+    // Мобилка внутри VK: только OpenURL на write-. Без vk:// / intent —
+    // они уводят в ленту. Из обычного браузера fallback — https write-.
     if (isMobilePlatform()) {{
       var waitMs = fromUserTap ? 1600 : 500;
-      var appLink = isAndroidPlatform() ? dialogAndroidIntent() : dialogAppUrl();
       viaBridge(chatUrl, waitMs)
         .catch(function () {{ return viaBridge(chatUrlRu, waitMs); }})
         .then(function () {{
           dialogOpened = true;
         }})
-        .catch(function () {{}})
-        .then(function () {{
-          try {{
-            window.location.href = appLink;
-            dialogOpened = true;
-          }} catch (_) {{}}
+        .catch(function () {{
+          if (fromUserTap) {{
+            try {{
+              window.location.href = chatUrl;
+              dialogOpened = true;
+            }} catch (_) {{}}
+          }}
           setDialogLinkButton();
           setStatus(
             "Сообщение уже в личке. Если диалог не открылся — нажмите «Открыть диалог VK».",
@@ -1716,10 +1702,6 @@ def _mini_app_html(default_flow: str = "") -> str:
     var button = event.target.closest("[data-flow]");
     if (!button) return;
     if (dialogReady) {{
-      if (button.tagName === "A") {{
-        openDialog({{ fromUserTap: true, skipSync: true }});
-        return;
-      }}
       event.preventDefault();
       openDialog({{ fromUserTap: true }});
       return;
