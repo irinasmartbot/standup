@@ -10,7 +10,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from bot.config import BOOKINGS_SOURCE, DATABASE_URL
-from bot.utils.show_formats import EVENT_FORMAT_CHECK, RESIDENTS
+from bot.utils.show_formats import BOOKING_FORMAT_CHECK, EVENT_FORMAT_CHECK, RESIDENTS
 from bot.utils.ticket import WEEKDAYS_RU
 
 logger = logging.getLogger(__name__)
@@ -34,9 +34,7 @@ def ensure_residents_format() -> None:
     if not _use_postgres():
         return
     event_vals = ", ".join(f"'{x}'" for x in EVENT_FORMAT_CHECK)
-    booking_vals = ", ".join(
-        f"'{x}'" for x in ("proverka", "1plus1", "rozygrysh", RESIDENTS)
-    )
+    booking_vals = ", ".join(f"'{x}'" for x in BOOKING_FORMAT_CHECK)
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
@@ -44,26 +42,41 @@ def ensure_residents_format() -> None:
                     ("events", event_vals),
                     ("bookings", booking_vals),
                 ):
+                    # Ищем любой CHECK по колонке format: и `IN (...)`, и `= ANY (ARRAY[...])`.
                     cur.execute(
                         """
-                        SELECT conname
-                        FROM pg_constraint
-                        WHERE conrelid = %s::regclass
-                          AND contype = 'c'
-                          AND pg_get_constraintdef(oid) ILIKE '%%format%%IN%%'
+                        SELECT c.conname
+                        FROM pg_constraint c
+                        JOIN pg_attribute a
+                          ON a.attrelid = c.conrelid
+                         AND a.attnum = ANY (c.conkey)
+                        WHERE c.conrelid = %s::regclass
+                          AND c.contype = 'c'
+                          AND a.attname = 'format'
+                          AND NOT a.attisdropped
                         """,
                         (table,),
                     )
                     names = [row[0] for row in cur.fetchall() if row and row[0]]
+                    # Всегда снимаем каноническое имя — иначе ADD падает DuplicateObject,
+                    # если старый CHECK не попал в выборку (например, через ANY/ARRAY).
+                    if f"{table}_format_check" not in names:
+                        names.append(f"{table}_format_check")
                     for name in names:
-                        if not str(name).replace("_", "").isalnum():
+                        safe = str(name)
+                        if not safe.replace("_", "").isalnum():
                             continue
-                        cur.execute(f'ALTER TABLE {table} DROP CONSTRAINT IF EXISTS "{name}"')
+                        cur.execute(f'ALTER TABLE {table} DROP CONSTRAINT IF EXISTS "{safe}"')
                     cur.execute(
                         f"ALTER TABLE {table} ADD CONSTRAINT {table}_format_check "
                         f"CHECK (format IN ({values}))"
                     )
             conn.commit()
+        logger.info(
+            "ensure_residents_format ok events=%s bookings=%s",
+            event_vals,
+            booking_vals,
+        )
     except Exception:
         logger.exception("ensure_residents_format failed")
 
