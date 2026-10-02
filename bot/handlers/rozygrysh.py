@@ -114,6 +114,8 @@ SYSTEM_PHOTO_FILES = {
     "ticket_template.jpg",
     "hitloto_start.png",
     "photo_2026-07-21_01-59-43.jpg",
+    "residents_start.jpg",
+    "photo_2026-10-02_19-50-45.jpg",
 }
 RAFFLE_DATES_PAGE_SIZE = 10
 RAFFLE_DATES_CAPTION = "Выбирай дату мероприятия в рамках розыгрыша 👇"

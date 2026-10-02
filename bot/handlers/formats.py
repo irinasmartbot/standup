@@ -32,6 +32,8 @@ SYSTEM_PHOTO_FILES = {
     "ticket_template.jpg",
     "hitloto_start.png",
     "photo_2026-07-21_01-59-43.jpg",
+    "residents_start.jpg",
+    "photo_2026-10-02_19-50-45.jpg",
 }
 _VENUE_ALBUM_MESSAGE_IDS = {}
 BEST_DATES_PAGE_SIZE = 10
@@ -265,6 +267,33 @@ def _hitloto_photo():
     if files:
         return FSInputFile(os.path.join(PHOTOS_DIR, sorted(files)[0]))
     return _random_format_photo()
+
+
+def _residents_photo():
+    preferred = (
+        "residents_start.jpg",
+        "photo_2026-10-02_19-50-45.jpg",
+    )
+    for name in preferred:
+        path = os.path.join(PHOTOS_DIR, name)
+        if os.path.exists(path):
+            return FSInputFile(path)
+    return _random_format_photo()
+
+
+async def _answer_with_residents_photo(message, text: str, reply_markup=None, parse_mode=None, track_nav=False):
+    sent = None
+    photo = _residents_photo()
+    if photo:
+        try:
+            sent = await message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception:
+            sent = None
+    if sent is None:
+        sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    if track_nav and sent:
+        remember_booking_nav(message.chat.id, sent.message_id)
+    return sent
 
 
 async def _answer_with_format_photo(message, text: str, reply_markup=None, parse_mode=None, track_nav=False):

@@ -72,6 +72,8 @@ SYSTEM_PHOTO_FILES = {
     "ticket_template.jpg",
     "hitloto_start.png",
     "photo_2026-07-21_01-59-43.jpg",
+    "residents_start.jpg",
+    "photo_2026-10-02_19-50-45.jpg",
 }
 MAX_RANDOM_PHOTO_SIZE = 10 * 1024 * 1024
 

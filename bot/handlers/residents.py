@@ -80,8 +80,15 @@ async def residents_format_entry(message, *, telegram_id: int | None = None):
         remember_booking_nav(message.chat.id, sent.message_id)
         return
     kb, _ = await residents_dates_kb()
-    sent = await message.answer(ENTRY_TEXT, reply_markup=kb, parse_mode="HTML")
-    remember_booking_nav(message.chat.id, sent.message_id)
+    from bot.handlers.formats import _answer_with_residents_photo
+
+    await _answer_with_residents_photo(
+        message,
+        ENTRY_TEXT,
+        reply_markup=kb,
+        parse_mode="HTML",
+        track_nav=True,
+    )
 
 
 async def send_residents_event_card(message, event, back_callback="residents", *, telegram_id=None):

@@ -659,6 +659,7 @@ class VKBotApp:
             return cached
         file_map = {
             "hitloto_start": "hitloto_start.png",
+            "residents_start": "residents_start.jpg",
             "show_cover": "IMG_20220511_201818.jpg",
             "temple_bar": "temple_bar.jpg",
             "escobar": "escobar.jpg",
@@ -4431,7 +4432,9 @@ class VKBotApp:
             peer_id,
             text,
             keyboard=keyboard,
-            attachment=None,
+            attachment=await self._ensure_cover_attachment(
+                peer_id, "residents_start", "show_cover"
+            ),
             edit=edit,
         )
 

@@ -105,6 +105,8 @@ _EXCLUDED_RANDOM_COVER_KEYS = frozenset(
         "nebar",
         "hitloto_start",
         "photo_2026-07-21_01-59-43",
+        "residents_start",
+        "photo_2026-10-02_19-50-45",
         "rozygrysh_otzyv_1",
         "rozygrysh_otzyv_2",
     }
@@ -117,6 +119,8 @@ _EXCLUDED_RANDOM_COVER_NAMES = frozenset(
         "ticket_template.jpg",
         "hitloto_start.png",
         "photo_2026-07-21_01-59-43.jpg",
+        "residents_start.jpg",
+        "photo_2026-10-02_19-50-45.jpg",
     }
 )
 

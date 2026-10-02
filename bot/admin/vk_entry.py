@@ -573,10 +573,28 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
             kb.adjust(1)
             await client.send_message(vk_id, RESIDENTS_EMPTY_TEXT, keyboard=kb.as_json())
             return
+        from bot.vk.media import (
+            load_vk_system_images_cache,
+            resolve_local_image_attachment,
+        )
+
+        cover = None
+        try:
+            cache = load_vk_system_images_cache(settings.system_images_cache)
+            cover = await resolve_local_image_attachment(
+                client,
+                vk_id,
+                key="residents_start",
+                file_name="residents_start.jpg",
+                cache=cache,
+            )
+        except Exception:
+            logger.exception("VK residents cover resolve failed vk_id=%s", vk_id)
         await client.send_message(
             vk_id,
             RESIDENTS_ENTRY_TEXT,
             keyboard=_dates_keyboard(dates, "residents_date", 0, "book"),
+            attachment=cover,
         )
         return
 
