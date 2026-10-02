@@ -1440,28 +1440,21 @@ def _mini_app_html(default_flow: str = "") -> str:
       }}
     }}
 
-    // Мобилка внутри VK: только OpenURL на write-. Без vk:// / intent —
-    // они уводят в ленту. Из обычного браузера fallback — https write-.
+    // Мобилка: по тапу сразу https write-, без ожидания OpenURL.
+    // Иначе первый–второй тап «съедаются» таймерами 1.6с + 1.6с.
     if (isMobilePlatform()) {{
-      var waitMs = fromUserTap ? 1600 : 500;
-      viaBridge(chatUrl, waitMs)
-        .catch(function () {{ return viaBridge(chatUrlRu, waitMs); }})
-        .then(function () {{
-          dialogOpened = true;
-        }})
-        .catch(function () {{
-          if (fromUserTap) {{
-            try {{
-              window.location.href = chatUrl;
-              dialogOpened = true;
-            }} catch (_) {{}}
-          }}
-          setDialogLinkButton();
-          setStatus(
-            "Сообщение уже в личке. Если диалог не открылся — нажмите «Открыть диалог VK».",
-            true
-          );
-        }});
+      if (fromUserTap) {{
+        dialogOpened = true;
+        try {{
+          window.location.href = chatUrl;
+        }} catch (_) {{
+          try {{ window.location.href = chatUrlRu; }} catch (__) {{}}
+        }}
+        return;
+      }}
+      viaBridge(chatUrl, 500)
+        .then(function () {{ dialogOpened = true; }})
+        .catch(function () {{ setDialogLinkButton(); }});
       return;
     }}
 
@@ -1702,6 +1695,11 @@ def _mini_app_html(default_flow: str = "") -> str:
     var button = event.target.closest("[data-flow]");
     if (!button) return;
     if (dialogReady) {{
+      var href = (button.getAttribute && button.getAttribute("href")) || "";
+      // На телефоне не перехватываем тап: пусть сработает <a href="write-">.
+      if (isMobilePlatform() && button.tagName === "A" && href.indexOf("write-") !== -1) {{
+        return;
+      }}
       event.preventDefault();
       openDialog({{ fromUserTap: true }});
       return;
