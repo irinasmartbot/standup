@@ -1331,6 +1331,7 @@ _AUDIT_AFISHA_LABELS = {
     "proverka": "Проверка",
     "hitloto": "Hit Loto",
     "rozygrysh": "Розыгрыш",
+    "residents": "Резиденты",
 }
 _AUDIT_AUDIENCE_LABELS = {
     "booked": "гостям с бронью",
@@ -2187,7 +2188,11 @@ def _bookings_tab(dashboard: dict, filters: dict) -> str:
     for booking in bookings:
         by_format[booking["format"]].append(booking)
     sections = []
-    for fmt, title in (("proverka", "Проверка материала"), ("rozygrysh", "Розыгрыш")):
+    for fmt, title in (
+        ("proverka", "Проверка материала"),
+        ("residents", "Резиденты стендап"),
+        ("rozygrysh", "Розыгрыш"),
+    ):
         if filters.get("format") and filters["format"] != fmt:
             continue
         fmt_bookings = by_format.get(fmt, [])
