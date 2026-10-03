@@ -340,6 +340,17 @@ def test_residents_format():
     print("residents format: OK")
 
 
+def test_vk_same_day_warning_import():
+    from pathlib import Path
+
+    src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert "from bot.utils.booking_texts import same_day_booking_warning" in src
+    from bot.utils.booking_texts import same_day_booking_warning
+
+    assert callable(same_day_booking_warning)
+    print("vk same-day warning import: OK")
+
+
 async def main():
     test_callback_parsing()
     test_mailing_booking_button_fields()
@@ -349,6 +360,7 @@ async def main():
     test_db_schema()
     test_vk_message_item_has_photo()
     test_residents_format()
+    test_vk_same_day_warning_import()
     events = await load_events()
     print(f"events loaded: {len(events)}")
     if not events:

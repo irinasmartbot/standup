@@ -52,6 +52,7 @@ from bot.handlers.formats import (
     VENUES_INTRO_TEXT as TG_VENUES_INTRO_TEXT,
 )
 from bot.services.sheets import load_events
+from bot.utils.booking_texts import same_day_booking_warning
 from bot.utils.show_formats import RESIDENTS_BUTTON, RESIDENTS_LABEL_SHORT
 from bot.utils.free_text import is_meaningful_free_text
 from bot.utils.phone import normalize_phone
