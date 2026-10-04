@@ -610,14 +610,15 @@ class VKBotApp:
     async def _ensure_user(self, vk_id: int) -> None:
         """Создаёт/обновляет users и подтягивает имя из VK (с кэшем на процесс)."""
         vid = int(vk_id)
-        name = self._vk_name_cache.get(vid)
-        if name is None:
+        name = self._vk_name_cache.get(vid) or ""
+        if not name:
             try:
                 name = (await self.client.get_user_display_name(vid)) or ""
             except Exception:
                 logger.exception("VK users.get for profile sync failed vk_id=%s", vid)
                 name = ""
-            self._vk_name_cache[vid] = name
+            if name:
+                self._vk_name_cache[vid] = name
         ensure_user(
             vk_id=vid,
             name=name or None,
@@ -2157,6 +2158,7 @@ class VKBotApp:
         # Канал / менеджер: трек в аналитику и сразу открыть ссылку (без лишнего сообщения).
         link_cmd = str(payload.get("cmd") or "").strip()
         if link_cmd in {"channel", "manager"}:
+            await self._ensure_user(user_id)
             if link_cmd == "channel":
                 link = (self.settings.community_link or "").strip()
                 self._track(user_id, EVENT_CMD_CHANNEL, props={"via": "menu"})
@@ -2206,6 +2208,7 @@ class VKBotApp:
 
     async def _dispatch_message(self, message: dict[str, Any], peer_id: int) -> None:
         vk_id = self._vk_id(message, peer_id)
+        await self._ensure_user(vk_id)
         text = (message.get("text") or "").strip()
         payload = _parse_payload(message.get("payload"))
         cmd = payload.get("cmd")

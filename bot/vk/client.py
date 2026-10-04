@@ -641,12 +641,44 @@ class VKClient:
         raise VKAPIError(last_err)
 
     async def get_user_display_name(self, user_id: int) -> str:
-        response = await self.api("users.get", user_ids=int(user_id))
-        if not response:
-            return ""
-        user = response[0] if isinstance(response, list) else response
-        parts = [user.get("first_name") or "", user.get("last_name") or ""]
-        return " ".join(p for p in parts if p).strip()
+        names = await self.get_user_display_names([int(user_id)])
+        return names.get(int(user_id), "")
+
+    async def get_user_display_names(self, user_ids: list[int]) -> dict[int, str]:
+        """users.get пачкой: {vk_id: «Имя Фамилия»}."""
+        ids: list[int] = []
+        seen: set[int] = set()
+        for raw in user_ids:
+            try:
+                vid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if vid <= 0 or vid in seen:
+                continue
+            seen.add(vid)
+            ids.append(vid)
+        if not ids:
+            return {}
+        out: dict[int, str] = {}
+        for offset in range(0, len(ids), 200):
+            chunk = ids[offset : offset + 200]
+            response = await self.api(
+                "users.get",
+                user_ids=",".join(str(i) for i in chunk),
+            )
+            rows = response if isinstance(response, list) else [response]
+            for user in rows:
+                if not isinstance(user, dict):
+                    continue
+                try:
+                    vid = int(user.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                parts = [user.get("first_name") or "", user.get("last_name") or ""]
+                name = " ".join(p for p in parts if p).strip()
+                if name:
+                    out[vid] = name
+        return out
 
     async def is_group_member(self, user_id: int) -> bool:
         """True if user is a member of VK_GROUP_ID (groups.isMember)."""

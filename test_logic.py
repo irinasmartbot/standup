@@ -351,6 +351,16 @@ def test_vk_same_day_warning_import():
     print("vk same-day warning import: OK")
 
 
+def test_vk_dispatch_ensures_user_name():
+    from pathlib import Path
+
+    src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    start = src.find("async def _dispatch_message")
+    chunk = src[start : start + 400]
+    assert "await self._ensure_user(vk_id)" in chunk
+    print("vk dispatch ensures user name: OK")
+
+
 async def main():
     test_callback_parsing()
     test_mailing_booking_button_fields()
@@ -361,6 +371,7 @@ async def main():
     test_vk_message_item_has_photo()
     test_residents_format()
     test_vk_same_day_warning_import()
+    test_vk_dispatch_ensures_user_name()
     events = await load_events()
     print(f"events loaded: {len(events)}")
     if not events:
