@@ -435,17 +435,23 @@ def _dates_keyboard(
     back_cmd: str,
     venues_cmd: str | None = None,
     back_label: str = "В главное меню",
+    payload_extra: dict[str, Any] | None = None,
 ) -> str:
     start = page * DATES_PAGE_SIZE
     end = start + DATES_PAGE_SIZE
     shown = dates[start:end]
+    extra = payload_extra or {}
     kb = VKKeyboardBuilder(inline=True)
     for date in shown:
-        kb.button(_date_label(date), _payload(command_prefix, date=date), color="primary")
+        kb.button(
+            _date_label(date),
+            _payload(command_prefix, date=date, **extra),
+            color="primary",
+        )
     if page > 0:
-        kb.button("⬅️", _payload(f"{command_prefix}_page", page=page - 1))
+        kb.button("⬅️", _payload(f"{command_prefix}_page", page=page - 1, **extra))
     if end < len(dates):
-        kb.button("➡️", _payload(f"{command_prefix}_page", page=page + 1))
+        kb.button("➡️", _payload(f"{command_prefix}_page", page=page + 1, **extra))
     if venues_cmd:
         kb.button("🗓 Выбрать по площадкам", _payload(venues_cmd))
     kb.button(back_label, _payload(back_cmd))
@@ -561,6 +567,8 @@ class VKBotApp:
         self.event_images = VKRemoteImageCache(str(remote_cache))
         self.peer_context: dict[int, str] = {}
         self.peer_browse: dict[int, str] = {}
+        # Deep link / mini app #flow=residents → «В главное меню»; из меню → «◀️ Назад».
+        self.peer_residents_from_deeplink: dict[int, bool] = {}
         self.booking_sessions: dict[int, dict] = {}
         self.manage_sessions: dict[int, dict] = {}
         # Розыгрыш: kind / awaiting screenshot (до шага модерации).
@@ -1653,7 +1661,9 @@ class VKBotApp:
             fmt = (_gbf(booking_id) or "").strip().lower()
             if fmt == "residents":
                 self._track(vk_id, EVENT_BRANCH_RESIDENTS, props={"via": "change_date"})
-                await self._send_residents_dates(peer_id, 0, entry=False, vk_id=vk_id)
+                await self._send_residents_dates(
+                    peer_id, 0, entry=False, vk_id=vk_id, from_deep_link=False
+                )
             else:
                 self.peer_context[peer_id] = "check"
                 self._track(vk_id, EVENT_BRANCH_PROVERKA, props={"via": "change_date"})
@@ -2458,7 +2468,13 @@ class VKBotApp:
                     EVENT_BOT_START,
                     props=_entry_props(raw_ref, fallback_payload="residents", source=source),
                 )
-            await self._send_residents_dates(peer_id, 0, entry=True, vk_id=vk_id)
+            await self._send_residents_dates(
+                peer_id,
+                0,
+                entry=True,
+                vk_id=vk_id,
+                from_deep_link=is_residents_deeplink,
+            )
             return
 
         is_booking_deeplink = _is_booking_ref(ref) and is_start_entry and not cmd
@@ -2688,11 +2704,16 @@ class VKBotApp:
             return
         if cmd in {"residents_date_page"}:
             page = int(payload.get("page") or 0)
-            await self._send_residents_dates(peer_id, page, edit="page" in payload, vk_id=vk_id)
+            from_dl = True if payload.get("rdl") else None
+            await self._send_residents_dates(
+                peer_id, page, edit="page" in payload, vk_id=vk_id, from_deep_link=from_dl
+            )
             return
         if cmd == "residents_date":
             self.peer_browse[peer_id] = "date"
             self._clear_dates_card(peer_id)
+            if payload.get("rdl"):
+                self.peer_residents_from_deeplink[peer_id] = True
             await self._send_residents_date(peer_id, payload.get("date") or "", vk_id=vk_id)
             return
         if cmd == "residents_event":
@@ -4412,9 +4433,17 @@ class VKBotApp:
         entry: bool = False,
         edit: bool = False,
         vk_id: int | None = None,
+        from_deep_link: bool | None = None,
     ) -> None:
         self.peer_context[peer_id] = "residents"
         self.peer_browse[peer_id] = "date"
+        if from_deep_link is not None:
+            self.peer_residents_from_deeplink[peer_id] = bool(from_deep_link)
+        from_deeplink = self.peer_residents_from_deeplink.get(peer_id, False)
+        if from_deeplink:
+            back_cmd, back_label = "main_menu", "В главное меню"
+        else:
+            back_cmd, back_label = "book", "◀️ Назад"
         if vk_id and entry:
             self._track(vk_id, EVENT_BRANCH_RESIDENTS)
         try:
@@ -4443,8 +4472,14 @@ class VKBotApp:
         max_page = max(0, (len(dates) - 1) // DATES_PAGE_SIZE)
         page = max(0, min(int(page or 0), max_page))
         text = RESIDENTS_ENTRY_TEXT if entry else "Выбирай дату 👇"
+        payload_extra = {"rdl": 1} if from_deeplink else None
         keyboard = _dates_keyboard(
-            dates, "residents_date", page, "book", back_label="◀️ Назад"
+            dates,
+            "residents_date",
+            page,
+            back_cmd,
+            back_label=back_label,
+            payload_extra=payload_extra,
         )
         await self._send_or_edit_dates_card(
             peer_id,
@@ -4500,7 +4535,10 @@ class VKBotApp:
         kb = VKKeyboardBuilder(inline=True)
         kb.button("Забронировать", _payload("check_booking_start", event_id=event["id"]), color="primary")
         kb.button("Правила бронирования", _payload("booking_rules", event_id=event["id"]))
-        kb.button("Назад к датам", _payload("residents_date_page"))
+        back_dates: dict[str, Any] = {"cmd": "residents_date_page"}
+        if self.peer_residents_from_deeplink.get(peer_id):
+            back_dates["rdl"] = 1
+        kb.button("Назад к датам", back_dates)
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(

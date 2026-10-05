@@ -593,7 +593,14 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
         await client.send_message(
             vk_id,
             RESIDENTS_ENTRY_TEXT,
-            keyboard=_dates_keyboard(dates, "residents_date", 0, "book"),
+            keyboard=_dates_keyboard(
+                dates,
+                "residents_date",
+                0,
+                "main_menu",
+                back_label="В главное меню",
+                payload_extra={"rdl": 1},
+            ),
             attachment=cover,
         )
         return

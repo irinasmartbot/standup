@@ -89,6 +89,7 @@ https://go.moscowstandupshow.ru/vk/residents
 
 - **ПК** → `https://vk.ru/app54704296#flow=residents` (экран «Резиденты» → диалог).
 - **Телефон** → `https://vk.com/write-225298932?ref=standup_residents` (сразу нативный диалог приложения; mini app в мобильном браузере часто не умеет увести в app).
+- По deep link / mini app `#flow=residents` под датами кнопка **«В главное меню»**; если клиент зашёл из меню бота — **«◀️ Назад»** к выбору бесплатных форматов.
 
 Прямая короткая mini app (лучше внутри VK, не из Safari/Chrome):
 

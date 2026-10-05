@@ -340,6 +340,44 @@ def test_residents_format():
     print("residents format: OK")
 
 
+def test_vk_residents_deeplink_back_button():
+    import json
+
+    from bot.vk.app import _dates_keyboard
+
+    deep = json.loads(
+        _dates_keyboard(
+            ["07.10.2026", "14.10.2026"],
+            "residents_date",
+            0,
+            "main_menu",
+            back_label="В главное меню",
+            payload_extra={"rdl": 1},
+        )
+    )
+    deep_flat = [btn for row in deep["buttons"] for btn in row]
+    deep_back = deep_flat[-1]
+    assert deep_back["action"]["label"] == "В главное меню"
+    assert json.loads(deep_back["action"]["payload"]) == {"cmd": "main_menu"}
+    assert json.loads(deep_flat[0]["action"]["payload"]).get("rdl") == 1
+
+    inner = json.loads(
+        _dates_keyboard(
+            ["07.10.2026", "14.10.2026"],
+            "residents_date",
+            0,
+            "book",
+            back_label="◀️ Назад",
+        )
+    )
+    inner_flat = [btn for row in inner["buttons"] for btn in row]
+    inner_back = inner_flat[-1]
+    assert inner_back["action"]["label"] == "◀️ Назад"
+    assert json.loads(inner_back["action"]["payload"]) == {"cmd": "book"}
+    assert "rdl" not in json.loads(inner_flat[0]["action"]["payload"])
+    print("vk residents deeplink back button: OK")
+
+
 def test_vk_same_day_warning_import():
     from pathlib import Path
 
@@ -370,6 +408,7 @@ async def main():
     test_db_schema()
     test_vk_message_item_has_photo()
     test_residents_format()
+    test_vk_residents_deeplink_back_button()
     test_vk_same_day_warning_import()
     test_vk_dispatch_ensures_user_name()
     events = await load_events()
