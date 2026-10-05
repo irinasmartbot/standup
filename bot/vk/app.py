@@ -189,7 +189,7 @@ def raffle_entry_link(settings: VKSettings) -> str:
         name = link.rsplit("/", 1)[-1]
         if name and not name.startswith("club") and name not in {"vk.com", "vk.ru"}:
             return f"https://vk.me/{name}?ref=standup_rozygr"
-    return "напиши «розыгрыш»"
+    return "открой ссылку розыгрыша за репост"
 
 
 def booking_entry_link(settings: VKSettings) -> str:
@@ -280,11 +280,11 @@ WELCOME_TEXT = (
     "🎟 Забронировать места на <b>бесплатные шоу</b>\n"
     "⭐ Купить билеты на <b>StandUp BEST</b> и <b>Хитлото</b>"
 )
-# Вечернее окно шоу (МСК): «Начать» → подсказка; воронка розыгрыша → офлайн-подарок.
+# Вечернее окно шоу (МСК): «Начать» → офлайн-розыгрыш подарка на шоу.
 _EVENING_GIFT_HINT_HOUR_START = 19
 _EVENING_GIFT_HINT_HOUR_END = 22  # exclusive
 EVENING_GIFT_HINT_TEXT = (
-    "Если вы хотели участвовать в розыгрыше, напишите слово <b>подарок</b>"
+    "Если вы хотели участвовать в розыгрыше подарка на шоу, напишите слово <b>розыгрыш</b>"
 )
 
 
@@ -497,7 +497,7 @@ def main_menu_keyboard(
     # В паре с каналом длинная подпись снова обрежется — короче только в этом случае.
     manager_label = "Менеджеру" if show_my_bookings else "Задать вопрос менеджеру"
     kb.button(manager_label, _payload("manager"))
-    # Розыгрыш — только по ссылке / слову «розыгрыш».
+    # Онлайн-розыгрыш за репост — только по ссылке, не словом.
     if show_my_bookings:
         if show_rules:
             # 1,1,1,1,2,2 — канал|менеджер рядом из‑за лимита 6 рядов
@@ -2588,8 +2588,8 @@ class VKBotApp:
                 "вернуться в меню 🔄": "main_menu",
                 "меню": "main_menu",
                 "мои брони": "my_bookings",
-                "розыгрыш": "raffle",
-                "участвовать в розыгрыше": "raffle",
+                "розыгрыш": "offline_gift",
+                "участвовать в розыгрыше": "offline_gift",
                 "подарок": "offline_gift",
                 # chek_list / check_list — только TG-чек-лист админа, не VK-клиент.
                 # Старые текстовые кнопки Salebot → наши сценарии
@@ -3791,7 +3791,7 @@ class VKBotApp:
                 "• флаг использован: сброшен\n"
                 f"• отменено броней: {stats.get('bookings_cancelled', 0)}\n"
                 f"• снято заявок на модерации: {stats.get('submissions_cancelled', 0)}\n\n"
-                "Можно снова открыть словом «розыгрыш» или по ссылке:\n"
+                "Можно снова открыть по ссылке:\n"
                 f"{entry}\n\n"
                 "После перехода напиши любое сообщение или нажми «Начать» — "
                 "иначе VK не передаст параметр ссылки."
@@ -3844,7 +3844,7 @@ class VKBotApp:
             logger.exception("raffle dates_keyboard failed vk_id=%s", vk_id)
             await self._send_text(
                 peer_id,
-                text + "\n\nНе удалось показать кнопки дат. Напиши «розыгрыш» ещё раз.",
+                text + "\n\nНе удалось показать кнопки дат. Напиши менеджеру.",
             )
             return
         # Без картинки: вложение + inline keyboard у VK иногда уходит без кнопок.
@@ -3963,16 +3963,7 @@ class VKBotApp:
     async def _send_raffle_start(self, peer_id: int, vk_id: int) -> None:
         from bot.vk.entry_dedupe import claim_flow_send, clear_flow_send
 
-        # Вечером на шоу «розыгрыш» = офлайн-подарок, не онлайн-воронка.
-        if in_evening_offline_gift_window():
-            logger.info(
-                "Evening window: raffle start → offline gift vk_id=%s",
-                vk_id,
-            )
-            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
-            return
-
-        # Тот же ключ, что у mini app / лендинга — не дублируем «Привет-привет».
+        # Слово «розыгрыш» ведёт в подарок на шоу; сюда попадаем только по ссылке / mini app.
         if not claim_flow_send(int(vk_id), "raffle"):
             logger.info("Skip duplicate VK raffle start vk_id=%s", vk_id)
             return

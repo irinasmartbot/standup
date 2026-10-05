@@ -539,6 +539,16 @@ def test_vk_platka_flow():
     print("vk platka flow: OK")
 
 
+def test_vk_word_rozygrysh_opens_show_gift():
+    from pathlib import Path
+
+    src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert '"розыгрыш": "offline_gift"' in src
+    assert '"участвовать в розыгрыше": "offline_gift"' in src
+    assert "Evening window: raffle start → offline gift" not in src
+    print("vk word розыгрыш opens show gift: OK")
+
+
 def test_vk_raffle_screenshot_avoids_tg_handler_import():
     from pathlib import Path
 
@@ -592,6 +602,7 @@ async def main():
     test_vk_main_menu_keeps_ticket_message()
     test_tg_keeps_ticket_message()
     test_vk_platka_flow()
+    test_vk_word_rozygrysh_opens_show_gift()
     test_vk_raffle_screenshot_avoids_tg_handler_import()
     test_vk_same_day_warning_import()
     test_vk_dispatch_ensures_user_name()
