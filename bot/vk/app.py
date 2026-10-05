@@ -801,18 +801,15 @@ class VKBotApp:
     async def _book_click_is_fake_main_menu(
         self, peer_id: int, vk_id: int, cmid: int | None
     ) -> bool:
-        """Старые карточки дат сольников: кнопка «В главное меню» слала cmd=book."""
+        """Старые карточки дат сольников: «В главное меню» слала cmd=book.
+
+        «◀️ Назад» из меню бота не трогаем — это шаг к выбору форматов.
+        """
+        del vk_id
         if not cmid:
             return False
         item = await self.client.get_message_by_cmid(peer_id, int(cmid))
-        if item and _keyboard_has_menu_labeled_book(item.get("keyboard")):
-            return True
-        text = str((item or {}).get("text") or "")
-        if RESIDENTS_LABEL_SHORT.casefold() not in text.casefold():
-            return False
-        from bot.vk.entry_dedupe import recent_flow_send
-
-        return recent_flow_send(int(vk_id), "residents", within_sec=7200)
+        return bool(item and _keyboard_has_menu_labeled_book(item.get("keyboard")))
 
     async def _disable_callback_buttons(
         self,
