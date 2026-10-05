@@ -302,6 +302,33 @@ RESIDENTS_ENTRY_TEXT = (
 RESIDENTS_EMPTY_TEXT = "Скоро даты появятся 😊"
 
 
+def _keyboard_has_menu_labeled_book(keyboard: Any) -> bool:
+    """True, если на клавиатуре «В главное меню» на самом деле cmd=book."""
+    if isinstance(keyboard, str):
+        try:
+            keyboard = json.loads(keyboard)
+        except (TypeError, json.JSONDecodeError):
+            return False
+    if not isinstance(keyboard, dict):
+        return False
+    for row in keyboard.get("buttons") or []:
+        if not isinstance(row, list):
+            continue
+        for btn in row:
+            if not isinstance(btn, dict):
+                continue
+            action = btn.get("action") or {}
+            if not isinstance(action, dict):
+                continue
+            label = str(action.get("label") or "").strip().casefold()
+            if label not in {"в главное меню", "⬅️ в главное меню"}:
+                continue
+            payload = _parse_payload(action.get("payload"))
+            if payload.get("cmd") == "book":
+                return True
+    return False
+
+
 def _payload(value: str, **extra) -> dict[str, Any]:
     return {"cmd": value, **extra}
 
@@ -770,6 +797,22 @@ class VKBotApp:
     def _callback_cmid(self, peer_id: int) -> int | None:
         value = self._peer_event_cmid.get(int(peer_id))
         return int(value) if value else None
+
+    async def _book_click_is_fake_main_menu(
+        self, peer_id: int, vk_id: int, cmid: int | None
+    ) -> bool:
+        """Старые карточки дат сольников: кнопка «В главное меню» слала cmd=book."""
+        if not cmid:
+            return False
+        item = await self.client.get_message_by_cmid(peer_id, int(cmid))
+        if item and _keyboard_has_menu_labeled_book(item.get("keyboard")):
+            return True
+        text = str((item or {}).get("text") or "")
+        if RESIDENTS_LABEL_SHORT.casefold() not in text.casefold():
+            return False
+        from bot.vk.entry_dedupe import recent_flow_send
+
+        return recent_flow_send(int(vk_id), "residents", within_sec=7200)
 
     async def _disable_callback_buttons(
         self,
@@ -2347,6 +2390,15 @@ class VKBotApp:
             self.peer_residents_from_deeplink[int(peer_id)] = True
         if cmd in {"residents_home"} or (cmd == "book" and payload.get("rdl")):
             cmd = "main_menu"
+        elif cmd == "book":
+            cmid = self._callback_cmid(peer_id)
+            if not cmid:
+                try:
+                    cmid = int(message.get("conversation_message_id") or 0) or None
+                except (TypeError, ValueError):
+                    cmid = None
+            if await self._book_click_is_fake_main_menu(peer_id, vk_id, cmid):
+                cmd = "main_menu"
 
         if self._cmd_on_cooldown(peer_id, cmd):
             logger.info("Skip VK cmd cooldown peer_id=%s cmd=%s", peer_id, cmd)

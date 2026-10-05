@@ -344,7 +344,7 @@ def test_vk_residents_deeplink_back_button():
     import json
     from pathlib import Path
 
-    from bot.vk.app import _dates_keyboard
+    from bot.vk.app import _dates_keyboard, _keyboard_has_menu_labeled_book
 
     deep = json.loads(
         _dates_keyboard(
@@ -376,6 +376,17 @@ def test_vk_residents_deeplink_back_button():
     assert inner_back["action"]["label"] == "◀️ Назад"
     assert json.loads(inner_back["action"]["payload"]) == {"cmd": "book"}
     assert "rdl" not in json.loads(inner_flat[0]["action"]["payload"])
+    assert not _keyboard_has_menu_labeled_book(inner)
+
+    legacy = json.loads(
+        _dates_keyboard(
+            ["07.10.2026", "14.10.2026"],
+            "residents_date",
+            0,
+            "book",
+        )
+    )
+    assert _keyboard_has_menu_labeled_book(legacy)
 
     src = Path("bot/vk/app.py").read_text(encoding="utf-8")
     send_menu = src[src.find("async def send_menu") : src.find("async def _leave_offline_gift_to_menu")]
