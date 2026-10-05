@@ -5356,7 +5356,7 @@ async def admin_page(request: web.Request) -> web.Response:
                     }
 
                 user_extras = await loop.run_in_executor(None, _load_user_extras)
-        mailing_data = None
+    mailing_data = None
     if filters.get("tab") == "mailing" and can_resend:
         from bot.db.mailing import get_campaign, list_campaigns, list_recipients
 
