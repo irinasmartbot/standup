@@ -491,6 +491,25 @@ def test_vk_platka_flow():
     print("vk platka flow: OK")
 
 
+def test_vk_raffle_screenshot_avoids_tg_handler_import():
+    from pathlib import Path
+
+    app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert "from bot.handlers.rozygrysh import" not in app_src
+    assert "from bot.services.raffle_moderation import send_to_moderation" in app_src
+    assert "Не удалось отправить скрин. Пришли фото ещё раз одним фото" in app_src
+
+    mod_src = Path("bot/services/raffle_moderation.py").read_text(encoding="utf-8")
+    assert "from bot.utils.nav_messages" not in mod_src
+    assert "import nav_messages" not in mod_src
+    assert "from bot.handlers.rozygrysh" not in mod_src
+    assert "async def send_to_moderation" in mod_src
+
+    raffle_src = Path("bot/handlers/rozygrysh.py").read_text(encoding="utf-8")
+    assert "from bot.services.raffle_moderation import send_to_moderation" in raffle_src
+    print("vk raffle screenshot avoids tg handler import: OK")
+
+
 def test_vk_same_day_warning_import():
     from pathlib import Path
 
@@ -525,6 +544,7 @@ async def main():
     test_vk_main_menu_keeps_ticket_message()
     test_tg_keeps_ticket_message()
     test_vk_platka_flow()
+    test_vk_raffle_screenshot_avoids_tg_handler_import()
     test_vk_same_day_warning_import()
     test_vk_dispatch_ensures_user_name()
     events = await load_events()

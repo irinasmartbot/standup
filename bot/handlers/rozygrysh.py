@@ -72,7 +72,6 @@ from bot.db.crud import (
     has_raffle_screen_entitlement,
     reset_raffle_for_user,
     save_confirm_message_id,
-    save_raffle_moderation_message,
     save_raffle_nav,
     save_ticket_message_id,
     schedule_raffle_after_accept,
@@ -89,6 +88,7 @@ from bot.pdn_consent import (
     CB_CONSENT_RAFFLE,
     CONSENT_TEXT,
 )
+from bot.services.raffle_moderation import send_to_moderation as _send_to_moderation
 from bot.services.sheets import load_events
 from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
 from bot.utils.bot_commands import refresh_user_commands
@@ -756,80 +756,6 @@ async def rz_receive_screenshot(message: Message, state: FSMContext):
         kb.button(text="Я выложил, вот те скрин", callback_data="rz_post_screen")
     kb.adjust(1)
     await message.answer("Можешь отправить скрин ещё раз 👇", reply_markup=kb.as_markup())
-
-
-async def _send_to_moderation(
-    submission_id,
-    telegram_id,
-    username,
-    full_name,
-    kind,
-    photo,
-    *,
-    vk_id=None,
-) -> bool:
-    chat_id = _mod_chat_id()
-    if not chat_id:
-        logger.error("MODERATION_CHAT_ID is not set or invalid")
-        return False
-    if kind not in {"post", "review"}:
-        logger.error("Refusing moderation post with invalid kind=%s", kind)
-        return False
-    kind_label = "отзыва" if kind == "review" else "поста"
-    if vk_id is not None:
-        name = escape(full_name or "Гость")
-        caption = (
-            f'{name} · <a href="https://vk.com/id{int(vk_id)}">профиль VK</a> '
-            f"(id {int(vk_id)}) прислал СКРИН {kind_label}\n"
-            f"Заявка #{submission_id}"
-        )
-    else:
-        uname = f"@{username}" if username else "без username"
-        tg_id = int(telegram_id) if telegram_id is not None else 0
-        caption = (
-            f"{escape(full_name or 'Гость')} {escape(uname)} "
-            f"(id {tg_id}) прислал СКРИН {kind_label}\n"
-            f"Заявка #{submission_id}"
-        )
-    kb = InlineKeyboardBuilder()
-    kb.button(text="ПРИНЯТЬ", callback_data=f"rz_mod_ok_{submission_id}", style="success")
-    kb.button(
-        text="ОТКЛОНИТЬ без комментария",
-        callback_data=f"rz_mod_no_silent_{submission_id}",
-        style="danger",
-    )
-    kb.button(
-        text="ОТКЛОНИТЬ с комментарием",
-        callback_data=f"rz_mod_no_reason_{submission_id}",
-    )
-    kb.adjust(1)
-    try:
-        # Только наша карточка модерации — без forward произвольных сообщений клиента
-        sent = await bot.send_photo(
-            chat_id=chat_id,
-            photo=photo,
-            caption=caption,
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML",
-        )
-        # Сохраняем TG file_id с карточки модерации — по нему админка может показать превью
-        # (в т.ч. для VK-заявок, где в БД сначала лежал vk-ref, а не file_id бота).
-        tg_file_id = None
-        if getattr(sent, "photo", None):
-            try:
-                tg_file_id = sent.photo[-1].file_id
-            except (IndexError, TypeError, AttributeError):
-                tg_file_id = None
-        save_raffle_moderation_message(
-            submission_id,
-            chat_id,
-            sent.message_id,
-            photo_file_id=tg_file_id,
-        )
-        return True
-    except Exception:
-        logger.exception("Failed to send screenshot to moderation chat %s", chat_id)
-        return False
 
 
 # ─── модерация ────────────────────────────────────────────────────────────────

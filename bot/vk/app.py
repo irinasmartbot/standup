@@ -3964,6 +3964,27 @@ class VKBotApp:
         vk_id: int,
         message: dict[str, Any],
     ) -> None:
+        kind = self._resolve_raffle_screenshot_kind(vk_id)
+        if kind not in {"post", "review"}:
+            self._clear_raffle_screenshot_wait(vk_id)
+            return
+        try:
+            await self._deliver_raffle_screenshot(peer_id, vk_id, message, kind)
+        except Exception:
+            logger.exception("VK raffle screenshot failed vk_id=%s", vk_id)
+            self._arm_raffle_screenshot(vk_id, kind)
+            await self._send_text(
+                peer_id,
+                "Не удалось отправить скрин. Пришли фото ещё раз одним фото 👇",
+            )
+
+    async def _deliver_raffle_screenshot(
+        self,
+        peer_id: int,
+        vk_id: int,
+        message: dict[str, Any],
+        kind: str,
+    ) -> None:
         from aiogram.types import BufferedInputFile
 
         from bot.db.crud import (
@@ -3972,12 +3993,7 @@ class VKBotApp:
             ensure_raffle_tables,
             get_pending_raffle_submission,
         )
-        from bot.handlers.rozygrysh import _send_to_moderation
-
-        kind = self._resolve_raffle_screenshot_kind(vk_id)
-        if kind not in {"post", "review"}:
-            self._clear_raffle_screenshot_wait(vk_id)
-            return
+        from bot.services.raffle_moderation import send_to_moderation
 
         url, ref = vk_raffle.extract_photo_from_message(message)
         if ref == "album":
@@ -4068,7 +4084,7 @@ class VKBotApp:
         )
 
         photo = BufferedInputFile(image_bytes, filename=f"raffle_{submission_id}.jpg")
-        sent_ok = await _send_to_moderation(
+        sent_ok = await send_to_moderation(
             submission_id,
             None,
             None,
