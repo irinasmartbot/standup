@@ -431,7 +431,55 @@ def test_vk_main_menu_keeps_ticket_message():
     assert filter_deletable_message_ids([161528], {161528, 161527}) == []
     assert filter_deletable_message_ids([5], set()) == [5]
 
+    from bot.vk.app import message_is_issued_ticket
+    import json
+
+    ticket_kb = json.dumps(
+        {
+            "buttons": [
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "Отменить бронь",
+                            "payload": json.dumps({"cmd": "mb_cancel_confirm", "booking_id": 1}),
+                        }
+                    }
+                ],
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "Что, если я хочу прийти не один?",
+                            "payload": json.dumps({"cmd": "rz_not_alone"}),
+                        }
+                    }
+                ],
+            ]
+        }
+    )
+    assert message_is_issued_ticket({"keyboard": ticket_kb, "id": 9, "conversation_message_id": 3})
+    dates_kb = json.dumps(
+        {
+            "buttons": [
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": "5 октября",
+                            "payload": json.dumps({"cmd": "rz_date", "date": "05.10.2026"}),
+                        }
+                    }
+                ]
+            ]
+        }
+    )
+    assert not message_is_issued_ticket({"keyboard": dates_kb})
+    assert not message_is_issued_ticket(None)
+
     src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert "message_is_issued_ticket" in src
+    assert "return bool(protected)" in src
     assert "_safe_delete_messages" in src
     assert src.count("delete_ticket_message") == 2
     assert "if ticket_mid:" in src

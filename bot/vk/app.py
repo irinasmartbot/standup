@@ -347,6 +347,51 @@ def _keyboard_has_menu_labeled_book(keyboard: Any) -> bool:
     return False
 
 
+_TICKET_KEEP_CMDS = frozenset(
+    {
+        "booking_get_ticket",
+        "mb_cancel_confirm",
+        "mb_cancel_do",
+        "mb_ticket",
+        "mb_change_date_confirm",
+        "mb_change_guests_confirm",
+        "rz_not_alone",
+    }
+)
+
+
+def _keyboard_cmds(keyboard: Any) -> set[str]:
+    if isinstance(keyboard, str):
+        try:
+            keyboard = json.loads(keyboard)
+        except (TypeError, json.JSONDecodeError):
+            return set()
+    if not isinstance(keyboard, dict):
+        return set()
+    cmds: set[str] = set()
+    for row in keyboard.get("buttons") or []:
+        if not isinstance(row, list):
+            continue
+        for btn in row:
+            if not isinstance(btn, dict):
+                continue
+            action = btn.get("action") or {}
+            if not isinstance(action, dict):
+                continue
+            payload = _parse_payload(action.get("payload"))
+            cmd = str(payload.get("cmd") or "").strip()
+            if cmd:
+                cmds.add(cmd)
+    return cmds
+
+
+def message_is_issued_ticket(message: dict[str, Any] | None) -> bool:
+    """Сообщение билета / «Отлично + Получить билет» — нельзя стирать навигацией."""
+    if not isinstance(message, dict):
+        return False
+    return bool(_keyboard_cmds(message.get("keyboard")) & _TICKET_KEEP_CMDS)
+
+
 def _payload(value: str, **extra) -> dict[str, Any]:
     return {"cmd": value, **extra}
 
@@ -918,12 +963,23 @@ class VKBotApp:
         if not cmid:
             return False
         protected = self._protected_chat_ids(peer_id)
-        if not protected:
-            return False
         if clicked_ref_is_protected(protected, cmid=cmid):
             return True
         item = await self.client.get_message_by_cmid(peer_id, int(cmid))
-        return clicked_ref_is_protected(protected, cmid=cmid, message=item)
+        if item:
+            if clicked_ref_is_protected(protected, cmid=cmid, message=item):
+                return True
+            if message_is_issued_ticket(item):
+                self._remember_keep_ids(
+                    peer_id,
+                    item.get("id"),
+                    item.get("conversation_message_id"),
+                )
+                return True
+            return False
+        # cmid ≠ сохранённый message_id, а запрос сообщения не удался —
+        # лучше оставить клик, чем стереть билет розыгрыша.
+        return bool(protected)
 
     def _callback_cmid(self, peer_id: int) -> int | None:
         value = self._peer_event_cmid.get(int(peer_id))
@@ -1502,6 +1558,15 @@ class VKBotApp:
                     if row and len(row) > idx and row[idx]:
                         keep_ids.append(int(row[idx]))
                 self._remember_keep_ids(int(peer_id), *keep_ids)
+                for mid in keep_ids:
+                    item = await self.client.get_message_by_id(int(mid))
+                    if not item:
+                        continue
+                    self._remember_keep_ids(
+                        int(peer_id),
+                        item.get("id"),
+                        item.get("conversation_message_id"),
+                    )
             except Exception:
                 logger.exception(
                     "Failed to remember VK ticket message ids booking_id=%s",
