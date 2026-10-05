@@ -351,7 +351,7 @@ def test_vk_residents_deeplink_back_button():
             ["07.10.2026", "14.10.2026"],
             "residents_date",
             0,
-            "main_menu",
+            "residents_home",
             back_label="В главное меню",
             payload_extra={"rdl": 1},
         )
@@ -359,7 +359,7 @@ def test_vk_residents_deeplink_back_button():
     deep_flat = [btn for row in deep["buttons"] for btn in row]
     deep_back = deep_flat[-1]
     assert deep_back["action"]["label"] == "В главное меню"
-    assert json.loads(deep_back["action"]["payload"]) == {"cmd": "main_menu"}
+    assert json.loads(deep_back["action"]["payload"]) == {"cmd": "residents_home", "rdl": 1}
     assert json.loads(deep_flat[0]["action"]["payload"]).get("rdl") == 1
 
     inner = json.loads(
@@ -380,6 +380,8 @@ def test_vk_residents_deeplink_back_button():
     src = Path("bot/vk/app.py").read_text(encoding="utf-8")
     send_menu = src[src.find("async def send_menu") : src.find("async def _leave_offline_gift_to_menu")]
     assert "force_new=True" in send_menu
+    assert "residents_home" in src
+    assert 'if cmd in {"residents_home"}' in src or "cmd in {\"residents_home\"}" in src
     print("vk residents deeplink back button: OK")
 
 

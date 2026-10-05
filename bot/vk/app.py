@@ -454,7 +454,7 @@ def _dates_keyboard(
         kb.button("➡️", _payload(f"{command_prefix}_page", page=page + 1, **extra))
     if venues_cmd:
         kb.button("🗓 Выбрать по площадкам", _payload(venues_cmd))
-    kb.button(back_label, _payload(back_cmd))
+    kb.button(back_label, _payload(back_cmd, **extra))
     widths = [2] * (len(shown) // 2)
     if len(shown) % 2:
         widths.append(1)
@@ -2342,6 +2342,12 @@ class VKBotApp:
             }:
                 cmd = f"{context}_venues" if context in {"best", "check"} else "check_venues"
 
+        # Deep link резидентов: не путать с «Назад» на выбор форматов (cmd=book).
+        if payload.get("rdl"):
+            self.peer_residents_from_deeplink[int(peer_id)] = True
+        if cmd in {"residents_home"} or (cmd == "book" and payload.get("rdl")):
+            cmd = "main_menu"
+
         if self._cmd_on_cooldown(peer_id, cmd):
             logger.info("Skip VK cmd cooldown peer_id=%s cmd=%s", peer_id, cmd)
             return
@@ -2489,7 +2495,7 @@ class VKBotApp:
                 0,
                 entry=True,
                 vk_id=vk_id,
-                from_deep_link=is_residents_deeplink,
+                from_deep_link=bool(is_residents_deeplink or (cmd == "residents" and is_start_entry)),
             )
             return
 
@@ -4457,7 +4463,7 @@ class VKBotApp:
             self.peer_residents_from_deeplink[peer_id] = bool(from_deep_link)
         from_deeplink = self.peer_residents_from_deeplink.get(peer_id, False)
         if from_deeplink:
-            back_cmd, back_label = "main_menu", "В главное меню"
+            back_cmd, back_label = "residents_home", "В главное меню"
         else:
             back_cmd, back_label = "book", "◀️ Назад"
         if vk_id and entry:

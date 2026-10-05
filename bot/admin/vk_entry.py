@@ -597,7 +597,7 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
                 dates,
                 "residents_date",
                 0,
-                "main_menu",
+                "residents_home",
                 back_label="В главное меню",
                 payload_extra={"rdl": 1},
             ),
