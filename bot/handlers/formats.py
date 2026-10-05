@@ -19,7 +19,12 @@ from bot.db.analytics import (
 )
 from bot.utils.show_formats import RESIDENTS_BUTTON, RESIDENTS_MENU_BUTTON
 from bot.utils.ticket import MONTHS, format_date
-from bot.utils.nav_messages import remember_booking_nav, forget_booking_nav, delete_booking_nav
+from bot.utils.nav_messages import (
+    remember_booking_nav,
+    forget_booking_nav,
+    delete_booking_nav,
+    is_protected_ticket_message,
+)
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -571,6 +576,11 @@ async def _edit_best_location_carousel(call: CallbackQuery, events, index: int):
     from bot.utils.event_poster import tg_event_poster
 
     photo = await tg_event_poster(event.get("image"))
+    telegram_id = call.from_user.id if call.from_user else None
+    clicked_mid = call.message.message_id if call.message else None
+    if is_protected_ticket_message(telegram_id, clicked_mid):
+        await _send_best_location_carousel(call.message, events, index)
+        return
     if photo is not None:
         try:
             await call.message.edit_media(
@@ -621,6 +631,9 @@ async def _delete_previous_menu_message(call: CallbackQuery):
     # Старое сообщение могли удалить / оно InaccessibleMessage — без .text/.caption.
     text = message_text(msg)
     if WELCOME_MARKER in text:
+        return
+    telegram_id = call.from_user.id if call.from_user else None
+    if is_protected_ticket_message(telegram_id, msg.message_id):
         return
     forget_booking_nav(msg.chat.id, msg.message_id)
     await delete_linked_venue_album(call)

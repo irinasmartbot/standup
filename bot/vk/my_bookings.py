@@ -216,6 +216,7 @@ def actionable_booking(booking_id: int, vk_id: int) -> tuple[Any | None, str | N
 
 
 async def delete_ticket_message(client, peer_id: int, booking_id: int) -> None:
+    """Стирает билет только если он уже выдан. Вызывать с отмены/переноса даты."""
     booking = get_active_booking_by_id(booking_id)
     if not booking:
         return

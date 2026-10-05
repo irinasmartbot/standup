@@ -526,6 +526,58 @@ def save_confirm_message_id(booking_id, message_id):
     conn.close()
 
 
+def protected_booking_chat_message_ids(
+    *,
+    vk_id: int | None = None,
+    telegram_id: int | None = None,
+) -> set[int]:
+    """Id сообщений билета и подтверждения активной брони.
+
+    Бот не удаляет их навигацией. Стирает только клиентская отмена
+    или перенос даты, если билет уже выдан.
+    """
+    if not _use_postgres():
+        return set()
+    if vk_id:
+        user_sql = "u.vk_id = %s"
+        user_val = int(vk_id)
+    elif telegram_id:
+        user_sql = "u.telegram_id = %s"
+        user_val = int(telegram_id)
+    else:
+        return set()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT b.ticket_message_id, b.confirm_message_id
+                FROM bookings b
+                JOIN users u ON u.id = b.user_id
+                WHERE {user_sql}
+                  AND b.status IN ('booked', 'confirmed')
+                  AND (
+                    b.ticket_message_id IS NOT NULL
+                    OR b.confirm_message_id IS NOT NULL
+                  )
+                """,
+                (user_val,),
+            )
+            ids: set[int] = set()
+            for ticket_mid, confirm_mid in cur.fetchall():
+                for raw in (ticket_mid, confirm_mid):
+                    try:
+                        value = int(raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if value:
+                        ids.add(value)
+            return ids
+
+
+def vk_protected_chat_message_ids(vk_id: int) -> set[int]:
+    return protected_booking_chat_message_ids(vk_id=vk_id)
+
+
 def save_ticket_message_id(booking_id, message_id):
     if _use_postgres():
         with _pg_connect() as conn:

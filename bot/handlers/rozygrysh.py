@@ -92,7 +92,12 @@ from bot.pdn_consent import (
 from bot.services.sheets import load_events
 from bot.utils.booking_texts import reminder_details_cut, same_day_booking_warning
 from bot.utils.bot_commands import refresh_user_commands
-from bot.utils.nav_messages import delete_my_bookings_messages
+from bot.utils.nav_messages import (
+    delete_my_bookings_messages,
+    is_protected_ticket_message,
+    pop_extra_ticket_messages,
+    remember_issued_ticket_message,
+)
 from bot.utils.phone import PHONE_INVALID_TEXT, normalize_phone
 from bot.utils.ticket import (
     MONTHS,
@@ -479,6 +484,10 @@ async def _guard_screen_entitlement(call: CallbackQuery) -> bool:
 
 
 async def _delete_call_message(call: CallbackQuery):
+    telegram_id = call.from_user.id if call.from_user else None
+    mid = call.message.message_id if call.message else None
+    if is_protected_ticket_message(telegram_id, mid):
+        return
     try:
         await call.message.delete()
     except Exception:
@@ -1332,10 +1341,7 @@ async def rz_sub_check(call: CallbackQuery):
             await bot.delete_message(call.from_user.id, mid)
         except Exception:
             pass
-    try:
-        await call.message.delete()
-    except Exception:
-        pass
+    await _delete_call_message(call)
 
     await _continue_after_subscribe_check(
         call.from_user.id,
@@ -1408,10 +1414,7 @@ async def rz_date(call: CallbackQuery, state: FSMContext):
         return
 
     # список дат больше не нужен
-    try:
-        await call.message.delete()
-    except Exception:
-        pass
+    await _delete_call_message(call)
 
     if len(events) == 1:
         await _send_event_card(call.message, events[0], call.from_user.id)
@@ -1435,10 +1438,7 @@ async def rz_dates(call: CallbackQuery):
     if not dates:
         await call.answer("Нет доступных дат", show_alert=True)
         return
-    try:
-        await call.message.delete()
-    except Exception:
-        pass
+    await _delete_call_message(call)
     sent = await call.message.answer(RAFFLE_DATES_CAPTION, reply_markup=markup)
     save_raffle_nav(call.from_user.id, dates_message_id=sent.message_id)
     await call.answer()
@@ -1470,10 +1470,7 @@ async def rz_event(call: CallbackQuery):
     if not event:
         await call.answer("Мероприятие недоступно", show_alert=True)
         return
-    try:
-        await call.message.delete()
-    except Exception:
-        pass
+    await _delete_call_message(call)
     await _send_event_card(call.message, event, call.from_user.id)
     await call.answer()
 
@@ -1901,8 +1898,14 @@ async def _finish_booking(message: Message, state: FSMContext, user):
 # ─── билет / отмена ───────────────────────────────────────────────────────────
 
 
-async def _delete_raffle_ui(telegram_id: int, booking_id=None, extra_message_ids=()):
-    """Полностью удаляет сообщения выбора даты / карточки / брони / билета."""
+async def _delete_raffle_ui(
+    telegram_id: int,
+    booking_id=None,
+    extra_message_ids=(),
+    *,
+    delete_ticket=False,
+):
+    """Удаляет UI розыгрыша. Билет — только при отмене, если он уже выдан."""
     nav = get_raffle_nav(telegram_id)
     ids = []
     if nav:
@@ -1912,8 +1915,15 @@ async def _delete_raffle_ui(telegram_id: int, booking_id=None, extra_message_ids
         if booking:
             ticket_message_id = booking[-2]
             confirm_message_id = booking[-1]
-            ids.extend([ticket_message_id, confirm_message_id])
+            if delete_ticket:
+                ids.append(ticket_message_id)
+                ids.extend(pop_extra_ticket_messages(booking_id, chat_id=telegram_id))
+            ids.append(confirm_message_id)
     ids.extend(extra_message_ids)
+    if not delete_ticket:
+        from bot.utils.nav_messages import is_protected_ticket_message
+
+        ids = [mid for mid in ids if not is_protected_ticket_message(telegram_id, mid)]
 
     seen = set()
     for mid in ids:
@@ -1990,6 +2000,7 @@ async def rz_ticket(call: CallbackQuery):
             await call.answer()
             return
         save_ticket_message_id(booking_id, ticket_msg.message_id)
+        remember_issued_ticket_message(call.from_user.id, booking_id, ticket_msg.message_id)
         if not already_confirmed:
             update_booking_status(booking_id, "confirmed")
             set_rozygrysh_used(call.from_user.id, True)
@@ -2054,6 +2065,7 @@ async def rz_cancel_do(call: CallbackQuery):
         call.from_user.id,
         booking_id,
         extra_message_ids=(call.message.message_id,),
+        delete_ticket=True,
     )
     await delete_my_bookings_messages(call.message.bot, call.from_user.id)
     update_booking_status(booking_id, "cancelled")

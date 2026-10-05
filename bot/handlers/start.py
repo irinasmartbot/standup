@@ -42,6 +42,8 @@ from bot.utils.free_text import is_meaningful_free_text as _is_meaningful_free_t
 from bot.utils.nav_messages import (
     delete_my_bookings_messages,
     forget_my_bookings_message,
+    is_protected_ticket_message,
+    remember_issued_ticket_message,
     remember_my_bookings_message,
 )
 from bot.utils.ticket import format_ticket_place, generate_ticket
@@ -395,6 +397,10 @@ async def _send_command_bookings(
 
 
 async def _delete_previous_menu_message(call: CallbackQuery):
+    msg = call.message
+    telegram_id = call.from_user.id if call.from_user else None
+    if msg is not None and is_protected_ticket_message(telegram_id, msg.message_id):
+        return
     await delete_linked_venue_album(call)
     try:
         await call.message.delete()
@@ -712,6 +718,7 @@ async def command_booking_ticket(call: CallbackQuery):
         reply_markup=_ticket_view_kb(page),
     )
     remember_my_bookings_message(chat_id, sent.message_id)
+    remember_issued_ticket_message(chat_id, row[0], sent.message_id)
     await call.answer()
 
 
@@ -729,11 +736,12 @@ async def command_bookings_back(call: CallbackQuery):
 
     chat_id = call.message.chat.id
     old_id = call.message.message_id
-    try:
-        await call.message.delete()
-        forget_my_bookings_message(chat_id, old_id)
-    except Exception:
-        pass
+    if not is_protected_ticket_message(call.from_user.id, old_id):
+        try:
+            await call.message.delete()
+            forget_my_bookings_message(chat_id, old_id)
+        except Exception:
+            pass
     await _send_command_bookings(
         call.message,
         page=page,

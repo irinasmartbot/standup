@@ -416,6 +416,58 @@ def test_vk_residents_deeplink_back_button():
     print("vk residents deeplink back button: OK")
 
 
+def test_vk_main_menu_keeps_ticket_message():
+    from pathlib import Path
+
+    from bot.vk.app import clicked_ref_is_protected, filter_deletable_message_ids
+
+    assert clicked_ref_is_protected({161528}, cmid=161528)
+    assert clicked_ref_is_protected({161528}, cmid=99, message={"id": 161528})
+    assert clicked_ref_is_protected({161528}, cmid=99, message={"conversation_message_id": 161528})
+    assert not clicked_ref_is_protected({161528}, cmid=99, message={"id": 1})
+    assert not clicked_ref_is_protected(set(), cmid=161528)
+
+    assert filter_deletable_message_ids([10, 161528, 11, 161528], {161528}) == [10, 11]
+    assert filter_deletable_message_ids([161528], {161528, 161527}) == []
+    assert filter_deletable_message_ids([5], set()) == [5]
+
+    src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert "_safe_delete_messages" in src
+    assert src.count("delete_ticket_message") == 2
+    assert "if ticket_mid:" in src
+    booking_src = Path("bot/handlers/booking.py").read_text(encoding="utf-8")
+    assert booking_src.count("await _delete_ticket(") == 2
+    raffle_src = Path("bot/handlers/rozygrysh.py").read_text(encoding="utf-8")
+    assert "delete_ticket=True" in raffle_src
+    print("vk/tg keep ticket except cancel/date change: OK")
+
+
+def test_tg_keeps_ticket_message():
+    from pathlib import Path
+
+    from bot.utils import nav_messages as nm
+
+    nm._EXTRA_TICKET_MSG_BY_BOOKING.clear()
+    nm._EXTRA_TICKET_MSG_BY_CHAT.clear()
+    nm.remember_issued_ticket_message(1001, 702, 555)
+    assert nm.is_protected_ticket_message(1001, 555)
+    extras = nm.pop_extra_ticket_messages(702, chat_id=1001)
+    assert extras == {555}
+    assert 555 not in nm._EXTRA_TICKET_MSG_BY_CHAT.get(1001, set())
+
+    start_src = Path("bot/handlers/start.py").read_text(encoding="utf-8")
+    assert "remember_issued_ticket_message" in start_src
+    assert "is_protected_ticket_message(call.from_user.id, old_id)" in start_src
+    booking_src = Path("bot/handlers/booking.py").read_text(encoding="utf-8")
+    assert "pop_extra_ticket_messages" in booking_src
+    assert "remember_issued_ticket_message" in booking_src
+    raffle_src = Path("bot/handlers/rozygrysh.py").read_text(encoding="utf-8")
+    assert "is_protected_ticket_message(telegram_id, mid)" in raffle_src
+    formats_src = Path("bot/handlers/formats.py").read_text(encoding="utf-8")
+    assert "is_protected_ticket_message" in formats_src
+    print("tg keep ticket except cancel/date change: OK")
+
+
 def test_vk_same_day_warning_import():
     from pathlib import Path
 
@@ -447,6 +499,8 @@ async def main():
     test_vk_message_item_has_photo()
     test_residents_format()
     test_vk_residents_deeplink_back_button()
+    test_vk_main_menu_keeps_ticket_message()
+    test_tg_keeps_ticket_message()
     test_vk_same_day_warning_import()
     test_vk_dispatch_ensures_user_name()
     events = await load_events()

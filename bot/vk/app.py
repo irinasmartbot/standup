@@ -40,6 +40,7 @@ from bot.db.crud import (
     has_pdn_consent,
     set_pdn_consent,
     update_booking_status,
+    vk_protected_chat_message_ids,
 )
 from bot.pdn_consent import CONSENT_TEXT, VK_CMD_CONSENT
 from bot.handlers.booking import BOOKING_RULES_TEXT as TG_BOOKING_RULES_TEXT
@@ -333,6 +334,64 @@ def _payload(value: str, **extra) -> dict[str, Any]:
     return {"cmd": value, **extra}
 
 
+def clicked_ref_is_protected(
+    protected_ids: set[int],
+    *,
+    cmid: int | None,
+    message: dict[str, Any] | None = None,
+) -> bool:
+    """True, если клик по сообщению билета/подтверждения брони — его нельзя удалять."""
+    ids = set()
+    for raw in protected_ids:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value:
+            ids.add(value)
+    if not ids:
+        return False
+    try:
+        if cmid and int(cmid) in ids:
+            return True
+    except (TypeError, ValueError):
+        pass
+    if not message:
+        return False
+    for key in ("id", "conversation_message_id"):
+        try:
+            value = int(message.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if value and value in ids:
+            return True
+    return False
+
+
+def filter_deletable_message_ids(
+    message_ids: list[int] | tuple[int, ...] | set[int],
+    protected_ids: set[int],
+) -> list[int]:
+    """Убирает id билета/подтверждения из списка на удаление."""
+    protected: set[int] = set()
+    for raw in protected_ids:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value:
+            protected.add(value)
+    unique: list[int] = []
+    for mid in message_ids:
+        try:
+            value = int(mid)
+        except (TypeError, ValueError):
+            continue
+        if value and value not in unique and value not in protected:
+            unique.append(value)
+    return unique
+
+
 def _parse_payload(raw: str | None) -> dict[str, Any]:
     if not raw:
         return {}
@@ -607,6 +666,7 @@ class VKBotApp:
         self._ticket_in_progress: set[int] = set()
         self._ticket_retry_tasks: dict[int, asyncio.Task] = {}
         self.peer_nav_message_ids: dict[int, list[int]] = {}
+        self.peer_keep_message_ids: dict[int, set[int]] = {}
         self._pending_delete_ids: dict[int, list[int]] = {}
         self.peer_carousel_message_ids: dict[int, int] = {}
         self.peer_my_bookings_message_ids: dict[int, int] = {}
@@ -774,6 +834,57 @@ class VKBotApp:
             if value and value not in bucket:
                 bucket.append(value)
 
+    def _protected_chat_ids(self, peer_id: int) -> set[int]:
+        protected = set(self.peer_keep_message_ids.get(int(peer_id), set()))
+        try:
+            protected.update(vk_protected_chat_message_ids(int(peer_id)))
+        except Exception:
+            logger.exception("vk_protected_chat_message_ids failed peer_id=%s", peer_id)
+        return protected
+
+    def _remember_keep_ids(self, peer_id: int, *message_ids: Any) -> None:
+        keep = self.peer_keep_message_ids.setdefault(int(peer_id), set())
+        for mid in message_ids:
+            try:
+                value = int(mid)
+            except (TypeError, ValueError):
+                continue
+            if value:
+                keep.add(value)
+
+    def _forget_keep_ids(self, peer_id: int, *message_ids: Any) -> None:
+        keep = self.peer_keep_message_ids.get(int(peer_id))
+        if not keep:
+            return
+        for mid in message_ids:
+            try:
+                value = int(mid)
+            except (TypeError, ValueError):
+                continue
+            if value:
+                keep.discard(value)
+
+    async def _safe_delete_messages(self, peer_id: int, message_ids: list[int] | tuple[int, ...]) -> None:
+        """Удаляет сообщения навигации, но никогда не трогает билет."""
+        protected = self._protected_chat_ids(peer_id)
+        unique = filter_deletable_message_ids(message_ids, protected)
+        skipped: list[int] = []
+        for mid in message_ids:
+            try:
+                value = int(mid)
+            except (TypeError, ValueError):
+                continue
+            if value and value in protected:
+                skipped.append(value)
+        if skipped:
+            logger.info(
+                "Skip VK delete of ticket/confirm peer_id=%s ids=%s",
+                peer_id,
+                skipped,
+            )
+        if unique:
+            await self.client.delete_messages(int(peer_id), unique)
+
     async def _delete_nav(self, peer_id: int, *, extra_ids: list[int] | None = None) -> None:
         peer = int(peer_id)
         ids = list(self.peer_nav_message_ids.pop(peer, []))
@@ -783,16 +894,19 @@ class VKBotApp:
         # Не чистим всю историю с клавиатурами: после рестарта память пустая,
         # и такой wipe убивал старые меню — кнопки «мертвели», пока пользователь
         # снова не писал «Начать».
-        unique: list[int] = []
-        for mid in ids:
-            try:
-                value = int(mid)
-            except (TypeError, ValueError):
-                continue
-            if value and value not in unique:
-                unique.append(value)
-        if unique:
-            await self.client.delete_messages(peer, unique)
+        await self._safe_delete_messages(peer, ids)
+
+    async def _clicked_message_is_protected(self, peer_id: int, cmid: int | None) -> bool:
+        """Билет и текст «Отлично» после брони не стираем навигацией."""
+        if not cmid:
+            return False
+        protected = self._protected_chat_ids(peer_id)
+        if not protected:
+            return False
+        if clicked_ref_is_protected(protected, cmid=cmid):
+            return True
+        item = await self.client.get_message_by_cmid(peer_id, int(cmid))
+        return clicked_ref_is_protected(protected, cmid=cmid, message=item)
 
     def _callback_cmid(self, peer_id: int) -> int | None:
         value = self._peer_event_cmid.get(int(peer_id))
@@ -878,7 +992,7 @@ class VKBotApp:
         peer = int(peer_id)
         ids = self._pending_delete_ids.pop(peer, [])
         if ids:
-            await self.client.delete_messages(peer, ids)
+            await self._safe_delete_messages(peer, ids)
 
     def _remember_nav(self, peer_id: int, message_id: int | None) -> None:
         if not message_id:
@@ -960,9 +1074,17 @@ class VKBotApp:
             await self._delete_nav(peer_id)
             # Сообщение с кнопкой часто не в peer_nav_message_ids (dates-card / после рестарта).
             # Без удаления по cmid старый постер хитлото остаётся в чате над новым экраном.
+            # Карточки дат убираем; билет и «Отлично» не стираем ни с меню, ни с других экранов.
             if cmid:
-                await self.client.delete_by_cmids(peer_id, [int(cmid)])
-                self._clear_dates_card(peer_id)
+                if await self._clicked_message_is_protected(peer_id, cmid):
+                    logger.info(
+                        "Skip VK delete of ticket/confirm peer_id=%s cmid=%s",
+                        peer_id,
+                        cmid,
+                    )
+                else:
+                    await self.client.delete_by_cmids(peer_id, [int(cmid)])
+                    self._clear_dates_card(peer_id)
         clear_id: int | None = None
         # Сброс reply-клавиатуры только вне callback: иначе лишний flash-сообщение.
         if self._keyboard_is_inline(keyboard) and not cmid:
@@ -993,7 +1115,7 @@ class VKBotApp:
         if clear_id:
             try:
                 await asyncio.sleep(0.25)
-                await self.client.delete_messages(peer_id, [int(clear_id)])
+                await self._safe_delete_messages(peer_id, [int(clear_id)])
             except Exception:
                 logger.exception("Failed to delete VK reply-keyboard clear message peer_id=%s", peer_id)
         if replace_nav:
@@ -1044,7 +1166,7 @@ class VKBotApp:
         existing_id = self.peer_dates_message_ids.pop(peer, None)
         if existing_id:
             try:
-                await self.client.delete_messages(peer, [int(existing_id)])
+                await self._safe_delete_messages(peer, [int(existing_id)])
             except Exception:
                 logger.exception("Failed to delete previous dates card peer_id=%s", peer_id)
 
@@ -1354,6 +1476,20 @@ class VKBotApp:
                 community_link=self.settings.community_link,
                 conversation_message_id=cmid,
             )
+            try:
+                from bot.db.crud import get_active_booking_by_id
+
+                row = get_active_booking_by_id(int(booking_id))
+                keep_ids = []
+                for idx in (15, 16):
+                    if row and len(row) > idx and row[idx]:
+                        keep_ids.append(int(row[idx]))
+                self._remember_keep_ids(int(peer_id), *keep_ids)
+            except Exception:
+                logger.exception(
+                    "Failed to remember VK ticket message ids booking_id=%s",
+                    booking_id,
+                )
             # Успех — отменяем отложенные ретраи, если были.
             task = self._ticket_retry_tasks.pop(int(booking_id), None)
             if task and not task.done():
@@ -1561,6 +1697,7 @@ class VKBotApp:
             attachment=attachment,
         )
         await self.client.require_sent_photo(msg_id, peer_id=peer_id)
+        self._remember_keep_ids(peer_id, msg_id)
 
     async def _mb_actionable(self, peer_id: int, vk_id: int, booking_id: int):
         booking, err = vk_mb.actionable_booking(booking_id, vk_id)
@@ -1651,7 +1788,9 @@ class VKBotApp:
                 return True
             confirm_mid = booking[16] if len(booking) > 16 else None
             ticket_mid = booking[15] if len(booking) > 15 else None
-            await vk_mb.delete_ticket_message(self.client, peer_id, booking_id)
+            if ticket_mid:
+                await vk_mb.delete_ticket_message(self.client, peer_id, booking_id)
+                self._forget_keep_ids(peer_id, ticket_mid)
             from bot.db.crud import get_booking_format, clear_raffle_after_user_cancel
 
             was_raffle = (get_booking_format(booking_id) or "").strip().lower() == "rozygrysh"
@@ -1706,7 +1845,9 @@ class VKBotApp:
                 return True
             confirm_mid = booking[16] if len(booking) > 16 else None
             ticket_mid = booking[15] if len(booking) > 15 else None
-            await vk_mb.delete_ticket_message(self.client, peer_id, booking_id)
+            if ticket_mid:
+                await vk_mb.delete_ticket_message(self.client, peer_id, booking_id)
+                self._forget_keep_ids(peer_id, ticket_mid)
             update_booking_status(booking_id, "cancelled")
             await self._strip_inline_keyboard(peer_id, confirm_mid)
             if ticket_mid and ticket_mid != confirm_mid:
@@ -3144,7 +3285,7 @@ class VKBotApp:
         if not prev:
             return
         try:
-            await self.client.delete_messages(peer, [int(prev)])
+            await self._safe_delete_messages(peer, [int(prev)])
         except Exception:
             logger.exception(
                 "Failed to delete offline gift card peer_id=%s msg_id=%s",
@@ -4338,7 +4479,7 @@ class VKBotApp:
         existing_id = self.peer_carousel_message_ids.pop(peer, None)
         if existing_id:
             try:
-                await self.client.delete_messages(peer_id, [int(existing_id)])
+                await self._safe_delete_messages(peer_id, [int(existing_id)])
             except Exception:
                 logger.exception(
                     "Failed to delete old BEST carousel card peer_id=%s id=%s",

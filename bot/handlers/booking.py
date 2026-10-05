@@ -56,6 +56,9 @@ from bot.utils.nav_messages import (
     forget_booking_nav,
     delete_booking_nav,
     delete_my_bookings_messages,
+    is_protected_ticket_message,
+    remember_issued_ticket_message,
+    pop_extra_ticket_messages,
 )
 
 router = Router()
@@ -133,6 +136,9 @@ async def _delete_previous_menu_message(call: CallbackQuery):
     text = message_text(msg)
     if WELCOME_MARKER in text:
         return
+    telegram_id = call.from_user.id if call.from_user else None
+    if is_protected_ticket_message(telegram_id, msg.message_id):
+        return
     forget_booking_nav(msg.chat.id, msg.message_id)
     try:
         await reply_target(call).delete()
@@ -169,24 +175,36 @@ async def _remove_ticket_button(booking_id: int, chat_id: int):
 
 
 async def _delete_ticket(booking_id: int, chat_id: int):
-    """Удаляет сообщение с билетом из чата если оно было сохранено."""
+    """Стирает билет только при отмене брони или переносе даты, если он уже выдан."""
     booking = get_booking_by_id(booking_id)
-    if not booking:
-        return
-    # ticket_message_id — предпоследняя колонка (перед confirm_message_id)
-    ticket_message_id = booking[-2]
-    if ticket_message_id:
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=ticket_message_id)
-        except Exception:
-            # Сообщение слишком старое или уже удалено — отправляем уведомление
+    ids: set[int] = set()
+    ticket_message_id = None
+    if booking:
+        ticket_message_id = booking[-2]
+        if ticket_message_id:
             try:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text="❌ Ваш электронный билет аннулирован в связи с изменением или отменой брони.",
-                )
-            except Exception:
+                ids.add(int(ticket_message_id))
+            except (TypeError, ValueError):
                 pass
+    ids.update(pop_extra_ticket_messages(booking_id, chat_id=chat_id))
+    if not ids:
+        return
+    deleted_primary = False
+    for mid in ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=mid)
+            if ticket_message_id and mid == int(ticket_message_id):
+                deleted_primary = True
+        except Exception:
+            pass
+    if ticket_message_id and not deleted_primary:
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text="❌ Ваш электронный билет аннулирован в связи с изменением или отменой брони.",
+            )
+        except Exception:
+            pass
 
 BOOKING_RULES_TEXT = """📋 <b>Порядок посещения шоу:</b>
 
@@ -296,17 +314,20 @@ async def check_dates(call: CallbackQuery):
     kb = await check_dates_kb()
     text = "Выбирай дату 👇"
     message = reply_target(call)
-    # Быстрый путь: правим текущее сообщение (карточка «уже забронировали» — текст без фото).
-    try:
-        if getattr(call.message, "photo", None):
-            await call.message.edit_caption(caption=text, reply_markup=kb)
-        else:
-            await call.message.edit_text(text, reply_markup=kb)
-        forget_booking_nav(message.chat.id, call.message.message_id)
-        remember_booking_nav(message.chat.id, call.message.message_id)
-        return
-    except Exception:
-        pass
+    telegram_id = call.from_user.id if call.from_user else None
+    clicked_mid = call.message.message_id if call.message else None
+    # Билет не переписываем датами. Остальные карточки можно править in-place.
+    if not is_protected_ticket_message(telegram_id, clicked_mid):
+        try:
+            if getattr(call.message, "photo", None):
+                await call.message.edit_caption(caption=text, reply_markup=kb)
+            else:
+                await call.message.edit_text(text, reply_markup=kb)
+            forget_booking_nav(message.chat.id, call.message.message_id)
+            remember_booking_nav(message.chat.id, call.message.message_id)
+            return
+        except Exception:
+            pass
     await _delete_previous_menu_message(call)
     await _answer_with_check_photo(reply_target(call), text, reply_markup=kb, track_nav=True)
 
@@ -993,6 +1014,7 @@ async def get_ticket(call: CallbackQuery):
             await call.answer()
             return
         save_ticket_message_id(booking_id, ticket_msg.message_id)
+        remember_issued_ticket_message(call.from_user.id, booking_id, ticket_msg.message_id)
         if not already_confirmed:
             update_booking_status(booking_id, "confirmed")
         await _remove_ticket_button(booking_id, call.from_user.id)
