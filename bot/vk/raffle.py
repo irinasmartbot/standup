@@ -179,7 +179,7 @@ async def send_raffle_dates_message(vk_id: int) -> bool:
         return await send_vk_text(
             vk_id,
             "<b>Отлично</b>, подписка на сообщество есть 🙌\n\n"
-            "Не удалось загрузить даты. Открой ссылку розыгрыша ещё раз или напиши менеджеру.",
+            "Не удалось загрузить даты. Напиши «розыгрыш» ещё раз или напиши менеджеру.",
         )
     if not dates:
         return await send_vk_text(

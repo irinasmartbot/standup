@@ -189,7 +189,7 @@ def raffle_entry_link(settings: VKSettings) -> str:
         name = link.rsplit("/", 1)[-1]
         if name and not name.startswith("club") and name not in {"vk.com", "vk.ru"}:
             return f"https://vk.me/{name}?ref=standup_rozygr"
-    return "открой ссылку розыгрыша за репост"
+    return "напиши «розыгрыш»"
 
 
 def booking_entry_link(settings: VKSettings) -> str:
@@ -280,11 +280,11 @@ WELCOME_TEXT = (
     "🎟 Забронировать места на <b>бесплатные шоу</b>\n"
     "⭐ Купить билеты на <b>StandUp BEST</b> и <b>Хитлото</b>"
 )
-# Вечернее окно шоу (МСК): «Начать» → офлайн-розыгрыш подарка на шоу.
+# Вечернее окно шоу (МСК): «Начать» и слово «подарок» → розыгрыш подарка на шоу.
 _EVENING_GIFT_HINT_HOUR_START = 19
 _EVENING_GIFT_HINT_HOUR_END = 22  # exclusive
 EVENING_GIFT_HINT_TEXT = (
-    "Если вы хотели участвовать в розыгрыше подарка на шоу, напишите слово <b>розыгрыш</b>"
+    "С 19:00 до 22:00 «Начать» открывает розыгрыш подарка на шоу."
 )
 
 
@@ -497,7 +497,7 @@ def main_menu_keyboard(
     # В паре с каналом длинная подпись снова обрежется — короче только в этом случае.
     manager_label = "Менеджеру" if show_my_bookings else "Задать вопрос менеджеру"
     kb.button(manager_label, _payload("manager"))
-    # Онлайн-розыгрыш за репост — только по ссылке, не словом.
+    # Онлайн-розыгрыш за репост — слово «розыгрыш» или ссылка raffle.
     if show_my_bookings:
         if show_rules:
             # 1,1,1,1,2,2 — канал|менеджер рядом из‑за лимита 6 рядов
@@ -2588,9 +2588,8 @@ class VKBotApp:
                 "вернуться в меню 🔄": "main_menu",
                 "меню": "main_menu",
                 "мои брони": "my_bookings",
-                "розыгрыш": "offline_gift",
-                "участвовать в розыгрыше": "offline_gift",
-                "подарок": "offline_gift",
+                "розыгрыш": "raffle",
+                "участвовать в розыгрыше": "raffle",
                 # chek_list / check_list — только TG-чек-лист админа, не VK-клиент.
                 # Старые текстовые кнопки Salebot → наши сценарии
                 "отменить бронь": "my_bookings",
@@ -2601,6 +2600,10 @@ class VKBotApp:
                 "посмотреть анонсы": "channel",
             }
             cmd = text_commands.get(text_key)
+            # Слово «подарок»: подарок на шоу только с 19:00 до 22:00.
+            # В другое время подарок на шоу — только ссылка offline_gift.
+            if not cmd and text_key == "подарок" and in_evening_offline_gift_window():
+                cmd = "offline_gift"
             if not cmd and text_key in {
                 "📅 выбрать по дате",
                 "выбрать по дате",
@@ -2704,23 +2707,8 @@ class VKBotApp:
                 source,
             )
         is_gift_deeplink = _is_offline_gift_ref(ref) and is_start_entry and not cmd
-        # Липкий gift-ref сам по себе не решает сценарий: обычное «Начать»
-        # ниже ведём по текущему вечернему окну.
-        typed_start = text_key in {"/start", "start", "начать", "старт"}
-        if is_gift_deeplink and typed_start:
-            logger.info(
-                "Ignore typed start with offline_gift ref vk_id=%s ref=%r",
-                vk_id,
-                ref,
-            )
-            is_gift_deeplink = False
-        elif is_gift_deeplink and not in_evening_offline_gift_window():
-            logger.info(
-                "Ignore offline_gift deeplink outside 19–22 MSK vk_id=%s ref=%r",
-                vk_id,
-                ref,
-            )
-            is_gift_deeplink = False
+        # Ссылка offline_gift работает всегда, и днём тоже.
+        # Обычное «Начать» без этой ссылки: 19–22 → подарок на шоу, иначе меню.
         if cmd == "offline_gift" or is_gift_deeplink:
             self._track(
                 vk_id,
@@ -3962,15 +3950,6 @@ class VKBotApp:
 
     async def _send_raffle_start(self, peer_id: int, vk_id: int) -> None:
         from bot.vk.entry_dedupe import claim_flow_send, clear_flow_send
-
-        # Пока вечером ссылка / mini app raffle тоже ведут в подарок на шоу.
-        if in_evening_offline_gift_window():
-            logger.info(
-                "Evening window: raffle start → offline gift vk_id=%s",
-                vk_id,
-            )
-            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
-            return
 
         if not claim_flow_send(int(vk_id), "raffle"):
             logger.info("Skip duplicate VK raffle start vk_id=%s", vk_id)

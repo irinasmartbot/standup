@@ -539,14 +539,32 @@ def test_vk_platka_flow():
     print("vk platka flow: OK")
 
 
-def test_vk_word_rozygrysh_opens_show_gift():
+def test_vk_raffle_vs_show_gift_routing():
+    from datetime import datetime
     from pathlib import Path
+    from zoneinfo import ZoneInfo
 
-    src = Path("bot/vk/app.py").read_text(encoding="utf-8")
-    assert '"розыгрыш": "offline_gift"' in src
-    assert '"участвовать в розыгрыше": "offline_gift"' in src
-    assert "Evening window: raffle start → offline gift" in src
-    print("vk word розыгрыш opens show gift: OK")
+    from bot.vk.app import in_evening_offline_gift_window
+
+    msk = ZoneInfo("Europe/Moscow")
+    assert in_evening_offline_gift_window(datetime(2026, 10, 5, 19, 0, tzinfo=msk))
+    assert in_evening_offline_gift_window(datetime(2026, 10, 5, 21, 59, tzinfo=msk))
+    assert not in_evening_offline_gift_window(datetime(2026, 10, 5, 22, 0, tzinfo=msk))
+    assert not in_evening_offline_gift_window(datetime(2026, 10, 5, 18, 59, tzinfo=msk))
+
+    app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert '"розыгрыш": "raffle"' in app_src
+    assert '"участвовать в розыгрыше": "raffle"' in app_src
+    assert '"розыгрыш": "offline_gift"' not in app_src
+    assert "Evening window: raffle start → offline gift" not in app_src
+    assert "Ignore offline_gift deeplink outside" not in app_src
+    assert 'text_key == "подарок" and in_evening_offline_gift_window()' in app_src
+    assert "is_start_text and in_evening_offline_gift_window()" in app_src
+
+    entry_src = Path("bot/admin/vk_entry.py").read_text(encoding="utf-8")
+    assert "mini-app raffle → offline gift" not in entry_src
+    assert "flow_key == \"raffle\" and in_evening_offline_gift_window()" not in entry_src
+    print("vk raffle vs show gift routing: OK")
 
 
 def test_vk_raffle_screenshot_avoids_tg_handler_import():
@@ -602,7 +620,7 @@ async def main():
     test_vk_main_menu_keeps_ticket_message()
     test_tg_keeps_ticket_message()
     test_vk_platka_flow()
-    test_vk_word_rozygrysh_opens_show_gift()
+    test_vk_raffle_vs_show_gift_routing()
     test_vk_raffle_screenshot_avoids_tg_handler_import()
     test_vk_same_day_warning_import()
     test_vk_dispatch_ensures_user_name()
