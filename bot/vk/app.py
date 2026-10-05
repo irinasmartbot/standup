@@ -881,12 +881,26 @@ class VKBotApp:
         keyboard: str | None = None,
         attachment: str | None = None,
         replace_nav: bool = True,
+        force_new: bool = False,
     ) -> int | None:
         cmid = self._callback_cmid(peer_id) if replace_nav else None
+        peer = int(peer_id)
+        # Карточка дат с фото (в т.ч. от mini app) не становится меню через edit:
+        # VK оставляет постер, кнопки часто не меняются.
+        from_dates_photo = bool(
+            self.peer_dates_attachments.get(peer) or self.peer_dates_message_ids.get(peer)
+        )
         # Callback-кнопка: правим то же сообщение, без delete+send (иначе мигает «два экрана»).
-        # Важно: edit БЕЗ attachment во VK снимает фото — годится только для текстовых экранов.
+        # Edit без attachment НЕ снимает фото — годится только для текстовых экранов.
         # С новым attachment in-place edit часто оставляет СТАРОЕ фото (hitloto на BEST).
-        if replace_nav and cmid and self._keyboard_is_inline(keyboard) and not attachment:
+        if (
+            replace_nav
+            and cmid
+            and self._keyboard_is_inline(keyboard)
+            and not attachment
+            and not force_new
+            and not from_dates_photo
+        ):
             ok = await self.client.edit_message(
                 peer_id,
                 text,
@@ -1028,8 +1042,8 @@ class VKBotApp:
         self._clear_raffle_screenshot_wait(int(user_id))
         self.peer_carousel_message_ids.pop(int(peer_id), None)
         self.peer_my_bookings_message_ids.pop(int(peer_id), None)
-        self._clear_dates_card(peer_id)
         self.peer_venues_message_ids.pop(int(peer_id), None)
+        self.peer_residents_from_deeplink.pop(int(peer_id), None)
         if is_start:
             self._track(user_id, EVENT_BOT_START)
         else:
@@ -1042,7 +1056,9 @@ class VKBotApp:
             text,
             keyboard=self._main_menu_kb(user_id),
             replace_nav=replace_nav,
+            force_new=True,
         )
+        self._clear_dates_card(peer_id)
 
     async def _leave_offline_gift_to_menu(self, peer_id: int, vk_id: int) -> None:
         """Подтверждение участия оставляем в чате; меню — отдельным сообщением."""
