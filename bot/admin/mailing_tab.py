@@ -288,8 +288,14 @@ def render_mailing_tab(
             "</section>"
         )
 
-    templates = list_mailing_templates()
-    shows = list_mailing_best_shows()
+    try:
+        templates = list_mailing_templates()
+    except Exception:
+        templates = []
+    try:
+        shows = list_mailing_best_shows()
+    except Exception:
+        shows = []
     try:
         residents_shows = list_mailing_residents_shows()
     except Exception:

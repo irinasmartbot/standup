@@ -3839,17 +3839,27 @@ def _content(
             can_resend_tickets=can_resend_tickets,
         )
     if tab == "mailing":
-        from bot.admin.mailing_tab import render_mailing_tab
-
         data = mailing_data or {}
-        return render_mailing_tab(
-            flash=events_flash or data.get("flash") or "",
-            error=data.get("error") or "",
-            can_send=can_resend_tickets,
-            campaigns=data.get("campaigns"),
-            detail=data.get("detail"),
-            recipients=data.get("recipients"),
-        )
+        try:
+            from bot.admin.mailing_tab import render_mailing_tab
+
+            return render_mailing_tab(
+                flash=events_flash or data.get("flash") or "",
+                error=data.get("error") or "",
+                can_send=can_resend_tickets,
+                campaigns=data.get("campaigns"),
+                detail=data.get("detail"),
+                recipients=data.get("recipients"),
+            )
+        except Exception as exc:
+            logger.exception("render_mailing_tab failed")
+            err = html.escape(f"{type(exc).__name__}: {exc}")[:500]
+            return (
+                '<section class="card">'
+                "<h2>Рассылка</h2>"
+                f'<p class="events-error">Не удалось открыть вкладку: {err}</p>'
+                "</section>"
+            )
     if tab == "audit":
         db_data = db_data or {"audit": []}
         return _audit_tab(db_data.get("audit") or [])
@@ -5159,6 +5169,9 @@ async def admin_page(request: web.Request) -> web.Response:
                 events_flash += f" ({err[:200]})"
         else:
             events_flash = ""
+    elif filters.get("tab") == "mailing":
+        # Рассылка не показывает брони — не грузим всю афишу/брони (иначе легко 500/таймаут).
+        dashboard = empty_dashboard
     elif filters.get("tab") == "users":
         def _load_users_directory():
             page_data = fetch_users_page(
@@ -5343,26 +5356,35 @@ async def admin_page(request: web.Request) -> web.Response:
                     }
 
                 user_extras = await loop.run_in_executor(None, _load_user_extras)
-    mailing_data = None
+        mailing_data = None
     if filters.get("tab") == "mailing" and can_resend:
         from bot.db.mailing import get_campaign, list_campaigns, list_recipients
 
         def _load_mailing():
-            campaigns = list_campaigns(40)
+            try:
+                campaigns = list_campaigns(40)
+            except Exception:
+                logger.exception("list_campaigns failed for mailing tab")
+                campaigns = []
             detail = None
             recipients = None
             cid_raw = (request.query.get("campaign") or "").strip()
             if cid_raw.isdigit():
-                detail = get_campaign(int(cid_raw))
-                if detail:
-                    rstatus = (request.query.get("rstatus") or "").strip()
-                    rpage = (request.query.get("rpage") or "1").strip()
-                    recipients = list_recipients(
-                        int(cid_raw),
-                        status=rstatus,
-                        page=int(rpage) if rpage.isdigit() else 1,
-                    )
-                    recipients["filter_status"] = rstatus
+                try:
+                    detail = get_campaign(int(cid_raw))
+                    if detail:
+                        rstatus = (request.query.get("rstatus") or "").strip()
+                        rpage = (request.query.get("rpage") or "1").strip()
+                        recipients = list_recipients(
+                            int(cid_raw),
+                            status=rstatus,
+                            page=int(rpage) if rpage.isdigit() else 1,
+                        )
+                        recipients["filter_status"] = rstatus
+                except Exception:
+                    logger.exception("mailing campaign detail failed cid=%s", cid_raw)
+                    detail = None
+                    recipients = None
             return {
                 "campaigns": campaigns,
                 "detail": detail,
