@@ -468,6 +468,28 @@ def test_tg_keeps_ticket_message():
     print("tg keep ticket except cancel/date change: OK")
 
 
+def test_vk_platka_flow():
+    from pathlib import Path
+
+    from bot.admin.vk_entry import FLOWS, MINI_APP_DIRECT_FLOWS
+
+    assert "platka" in FLOWS
+    assert FLOWS["platka"]["ref"] == "standup_platka"
+    assert "platka" in MINI_APP_DIRECT_FLOWS
+
+    entry_src = Path("bot/admin/vk_entry.py").read_text(encoding="utf-8")
+    assert 'if flow_key == "platka"' in entry_src
+    assert "landing_platka" in entry_src
+    assert 'platka: "platka"' in entry_src
+    assert 'add_get("/vk/platka"' in entry_src
+
+    app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert "_is_platka_ref" in app_src
+    assert 'cmd == "platka"' in app_src
+    assert "paid_formats_keyboard()" in app_src
+    print("vk platka flow: OK")
+
+
 def test_vk_same_day_warning_import():
     from pathlib import Path
 
@@ -501,6 +523,7 @@ async def main():
     test_vk_residents_deeplink_back_button()
     test_vk_main_menu_keeps_ticket_message()
     test_tg_keeps_ticket_message()
+    test_vk_platka_flow()
     test_vk_same_day_warning_import()
     test_vk_dispatch_ensures_user_name()
     events = await load_events()

@@ -7,7 +7,7 @@
 2) сразу шлём нужную ветку бота в личку
 3) пробуем открыть приложение VK (не сайт vk.com)
 
-GET  /vk/booking | /vk/raffle | /vk/offline-gift
+GET  /vk/booking | /vk/residents | /vk/platka | /vk/raffle | /vk/offline-gift
 POST /vk/entry
 """
 
@@ -61,12 +61,19 @@ FLOWS: dict[str, dict[str, Any]] = {
         "lead": "Разрешите сообщения — пришлём даты сольников от резидентов в личку VK.",
         "ref": "standup_residents",
     },
+    "platka": {
+        "title": "Купить билет",
+        "headline": "Купить билет",
+        "button": "Купить билет",
+        "lead": "Разрешите сообщения — пришлём платные форматы BEST и Хитлото в личку VK.",
+        "ref": "standup_platka",
+    },
 }
 
 # После модерации снова показываем все входные сценарии mini app.
 MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking", "raffle", "offline_gift")
 # Прямые ссылки с сайта, без кнопки в общем меню mini app.
-MINI_APP_DIRECT_FLOWS: tuple[str, ...] = ("residents",)
+MINI_APP_DIRECT_FLOWS: tuple[str, ...] = ("residents", "platka")
 EXPIRED_DIRECT_FLOWS: frozenset[str] = frozenset(
     {
         "booking_resident",
@@ -544,6 +551,23 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
         )
         return
 
+    if flow_key == "platka":
+        from bot.db.analytics import EVENT_CMD_BUY_TICKET
+        from bot.vk.app import BUY_TICKET_TEXT, paid_formats_keyboard
+
+        track_event(
+            EVENT_CMD_BUY_TICKET,
+            vk_id=int(vk_id),
+            channel="vkontakte",
+            props={"via": "mini_app_flow"},
+        )
+        await client.send_message(
+            vk_id,
+            BUY_TICKET_TEXT,
+            keyboard=paid_formats_keyboard(),
+        )
+        return
+
     if flow_key == "residents":
         from datetime import datetime
 
@@ -842,6 +866,17 @@ async def landing_booking(request: web.Request) -> web.Response:
     settings = load_vk_settings()
     target = _mini_app_vk_url(settings, "booking", short=True, cid=cid, source=source)
     return _html_response(_mobile_vk_jump_html("booking", target))
+
+
+async def landing_platka(request: web.Request) -> web.Response:
+    """Прямая ссылка на покупку платных билетов: mini app #flow=platka."""
+    cid = _request_cid(request)
+    source = _request_source(request)
+    settings = load_vk_settings()
+    target = _mini_app_vk_url(
+        settings, "platka", short=True, with_group=True, cid=cid, source=source
+    )
+    return _html_response(_mobile_vk_jump_html("platka", target))
 
 
 async def landing_raffle(request: web.Request) -> web.Response:
@@ -1169,7 +1204,12 @@ def _mini_app_html(default_flow: str = "") -> str:
     gift: "offline_gift",
     offline_gift: "offline_gift",
     residents: "residents",
-    standup_residents: "residents"
+    standup_residents: "residents",
+    platka: "platka",
+    paid: "platka",
+    buy: "platka",
+    buy_ticket: "platka",
+    standup_platka: "platka"
   }};
   var EXPIRED_FLOWS = {{
     booking_resident: true,
@@ -1740,7 +1780,7 @@ def _mini_app_html(default_flow: str = "") -> str:
   // Не стартуем сразу из server handoff для обычных кнопок меню:
   // в VK hash часто приходит чуть позже через GetLaunchParams,
   // иначе все ссылки уезжают в booking.
-  // Для DIRECT flows (residents) handoff можно взять сразу — иначе при потере
+  // Для DIRECT flows (residents, platka) handoff можно взять сразу — иначе при потере
   // hash на ПК мелькает/залипает общее меню.
   var earlyFlow = flowFromLocation();
   if (!earlyFlow && serverFlow && directFlows.indexOf(serverFlow) !== -1) {{
@@ -2121,6 +2161,7 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/vk-mini/start/{flow}", mini_app_start)
     app.router.add_get("/vk-mini", mini_app_page)
     app.router.add_get("/vk/booking", landing_booking)
+    app.router.add_get("/vk/platka", landing_platka)
     app.router.add_get("/vk/residents", landing_residents)
     app.router.add_get("/vk/raffle", landing_raffle)
     app.router.add_get("/vk/offline-gift", landing_offline_gift)

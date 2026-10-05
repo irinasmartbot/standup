@@ -86,6 +86,7 @@ VK_CHANNEL = "vkontakte"
 _RAFFLE_REF_VALUES = frozenset({"standup_rozygr", "rozygrysh", "raffle", "розыгрыш"})
 _BOOKING_REF_VALUES = frozenset({"standup_book", "booking", "book", "бронь", "proverka"})
 _RESIDENTS_REF_VALUES = frozenset({"standup_residents", "residents", "rezidenty"})
+_PLATKA_REF_VALUES = frozenset({"standup_platka", "platka", "paid", "buy_ticket"})
 _EXPIRED_SHOW_REF_VALUES = frozenset({
     "standup_booking_resident",
     "booking_resident",
@@ -117,6 +118,10 @@ def _is_expired_show_ref(ref: str) -> bool:
 
 def _is_residents_ref(ref: str) -> bool:
     return (ref or "").strip().casefold() in _RESIDENTS_REF_VALUES
+
+
+def _is_platka_ref(ref: str) -> bool:
+    return (ref or "").strip().casefold() in _PLATKA_REF_VALUES
 
 
 def _is_booking_ref(ref: str) -> bool:
@@ -2700,6 +2705,18 @@ class VKBotApp:
                 vk_id=vk_id,
                 from_deep_link=bool(is_residents_deeplink or (cmd == "residents" and is_start_entry)),
             )
+            return
+
+        is_platka_deeplink = _is_platka_ref(ref) and is_start_entry and not cmd
+        if cmd == "platka" or is_platka_deeplink:
+            if is_platka_deeplink:
+                self._track(
+                    vk_id,
+                    EVENT_BOT_START,
+                    props=_entry_props(raw_ref, fallback_payload="platka", source=source),
+                )
+            self._track(vk_id, EVENT_CMD_BUY_TICKET, props={"via": "deeplink"})
+            await self._send_text(peer_id, BUY_TICKET_TEXT, keyboard=paid_formats_keyboard())
             return
 
         is_booking_deeplink = _is_booking_ref(ref) and is_start_entry and not cmd

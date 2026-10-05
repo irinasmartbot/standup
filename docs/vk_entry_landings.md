@@ -7,6 +7,7 @@
 ```text
 https://go.moscowstandupshow.ru/vk/booking
 https://go.moscowstandupshow.ru/vk/residents
+https://go.moscowstandupshow.ru/vk/platka
 https://go.moscowstandupshow.ru/vk/raffle
 https://go.moscowstandupshow.ru/vk/offline-gift
 ```
@@ -28,6 +29,7 @@ Mini App (канонические ссылки — внутри VK):
 ```text
 https://vk.com/app54704296_-225298932#flow=booking
 https://vk.ru/app54704296#flow=residents
+https://vk.ru/app54704296_-225298932#flow=platka
 https://vk.com/app54704296_-225298932#flow=raffle
 https://vk.com/app54704296_-225298932#flow=offline_gift
 ```
@@ -50,6 +52,7 @@ https://go.moscowstandupshow.ru/vk-mini
 ```text
 https://go.moscowstandupshow.ru/vk-mini/start/booking
 https://go.moscowstandupshow.ru/vk-mini/start/residents
+https://go.moscowstandupshow.ru/vk-mini/start/platka
 https://go.moscowstandupshow.ru/vk-mini/start/raffle
 https://go.moscowstandupshow.ru/vk-mini/start/offline_gift
 ```
@@ -59,7 +62,7 @@ https://go.moscowstandupshow.ru/vk-mini/start/offline_gift
 1. Страница грузит OpenAPI-виджет «Разрешить сообщения от сообщества».
 2. Пользователь жмёт «Разрешить» → страница получает `vk_id`.
 3. Сразу `POST /vk/entry` → сообщество пишет в личку кнопку нужной ветки.
-4. VK-бот обрабатывает `cmd` (`book` / `raffle` / `offline_gift`).
+4. VK-бот обрабатывает `cmd` (`book` / `platka` / `raffle` / `offline_gift`).
 
 Писать «начать» не нужно.
 
@@ -97,6 +100,15 @@ https://go.moscowstandupshow.ru/vk/residents
 https://t.me/StandUp_Show_bot?start=residents
 https://vk.ru/app54704296#flow=residents
 ```
+
+Платная покупка (BEST / Хитлото) — `#flow=platka`:
+
+```text
+https://vk.ru/app54704296_-225298932#flow=platka
+https://go.moscowstandupshow.ru/vk/platka
+```
+
+Открывает в личке экран «Выбирай формат шоу» с кнопками STANDUP BEST, Хитлото и «В главное меню».
 
 ## Тест передачи источника в VK-бот
 
