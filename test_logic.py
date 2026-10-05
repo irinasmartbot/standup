@@ -564,6 +564,15 @@ def test_vk_raffle_vs_show_gift_routing():
     entry_src = Path("bot/admin/vk_entry.py").read_text(encoding="utf-8")
     assert "mini-app raffle → offline gift" not in entry_src
     assert "flow_key == \"raffle\" and in_evening_offline_gift_window()" not in entry_src
+    assert "giftSession && flow === \"raffle\"" in entry_src
+    assert "_remember_mini_flow(request, \"offline_gift\")" in entry_src
+
+    from bot.admin.vk_entry import remap_raffle_button_in_gift_session
+
+    assert remap_raffle_button_in_gift_session("raffle", "#flow=offline_gift") == "offline_gift"
+    assert remap_raffle_button_in_gift_session("raffle", "offline_gift") == "offline_gift"
+    assert remap_raffle_button_in_gift_session("raffle", "#flow=raffle") == "raffle"
+    assert remap_raffle_button_in_gift_session("booking", "#flow=offline_gift") == "booking"
     print("vk raffle vs show gift routing: OK")
 
 

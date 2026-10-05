@@ -88,6 +88,24 @@ _ENTRY_COOLDOWN_SEC = 45.0
 _MINI_FLOW_HANDOFF_TTL_SEC = 300.0
 _last_entry: dict[tuple[int, str], float] = {}
 _mini_flow_handoff: dict[str, tuple[str, float]] = {}
+_FLOW_ALIASES: dict[str, str] = {
+    "book": "booking",
+    "booking": "booking",
+    "standup_book": "booking",
+    "raffle": "raffle",
+    "rozygr": "raffle",
+    "rozygrysh": "raffle",
+    "standup_rozygr": "raffle",
+    "gift": "offline_gift",
+    "offline_gift": "offline_gift",
+    "residents": "residents",
+    "standup_residents": "residents",
+    "platka": "platka",
+    "paid": "platka",
+    "buy": "platka",
+    "buy_ticket": "platka",
+    "standup_platka": "platka",
+}
 
 
 def _env_app_id() -> str:
@@ -117,6 +135,36 @@ def _remember_mini_flow(request: web.Request, flow_key: str) -> None:
     for key, (_, ts) in list(_mini_flow_handoff.items()):
         if ts < cutoff:
             _mini_flow_handoff.pop(key, None)
+
+
+def parse_mini_app_flow(value: str) -> str:
+    """Достаёт ключ сценария из hash / start_param / сырого flow."""
+    raw = (value or "").strip().lstrip("#").lstrip("?")
+    if not raw:
+        return ""
+    first = raw.split("&", 1)[0].strip()
+    key = first if "=" not in first else ""
+    if not key:
+        params = dict(parse_qsl(raw, keep_blank_values=True))
+        key = str(
+            params.get("flow")
+            or params.get("start")
+            or params.get("start_param")
+            or ""
+        ).strip()
+    aliased = _FLOW_ALIASES.get(key, key)
+    return aliased if aliased in FLOWS else ""
+
+
+def remap_raffle_button_in_gift_session(posted_flow: str, *hints: str) -> str:
+    """Вход по offline_gift: кнопка raffle / «за репост» всё равно подарок на шоу."""
+    posted = (posted_flow or "").strip()
+    if posted != "raffle":
+        return posted
+    for hint in hints:
+        if parse_mini_app_flow(str(hint or "")) == "offline_gift":
+            return "offline_gift"
+    return "raffle"
 
 
 def _mini_flow_from_handoff(request: web.Request) -> str:
@@ -896,6 +944,7 @@ async def landing_offline_gift(request: web.Request) -> web.Response:
     cid = _request_cid(request)
     source = _request_source(request)
     settings = load_vk_settings()
+    _remember_mini_flow(request, "offline_gift")
     target = _mini_app_vk_url(settings, "offline_gift", short=True, cid=cid, source=source)
     return _html_response(_mobile_vk_jump_html("offline_gift", target))
 
@@ -1073,6 +1122,7 @@ def _mini_app_html(default_flow: str = "") -> str:
   var flowLabels = {json.dumps(flow_labels, ensure_ascii=False)};
   var directFlows = {json.dumps(list(MINI_APP_DIRECT_FLOWS))};
   var currentFlow = null;
+  var giftSession = false;
   var sending = false;
   var autoStarted = false;
   var expiredShown = false;
@@ -1672,8 +1722,19 @@ def _mini_app_html(default_flow: str = "") -> str:
   var pendingStartTimer = null;
   var entrySent = false;
 
+  function markGiftSession(flow) {{
+    if (flow === "offline_gift") giftSession = true;
+  }}
+
+  function resolveStartFlow(flow) {{
+    markGiftSession(flow);
+    if (giftSession && flow === "raffle") return "offline_gift";
+    return flow;
+  }}
+
   function start(flow, opts) {{
     opts = opts || {{}};
+    flow = resolveStartFlow(flow);
     if (sending || entrySent) return;
     if (!setFlow(flow, true)) {{
       setStatus("Неизвестный сценарий.", false);
@@ -1689,6 +1750,7 @@ def _mini_app_html(default_flow: str = "") -> str:
   }}
 
   function autoStart(flow) {{
+    flow = resolveStartFlow(flow);
     if (!flow || entrySent || sending) return;
     if (!flowLabels[flow]) return;
     // До отправки можно поправить flow, если hash/launch params пришли позже handoff.
@@ -1788,9 +1850,14 @@ def _mini_app_html(default_flow: str = "") -> str:
   // Для DIRECT flows (residents, platka) handoff можно взять сразу — иначе при потере
   // hash на ПК мелькает/залипает общее меню.
   var earlyFlow = flowFromLocation();
-  if (!earlyFlow && serverFlow && directFlows.indexOf(serverFlow) !== -1) {{
+  if (
+    !earlyFlow &&
+    serverFlow &&
+    (directFlows.indexOf(serverFlow) !== -1 || serverFlow === "offline_gift")
+  ) {{
     earlyFlow = parseFlowValue(serverFlow);
   }}
+  markGiftSession(earlyFlow || parseFlowValue(serverFlow));
   detectedCid = cidFromLocation();
   detectedSource = sourceFromLocation();
   if (expiredFromLocation()) {{
@@ -2101,6 +2168,20 @@ async def mini_entry_post(request: web.Request) -> web.Response:
     cid = str((data or {}).get("cid") or "").strip()
     source = str((data or {}).get("source") or "").strip()
     raw_hash = str((data or {}).get("hash") or "").strip()
+    original_flow = flow_key
+    flow_key = remap_raffle_button_in_gift_session(
+        flow_key,
+        raw_hash,
+        params.get("hash") or "",
+        params.get("vk_hash") or "",
+        params.get("start_param") or "",
+    )
+    if flow_key != original_flow:
+        logger.info(
+            "gift session: raffle button → offline_gift vk_id=%s hash=%s",
+            vk_id,
+            raw_hash or "-",
+        )
     logger.info(
         "VK mini entry request vk_id=%s flow=%s cid=%s source=%s hash=%s",
         vk_id,
