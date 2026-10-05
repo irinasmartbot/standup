@@ -882,7 +882,6 @@ async def back_to_menu(call: CallbackQuery, state: FSMContext):
         return
     await state.clear()
     track_event(EVENT_CMD_MAIN_MENU, telegram_id=call.from_user.id, props={"via": "callback"})
-    await _delete_previous_menu_message(call)
     await _send_welcome(call.message)
     await call.answer()
 

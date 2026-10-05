@@ -479,14 +479,25 @@ def test_vk_main_menu_keeps_ticket_message():
 
     src = Path("bot/vk/app.py").read_text(encoding="utf-8")
     assert "message_is_issued_ticket" in src
-    assert "return bool(protected)" in src
-    assert "_safe_delete_messages" in src
+    assert "_keyboard_is_main_menu" in src
+    menu_fn = src.find("async def send_menu")
+    menu_chunk = src[menu_fn : src.find("async def _leave_offline_gift")]
+    assert "replace_nav=False" in menu_chunk
+    assert "replace_nav=True" not in menu_chunk
+    send_fn = src.find("async def _send_text")
+    send_chunk = src[send_fn : src.find("def _remember_dates_attachment")]
+    assert "if _keyboard_is_main_menu(keyboard):" in send_chunk
+    assert "replace_nav = False" in send_chunk
     assert src.count("delete_ticket_message") == 2
     assert "if ticket_mid:" in src
     booking_src = Path("bot/handlers/booking.py").read_text(encoding="utf-8")
     assert booking_src.count("await _delete_ticket(") == 2
     raffle_src = Path("bot/handlers/rozygrysh.py").read_text(encoding="utf-8")
     assert "delete_ticket=True" in raffle_src
+    start_src = Path("bot/handlers/start.py").read_text(encoding="utf-8")
+    mm = start_src.find('F.data == "main_menu"')
+    mm_chunk = start_src[mm : mm + 450]
+    assert "_delete_previous_menu_message" not in mm_chunk
     print("vk/tg keep ticket except cancel/date change: OK")
 
 

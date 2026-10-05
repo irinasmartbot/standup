@@ -360,6 +360,12 @@ _TICKET_KEEP_CMDS = frozenset(
 )
 
 
+def _keyboard_is_main_menu(keyboard: Any) -> bool:
+    """Клавиатура главного меню VK — её вывод ничего не удаляет."""
+    cmds = _keyboard_cmds(keyboard)
+    return "book" in cmds and "buy_ticket" in cmds
+
+
 def _keyboard_cmds(keyboard: Any) -> set[str]:
     if isinstance(keyboard, str):
         try:
@@ -1110,6 +1116,9 @@ class VKBotApp:
         replace_nav: bool = True,
         force_new: bool = False,
     ) -> int | None:
+        if _keyboard_is_main_menu(keyboard):
+            replace_nav = False
+            force_new = True
         cmid = self._callback_cmid(peer_id) if replace_nav else None
         peer = int(peer_id)
         # Карточка дат с фото (в т.ч. от mini app) не становится меню через edit:
@@ -1268,7 +1277,7 @@ class VKBotApp:
         *,
         vk_id: int | None = None,
         is_start: bool = False,
-        replace_nav: bool = True,
+        replace_nav: bool = False,
     ) -> None:
         user_id = vk_id or peer_id
         await self._ensure_user(user_id)
@@ -1286,11 +1295,12 @@ class VKBotApp:
         text = WELCOME_TEXT
         if is_start and in_evening_offline_gift_window():
             text = f"{WELCOME_TEXT}\n\n{EVENING_GIFT_HINT_TEXT}"
+        del replace_nav  # главное меню никогда не удаляет предыдущие сообщения
         await self._send_text(
             peer_id,
             text,
             keyboard=self._main_menu_kb(user_id),
-            replace_nav=replace_nav,
+            replace_nav=False,
             force_new=True,
         )
         self._clear_dates_card(peer_id)
