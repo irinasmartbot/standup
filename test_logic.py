@@ -545,7 +545,7 @@ def test_vk_word_rozygrysh_opens_show_gift():
     src = Path("bot/vk/app.py").read_text(encoding="utf-8")
     assert '"розыгрыш": "offline_gift"' in src
     assert '"участвовать в розыгрыше": "offline_gift"' in src
-    assert "Evening window: raffle start → offline gift" not in src
+    assert "Evening window: raffle start → offline gift" in src
     print("vk word розыгрыш opens show gift: OK")
 
 

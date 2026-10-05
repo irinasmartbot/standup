@@ -3963,7 +3963,15 @@ class VKBotApp:
     async def _send_raffle_start(self, peer_id: int, vk_id: int) -> None:
         from bot.vk.entry_dedupe import claim_flow_send, clear_flow_send
 
-        # Слово «розыгрыш» ведёт в подарок на шоу; сюда попадаем только по ссылке / mini app.
+        # Пока вечером ссылка / mini app raffle тоже ведут в подарок на шоу.
+        if in_evening_offline_gift_window():
+            logger.info(
+                "Evening window: raffle start → offline gift vk_id=%s",
+                vk_id,
+            )
+            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
+            return
+
         if not claim_flow_send(int(vk_id), "raffle"):
             logger.info("Skip duplicate VK raffle start vk_id=%s", vk_id)
             return
