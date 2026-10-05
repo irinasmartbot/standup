@@ -553,7 +553,7 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
 
     if flow_key == "platka":
         from bot.db.analytics import EVENT_CMD_BUY_TICKET
-        from bot.vk.app import BUY_TICKET_TEXT, paid_formats_keyboard
+        from bot.handlers.formats import BUY_TICKET_TEXT
 
         track_event(
             EVENT_CMD_BUY_TICKET,
@@ -561,10 +561,15 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
             channel="vkontakte",
             props={"via": "mini_app_flow"},
         )
+        kb = VKKeyboardBuilder(inline=True)
+        kb.button("STANDUP BEST", {"cmd": "best"}, color="primary")
+        kb.button("Хитлото", {"cmd": "hitloto"}, color="primary")
+        kb.button("В главное меню", {"cmd": "main_menu"})
+        kb.adjust(1)
         await client.send_message(
             vk_id,
             BUY_TICKET_TEXT,
-            keyboard=paid_formats_keyboard(),
+            keyboard=kb.as_json(),
         )
         return
 
@@ -869,12 +874,21 @@ async def landing_booking(request: web.Request) -> web.Response:
 
 
 async def landing_platka(request: web.Request) -> web.Response:
-    """Прямая ссылка на покупку платных билетов: mini app #flow=platka."""
+    """Платные билеты: ПК → короткая #flow=platka, телефон → write- в диалог.
+
+    Ссылка с `_-group` на ПК часто теряет hash — открывается общее меню mini app.
+    """
+    from bot.vk.app import platka_entry_link
+
     cid = _request_cid(request)
     source = _request_source(request)
     settings = load_vk_settings()
+    if _is_mobile_request(request):
+        target = platka_entry_link(settings)
+        return _html_response(_mobile_vk_jump_html("platka", target))
+    _remember_mini_flow(request, "platka")
     target = _mini_app_vk_url(
-        settings, "platka", short=True, with_group=True, cid=cid, source=source
+        settings, "platka", short=True, cid=cid, source=source
     )
     return _html_response(_mobile_vk_jump_html("platka", target))
 

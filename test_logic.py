@@ -481,6 +481,7 @@ def test_vk_platka_flow():
     assert 'if flow_key == "platka"' in entry_src
     assert "landing_platka" in entry_src
     assert 'platka: "platka"' in entry_src
+    assert "platka_entry_link" in Path("bot/vk/app.py").read_text(encoding="utf-8")
     assert 'add_get("/vk/platka"' in entry_src
 
     app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")

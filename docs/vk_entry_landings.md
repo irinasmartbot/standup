@@ -29,7 +29,7 @@ Mini App (канонические ссылки — внутри VK):
 ```text
 https://vk.com/app54704296_-225298932#flow=booking
 https://vk.ru/app54704296#flow=residents
-https://vk.ru/app54704296_-225298932#flow=platka
+https://vk.ru/app54704296#flow=platka
 https://vk.com/app54704296_-225298932#flow=raffle
 https://vk.com/app54704296_-225298932#flow=offline_gift
 ```
@@ -101,11 +101,13 @@ https://t.me/StandUp_Show_bot?start=residents
 https://vk.ru/app54704296#flow=residents
 ```
 
-Платная покупка (BEST / Хитлото) — `#flow=platka`:
+Платная покупка (BEST / Хитлото). Ссылка с `_-225298932` на ПК часто теряет hash
+и открывает общее меню — для `#flow=platka` нужна короткая без группы:
 
 ```text
-https://vk.ru/app54704296_-225298932#flow=platka
+https://vk.ru/app54704296#flow=platka
 https://go.moscowstandupshow.ru/vk/platka
+https://vk.com/write-225298932?ref=standup_platka
 ```
 
 Открывает в личке экран «Выбирай формат шоу» с кнопками STANDUP BEST, Хитлото и «В главное меню».

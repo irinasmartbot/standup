@@ -216,6 +216,18 @@ def residents_entry_link(settings: VKSettings) -> str:
     return "напиши «резиденты»"
 
 
+def platka_entry_link(settings: VKSettings) -> str:
+    """Мобильный вход в платные билеты: сразу диалог, не mini app в браузере."""
+    if settings.group_id:
+        return f"https://vk.com/write-{int(settings.group_id)}?ref=standup_platka"
+    link = (settings.community_link or "").strip().rstrip("/")
+    if link:
+        name = link.rsplit("/", 1)[-1]
+        if name and not name.startswith("club") and name not in {"vk.com", "vk.ru"}:
+            return f"https://vk.me/{name}?ref=standup_platka"
+    return "напиши «купить билет»"
+
+
 def _offline_gift_event_id_from_ref(ref: str) -> int | None:
     value = (ref or "").strip().casefold()
     for prefix in ("offline_gift_", "gift_"):
