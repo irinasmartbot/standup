@@ -6,6 +6,7 @@ import asyncio
 import logging
 
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
 from bot.db.mailing import (
@@ -13,6 +14,7 @@ from bot.db.mailing import (
     claim_mail_followup_send,
     followup_is_booking_flow,
     get_campaign_followup,
+    parse_mailing_residents_event_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -20,7 +22,7 @@ router = Router()
 
 
 @router.callback_query(F.data.startswith("mail_fu:"))
-async def mailing_followup(call: CallbackQuery) -> None:
+async def mailing_followup(call: CallbackQuery, state: FSMContext) -> None:
     # Сразу гасим «часики» на кнопке — до любого обращения к БД.
     raw = (call.data or "").split(":", 1)[-1].strip()
     if not raw.isdigit():
@@ -42,6 +44,25 @@ async def mailing_followup(call: CallbackQuery) -> None:
     # Сольник 15.09 уже прошёл: старые кнопки не открывают бронь.
     if followup_is_booking_flow(text):
         text = FOLLOWUP_EXPIRED_TEXT
+
+    residents_event_id = parse_mailing_residents_event_id(text)
+    if residents_event_id:
+        user_id = int(call.from_user.id) if call.from_user else 0
+        if user_id and not claim_mail_followup_send(user_id=user_id, text=text):
+            logger.info(
+                "Skip duplicate mailing residents booking tg_id=%s campaign=%s",
+                user_id,
+                raw,
+            )
+            try:
+                await call.answer()
+            except Exception:
+                pass
+            return
+        from bot.handlers.residents import start_residents_booking_from_call
+
+        await start_residents_booking_from_call(call, state, residents_event_id)
+        return
 
     try:
         await call.answer()

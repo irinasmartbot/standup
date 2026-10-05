@@ -77,7 +77,7 @@ https://t.me/StandUp_Show_bot?start=booking_resident
 https://t.me/StandUp_Show_bot?start=pushkin
 ```
 
-То же для `ref`/`cmd` `booking_resident` / `pushkin` в VK и для старых кнопок рассылки с маркером `__flow:booking_resident__`. Новые рассылки эту бронь больше не ставят.
+То же для `ref`/`cmd` `booking_resident` / `pushkin` в VK и для старых кнопок рассылки с маркером `__flow:booking_resident__`. Новые рассылки эту бронь больше не ставят: в админке для анонса конкретной среды ставят галочку и дату из афиши — кнопка «Забронировать» открывает бронь этого шоу (`__flow:residents:<event_id>__`).
 
 Постоянный формат «Резиденты стендап» — другие ссылки, не 15.09.
 

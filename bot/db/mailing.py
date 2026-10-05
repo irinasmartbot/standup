@@ -343,6 +343,48 @@ def list_mailing_best_shows() -> list[dict]:
     return out
 
 
+def list_mailing_residents_shows() -> list[dict]:
+    """Ближайшие активные сольники — для кнопки брони в рассылке."""
+    try:
+        from bot.db.events_admin import list_events_for_admin
+
+        events = list_events_for_admin("residents").get("active") or []
+    except Exception:
+        logger.exception("list_mailing_residents_shows failed")
+        return []
+    today = now_msk().date()
+    out: list[dict] = []
+    for ev in events:
+        event_id = str(ev.get("id") or "").strip()
+        if not event_id:
+            continue
+        date_iso = str(ev.get("date_iso") or "")
+        date_display = str(ev.get("date_display") or "").strip()
+        time = str(ev.get("time") or "").strip()
+        loc = str(ev.get("location") or "").strip()
+        label = " · ".join(part for part in (date_display, time, loc) if part) or event_id
+        out.append(
+            {
+                "id": event_id,
+                "label": label,
+                "date_iso": date_iso,
+                "is_today": date_iso == today.isoformat(),
+            }
+        )
+    out.sort(key=lambda item: (item.get("date_iso") or "", item.get("label") or ""))
+    return out
+
+
+def mailing_residents_event_date_iso(event_id: str | int | None) -> str | None:
+    wanted = str(event_id or "").strip()
+    if not wanted:
+        return None
+    for item in list_mailing_residents_shows():
+        if str(item.get("id")) == wanted:
+            return str(item.get("date_iso") or "") or None
+    return None
+
+
 # Отбивка, если нажали кнопку после даты актуальности рассылки.
 FOLLOWUP_EXPIRED_TEXT = (
     "Здравствуйте! Это предложение уже неактуально — мероприятие прошло 😊\n"
@@ -351,6 +393,26 @@ FOLLOWUP_EXPIRED_TEXT = (
 # Старый маркер кнопки сольника 15.09. Новые кампании его не ставят;
 # клик по старым кнопкам отдаёт FOLLOWUP_EXPIRED_TEXT.
 MAIL_FLOW_BOOKING_RESIDENT = "__flow:booking_resident__"
+MAIL_FLOW_RESIDENTS_PREFIX = "__flow:residents:"
+MAIL_FLOW_RESIDENTS_SUFFIX = "__"
+
+
+def mailing_residents_flow_marker(event_id: str | int) -> str:
+    return f"{MAIL_FLOW_RESIDENTS_PREFIX}{event_id}{MAIL_FLOW_RESIDENTS_SUFFIX}"
+
+
+def parse_mailing_residents_event_id(text: str | None) -> str | None:
+    raw = (text or "").strip()
+    if not raw.startswith(MAIL_FLOW_RESIDENTS_PREFIX) or not raw.endswith(
+        MAIL_FLOW_RESIDENTS_SUFFIX
+    ):
+        return None
+    inner = raw[len(MAIL_FLOW_RESIDENTS_PREFIX) : -len(MAIL_FLOW_RESIDENTS_SUFFIX)].strip()
+    return inner or None
+
+
+def followup_is_residents_booking_flow(text: str | None) -> bool:
+    return parse_mailing_residents_event_id(text) is not None
 
 
 def followup_is_booking_flow(text: str | None) -> bool:
@@ -361,6 +423,12 @@ def followup_preview_label(text: str | None) -> str:
     raw = (text or "").strip()
     if followup_is_booking_flow(raw):
         return "Сценарий брони (шоу уже прошло)"
+    event_id = parse_mailing_residents_event_id(raw)
+    if event_id:
+        for item in list_mailing_residents_shows():
+            if str(item.get("id")) == str(event_id):
+                return f"Бронь сольника · {item.get('label') or event_id}"
+        return f"Бронь сольника · id {event_id}"
     return raw
 
 
@@ -374,20 +442,32 @@ def form_starts_booking(value: str | None) -> bool:
     }
 
 
+def form_starts_residents_booking(value: str | None) -> bool:
+    return (value or "").strip().casefold() in {"1", "on", "true", "yes"}
+
+
 def resolve_mailing_button_fields(
     *,
     starts_booking: bool,
     button_url: str | None,
     followup_html: str | None,
     followup_until: str | None = None,
+    residents_event_id: str | None = None,
 ) -> tuple[str, str, str | None]:
     """URL / follow-up / дата кнопки. Для брони URL очищаем, follow-up — служебный маркер."""
     until = (followup_until or "").strip() or None
+    event_id = str(residents_event_id or "").strip()
+    if event_id:
+        if not until:
+            until = mailing_residents_event_date_iso(event_id)
+        return "", mailing_residents_flow_marker(event_id), until
     if not starts_booking:
         return (button_url or "").strip(), (followup_html or "").strip(), until
     if not until:
         until = "2026-09-15"
     return "", MAIL_FLOW_BOOKING_RESIDENT, until
+
+
 # Повтор того же текста после кнопки рассылки — не чаще чем раз в 30 мин.
 MAIL_FOLLOWUP_DEDUPE_SEC = 1800.0
 
@@ -1725,23 +1805,25 @@ def create_followup_stub(
     body_html: str = "",
     channel: str = "telegram",
     created_by: str = "owner",
+    followup_until: date | str | None = None,
 ) -> int:
     """Store follow-up text so test/callback buttons can resolve mail_fu:<id>."""
     ensure_mailing_tables()
     if not _use_postgres():
         raise RuntimeError("PostgreSQL required")
     ch = channel if channel in ("telegram", "vkontakte", "both") else "telegram"
+    until = _parse_iso_date(followup_until)
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO mailing_campaigns (
-                    title, channel, status, body_html, followup_html,
+                    title, channel, status, body_html, followup_html, followup_until,
                     interval_sec, filters, total_count, created_by,
                     started_at, finished_at
                 )
                 VALUES (
-                    'test-followup', %(channel)s, 'done', %(body)s, %(followup)s,
+                    'test-followup', %(channel)s, 'done', %(body)s, %(followup)s, %(until)s,
                     0, '{}'::jsonb, 0, %(created_by)s, NOW(), NOW()
                 )
                 RETURNING id
@@ -1750,6 +1832,7 @@ def create_followup_stub(
                     "channel": ch,
                     "body": body_html or "",
                     "followup": (followup_html or "").strip(),
+                    "until": until,
                     "created_by": created_by or "owner",
                 },
             )

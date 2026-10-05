@@ -2295,6 +2295,7 @@ class VKBotApp:
                 claim_mail_followup_send,
                 followup_is_booking_flow,
                 get_campaign_followup,
+                parse_mailing_residents_event_id,
             )
 
             try:
@@ -2304,6 +2305,18 @@ class VKBotApp:
             follow = (
                 await asyncio.to_thread(get_campaign_followup, cid) if cid else None
             )
+            residents_event_id = parse_mailing_residents_event_id(follow)
+            if residents_event_id:
+                if not claim_mail_followup_send(user_id=int(vk_id), text=follow or ""):
+                    logger.info(
+                        "Skip duplicate mailing residents booking peer_id=%s vk_id=%s cid=%s",
+                        peer_id,
+                        vk_id,
+                        cid,
+                    )
+                    return
+                await self._start_check_booking(peer_id, vk_id, residents_event_id)
+                return
             if followup_is_booking_flow(follow):
                 follow = FOLLOWUP_EXPIRED_TEXT
             if follow:

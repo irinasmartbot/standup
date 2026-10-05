@@ -69,6 +69,9 @@ def test_mailing_booking_button_fields():
     from bot.db.mailing import (
         MAIL_FLOW_BOOKING_RESIDENT,
         followup_is_booking_flow,
+        followup_is_residents_booking_flow,
+        mailing_residents_flow_marker,
+        parse_mailing_residents_event_id,
         resolve_mailing_button_fields,
     )
 
@@ -92,6 +95,23 @@ def test_mailing_booking_button_fields():
     assert url2 == "https://example.com"
     assert follow2 == "hello"
     assert until2 == "2026-10-01"
+
+    url3, follow3, until3 = resolve_mailing_button_fields(
+        starts_booking=False,
+        button_url="https://example.com",
+        followup_html="hello",
+        followup_until="2026-10-07",
+        residents_event_id="42",
+    )
+    assert url3 == ""
+    assert follow3 == mailing_residents_flow_marker("42")
+    assert parse_mailing_residents_event_id(follow3) == "42"
+    assert followup_is_residents_booking_flow(follow3)
+    assert not followup_is_booking_flow(follow3)
+    assert until3 == "2026-10-07"
+    assert parse_mailing_residents_event_id("__flow:booking_resident__") is None
+    assert parse_mailing_residents_event_id("__flow:residents:__") is None
+    assert parse_mailing_residents_event_id("hello") is None
     print("mailing booking button fields: OK")
 
 

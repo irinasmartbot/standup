@@ -185,6 +185,12 @@ async def residents_event(call: CallbackQuery):
 @router.callback_query(F.data.startswith("res_book_"))
 async def residents_start_booking(call: CallbackQuery, state: FSMContext):
     event_id = call.data.replace("res_book_", "", 1)
+    await start_residents_booking_from_call(call, state, event_id)
+
+
+async def start_residents_booking_from_call(
+    call: CallbackQuery, state: FSMContext, event_id
+) -> None:
     event = next(
         (e for e in await load_resident_events() if str(e.get("id")) == str(event_id)),
         None,

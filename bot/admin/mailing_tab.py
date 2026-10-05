@@ -12,6 +12,7 @@ from bot.db.mailing import (
     is_campaign_scheduled,
     list_campaigns,
     list_mailing_best_shows,
+    list_mailing_residents_shows,
     list_mailing_templates,
     remainder_after_limit,
     to_datetime_local_value,
@@ -224,7 +225,11 @@ def render_mailing_tab(
         btn = (detail.get("button_text") or "").strip()
         btn_url = (detail.get("button_url") or "").strip()
         follow = (detail.get("followup_html") or "").strip()
-        from bot.db.mailing import followup_is_booking_flow, followup_preview_label
+        from bot.db.mailing import (
+            followup_is_booking_flow,
+            followup_is_residents_booking_flow,
+            followup_preview_label,
+        )
         body = detail.get("body_html") or ""
         preview_off = bool(detail.get("disable_link_preview"))
         until_raw = detail.get("followup_until")
@@ -239,7 +244,7 @@ def render_mailing_tab(
         )
         follow_block = ""
         if follow:
-            if followup_is_booking_flow(follow):
+            if followup_is_booking_flow(follow) or followup_is_residents_booking_flow(follow):
                 follow_block = (
                     f"<p><b>После кнопки:</b> {_h(followup_preview_label(follow))}</p>"
                 )
@@ -286,6 +291,10 @@ def render_mailing_tab(
     templates = list_mailing_templates()
     shows = list_mailing_best_shows()
     try:
+        residents_shows = list_mailing_residents_shows()
+    except Exception:
+        residents_shows = []
+    try:
         test_defaults = get_mailing_test_defaults()
     except Exception:
         test_defaults = {}
@@ -324,6 +333,20 @@ def render_mailing_tab(
         selected = " selected" if sid and sid == default_show_id else ""
         show_opts.append(
             f'<option value="{_h(sid)}"{selected}>{_h(item.get("label"))}</option>'
+        )
+    residents_opts = ['<option value="">Выберите дату сольника</option>']
+    default_residents_id = ""
+    for item in residents_shows:
+        if item.get("is_today"):
+            default_residents_id = str(item.get("id") or "")
+            break
+    if not default_residents_id and residents_shows:
+        default_residents_id = str(residents_shows[0].get("id") or "")
+    for item in residents_shows:
+        sid = str(item.get("id") or "")
+        selected = " selected" if sid and sid == default_residents_id else ""
+        residents_opts.append(
+            f'<option value="{_h(sid)}"{selected} data-date="{_h(item.get("date_iso"))}">{_h(item.get("label"))}</option>'
         )
 
     form = f"""
@@ -382,6 +405,14 @@ def render_mailing_tab(
     <label>После нажатия кнопки (если нет ссылки) — доп. текст
       <textarea name="followup_html" rows="3" placeholder="Отлично! Вот детали..."></textarea>
     </label>
+    <fieldset class="mailing-row">
+      <legend>Кнопка сразу бронирует сольник</legend>
+      <label><input type="checkbox" name="starts_residents_booking" value="1" id="mail-residents-booking"> После «Забронировать» сразу начать бронь выбранной даты</label>
+      <label id="mail-residents-show-wrap" hidden>Дата сольника
+        <select name="residents_event_id" id="mail-residents-event-id">{''.join(residents_opts)}</select>
+      </label>
+      <p class="muted" style="margin:6px 0 0">Для анонса 7 / 14 / 21 / 28 октября (и следующих дат из афиши) выберите шоу — ссылку и текст «после кнопки» заполнять не нужно.</p>
+    </fieldset>
     <label>Кнопка актуальна до (дата шоу)
       <input type="date" name="followup_until">
       <span class="muted">После этой даты по кнопке — «мероприятие уже неактуально». Если пусто, возьмём дату шоу из фильтров ниже.</span>
@@ -796,6 +827,32 @@ var MAIL_TEST_DEFAULTS = """
   }
   if (tplSel) tplSel.addEventListener('change', syncShowWrap);
   syncShowWrap();
+  var resBooking = document.getElementById('mail-residents-booking');
+  var resShow = document.getElementById('mail-residents-event-id');
+  function residentsDateIso(){
+    if (!resShow) return '';
+    var opt = resShow.options[resShow.selectedIndex];
+    return (opt && opt.getAttribute('data-date')) || '';
+  }
+  function syncResidentsBooking(){
+    var on = !!(resBooking && resBooking.checked);
+    var wrap = document.getElementById('mail-residents-show-wrap');
+    if (wrap) wrap.hidden = !on;
+    if (!on) return;
+    var btnEl = form.querySelector('[name=button_text]');
+    if (btnEl && !btnEl.value.trim()) btnEl.value = 'Забронировать';
+    var untilEl = form.querySelector('[name=followup_until]');
+    var iso = residentsDateIso();
+    if (untilEl && iso && !untilEl.value) untilEl.value = iso;
+  }
+  if (resBooking) resBooking.addEventListener('change', syncResidentsBooking);
+  if (resShow) resShow.addEventListener('change', function(){
+    var untilEl = form.querySelector('[name=followup_until]');
+    var iso = residentsDateIso();
+    if (untilEl && iso) untilEl.value = iso;
+    saveDraft();
+  });
+  syncResidentsBooking();
   if (showSel) {
     showSel.addEventListener('change', function(){
       var t = MAIL_TEMPLATES[tplSel && tplSel.value];
@@ -1106,7 +1163,8 @@ var MAIL_TEST_DEFAULTS = """
     color:var(--mail-muted);
   }
   .mailing-compose label, .mailing-test label { display:block; margin:12px 0; font-size:14px; font-weight:700; color:var(--mail-ink); }
-  .mailing-compose label[hidden], .mailing-compose #mail-show-hint[hidden] { display:none !important; }
+  .mailing-compose label[hidden], .mailing-compose #mail-show-hint[hidden],
+  .mailing-compose #mail-residents-show-wrap[hidden] { display:none !important; }
   .mailing-compose input[type=text],
   .mailing-compose input[type=url],
   .mailing-compose input[type=number],

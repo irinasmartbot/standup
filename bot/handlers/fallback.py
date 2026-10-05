@@ -25,7 +25,7 @@ async def unknown_callback(call: CallbackQuery, state: FSMContext):
     if data.startswith("mail_fu:"):
         from bot.handlers.mailing_callbacks import mailing_followup
 
-        await mailing_followup(call)
+        await mailing_followup(call, state)
         return
 
     data_short = data[:80]

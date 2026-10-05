@@ -6155,7 +6155,12 @@ async def mailing_test_page(request: web.Request) -> web.Response:
 
     from bot.admin.mailing_worker import send_one
     from bot.db.admin_audit import log_admin_action
-    from bot.db.mailing import create_followup_stub, get_user_for_mailing
+    from bot.db.mailing import (
+        create_followup_stub,
+        form_starts_residents_booking,
+        get_user_for_mailing,
+        resolve_mailing_button_fields,
+    )
 
     user = await asyncio.get_running_loop().run_in_executor(
         None, get_user_for_mailing, int(user_id_raw)
@@ -6194,6 +6199,27 @@ async def mailing_test_page(request: web.Request) -> web.Response:
             status=400,
         )
 
+    followup_until = _date_to_input(_form_text(form, "followup_until")) or _form_text(
+        form, "followup_until"
+    )
+    if form_starts_residents_booking(form.get("starts_residents_booking")):
+        residents_event_id = (form.get("residents_event_id") or "").strip()
+        if not residents_event_id:
+            return web.json_response(
+                {"error": "Выберите дату сольника для кнопки брони"},
+                status=400,
+            )
+        if not button_text:
+            button_text = "Забронировать"
+        button_url, followup_html, until_resolved = resolve_mailing_button_fields(
+            starts_booking=False,
+            residents_event_id=residents_event_id,
+            button_url=button_url,
+            followup_html=followup_html,
+            followup_until=followup_until,
+        )
+        followup_until = until_resolved or followup_until
+
     campaign_id = 0
     # Кнопка без URL: всегда сохраняем follow-up в БД, иначе callback mail_fu:* пустой.
     if button_text and followup_html and not button_url:
@@ -6204,6 +6230,7 @@ async def mailing_test_page(request: web.Request) -> web.Response:
                 body_html=body_html,
                 channel=send_channel,
                 created_by=_admin_role(request, config) or "owner",
+                followup_until=followup_until,
             ),
         )
     elif button_text and not button_url and not followup_html:
@@ -6350,9 +6377,29 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     from urllib.parse import quote
 
     from bot.db.admin_audit import log_admin_action
-    from bot.db.mailing import create_campaign, parse_admin_datetime, set_campaign_photo
+    from bot.db.mailing import (
+        create_campaign,
+        form_starts_residents_booking,
+        parse_admin_datetime,
+        resolve_mailing_button_fields,
+        set_campaign_photo,
+    )
 
     try:
+        if form_starts_residents_booking(form.get("starts_residents_booking")):
+            residents_event_id = _form_text(form, "residents_event_id")
+            if not residents_event_id:
+                raise ValueError("Выберите дату сольника для кнопки брони")
+            if not button_text:
+                button_text = "Забронировать"
+            button_url, followup_html, until_resolved = resolve_mailing_button_fields(
+                starts_booking=False,
+                residents_event_id=residents_event_id,
+                button_url=button_url,
+                followup_html=followup_html,
+                followup_until=followup_until,
+            )
+            followup_until = until_resolved or followup_until
         filters = _mailing_filters_from_form(form)
         send_when = _form_text(form, "send_when", "now") or "now"
         scheduled_at = None
