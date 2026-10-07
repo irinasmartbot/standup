@@ -68,8 +68,10 @@ def test_callback_parsing():
 def test_mailing_booking_button_fields():
     from bot.db.mailing import (
         MAIL_FLOW_BOOKING_RESIDENT,
+        MAIL_FLOW_RESIDENTS_DATES,
         followup_is_booking_flow,
         followup_is_residents_booking_flow,
+        followup_is_residents_dates_flow,
         mailing_residents_flow_marker,
         parse_mailing_residents_event_id,
         resolve_mailing_button_fields,
@@ -112,6 +114,20 @@ def test_mailing_booking_button_fields():
     assert parse_mailing_residents_event_id("__flow:booking_resident__") is None
     assert parse_mailing_residents_event_id("__flow:residents:__") is None
     assert parse_mailing_residents_event_id("hello") is None
+
+    url4, follow4, until4 = resolve_mailing_button_fields(
+        starts_booking=False,
+        button_url="https://example.com",
+        followup_html="hello",
+        followup_until="2026-10-28",
+        residents_dates=True,
+    )
+    assert url4 == ""
+    assert follow4 == MAIL_FLOW_RESIDENTS_DATES
+    assert followup_is_residents_dates_flow(follow4)
+    assert not followup_is_residents_booking_flow(follow4)
+    assert until4 == "2026-10-28"
+    assert parse_mailing_residents_event_id(MAIL_FLOW_RESIDENTS_DATES) is None
     print("mailing booking button fields: OK")
 
 
@@ -279,6 +295,44 @@ def test_mailing_vk_denied_and_defaults():
     print("mailing vk denied and defaults: OK")
 
 
+def test_mailing_followup_expires_after_show_start():
+    from datetime import date, datetime, time
+
+    from bot.db.mailing import campaign_followup_expired, parse_mailing_show_clock
+    from bot.utils.ticket import MSK
+
+    assert parse_mailing_show_clock("Здравствуйте, начало в 20:00, успеваете?") == time(20, 0)
+    assert parse_mailing_show_clock("<b>Шоу в 20:00 в Эскобаре на м.Площадь Ильича") == time(20, 0)
+    assert parse_mailing_show_clock("начало сегодня в 20:30, успеваете?") == time(20, 30)
+    assert parse_mailing_show_clock("СЕГОДНЯ, <b>01 августа в 20:30</b> пройдёт") == time(20, 30)
+    assert parse_mailing_show_clock("без времени") is None
+
+    campaign = {
+        "followup_until": date(2026, 10, 5),
+        "followup_html": "Здравствуйте, начало в 20:00, успеваете? 😊",
+        "body_html": "<b>Шоу в 20:00 в Эскобаре на м.Площадь Ильича ☝️</b>",
+        "filters": {},
+    }
+    before = datetime(2026, 10, 5, 17, 15, tzinfo=MSK)
+    at_start = datetime(2026, 10, 5, 20, 0, tzinfo=MSK)
+    after = datetime(2026, 10, 5, 22, 5, tzinfo=MSK)
+    next_day = datetime(2026, 10, 6, 0, 1, tzinfo=MSK)
+    assert not campaign_followup_expired(campaign, now=before)
+    assert not campaign_followup_expired(campaign, now=at_start)
+    assert campaign_followup_expired(campaign, now=after)
+    assert campaign_followup_expired(campaign, now=next_day)
+
+    no_clock = {
+        "followup_until": date(2026, 10, 5),
+        "followup_html": "Напишите имя и телефон",
+        "body_html": "",
+        "filters": {},
+    }
+    assert not campaign_followup_expired(no_clock, now=after)
+    assert campaign_followup_expired(no_clock, now=next_day)
+    print("mailing followup expires after show start: OK")
+
+
 def test_db_schema():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         path = tmp.name
@@ -397,6 +451,24 @@ def test_vk_residents_deeplink_back_button():
     assert json.loads(inner_back["action"]["payload"]) == {"cmd": "book"}
     assert "rdl" not in json.loads(inner_flat[0]["action"]["payload"])
     assert not _keyboard_has_menu_labeled_book(inner)
+
+    mailing = json.loads(
+        _dates_keyboard(
+            ["07.10.2026", "14.10.2026", "21.10.2026", "28.10.2026"],
+            "residents_date",
+            0,
+            "residents_home",
+            back_label="В главное меню",
+            payload_extra={"rml": 1},
+        )
+    )
+    mailing_flat = [btn for row in mailing["buttons"] for btn in row]
+    assert json.loads(mailing_flat[0]["action"]["payload"]).get("rml") == 1
+    assert mailing_flat[-1]["action"]["label"] == "В главное меню"
+    assert json.loads(mailing_flat[-1]["action"]["payload"]) == {
+        "cmd": "residents_home",
+        "rml": 1,
+    }
 
     legacy = json.loads(
         _dates_keyboard(
@@ -633,6 +705,7 @@ async def main():
     test_mailing_schedule_and_templates()
     test_mailing_best_show_fill()
     test_mailing_vk_denied_and_defaults()
+    test_mailing_followup_expires_after_show_start()
     test_db_schema()
     test_vk_message_item_has_photo()
     test_residents_format()

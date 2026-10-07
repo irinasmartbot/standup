@@ -6179,6 +6179,7 @@ async def mailing_test_page(request: web.Request) -> web.Response:
     from bot.db.admin_audit import log_admin_action
     from bot.db.mailing import (
         create_followup_stub,
+        form_opens_residents_dates,
         form_starts_residents_booking,
         get_user_for_mailing,
         resolve_mailing_button_fields,
@@ -6224,7 +6225,18 @@ async def mailing_test_page(request: web.Request) -> web.Response:
     followup_until = _date_to_input(_form_text(form, "followup_until")) or _form_text(
         form, "followup_until"
     )
-    if form_starts_residents_booking(form.get("starts_residents_booking")):
+    if form_opens_residents_dates(form.get("opens_residents_dates")):
+        if not button_text:
+            button_text = "Выбрать дату"
+        button_url, followup_html, until_resolved = resolve_mailing_button_fields(
+            starts_booking=False,
+            residents_dates=True,
+            button_url=button_url,
+            followup_html=followup_html,
+            followup_until=followup_until,
+        )
+        followup_until = until_resolved or followup_until
+    elif form_starts_residents_booking(form.get("starts_residents_booking")):
         residents_event_id = (form.get("residents_event_id") or "").strip()
         if not residents_event_id:
             return web.json_response(
@@ -6401,6 +6413,7 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     from bot.db.admin_audit import log_admin_action
     from bot.db.mailing import (
         create_campaign,
+        form_opens_residents_dates,
         form_starts_residents_booking,
         parse_admin_datetime,
         resolve_mailing_button_fields,
@@ -6408,7 +6421,18 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     )
 
     try:
-        if form_starts_residents_booking(form.get("starts_residents_booking")):
+        if form_opens_residents_dates(form.get("opens_residents_dates")):
+            if not button_text:
+                button_text = "Выбрать дату"
+            button_url, followup_html, until_resolved = resolve_mailing_button_fields(
+                starts_booking=False,
+                residents_dates=True,
+                button_url=button_url,
+                followup_html=followup_html,
+                followup_until=followup_until,
+            )
+            followup_until = until_resolved or followup_until
+        elif form_starts_residents_booking(form.get("starts_residents_booking")):
             residents_event_id = _form_text(form, "residents_event_id")
             if not residents_event_id:
                 raise ValueError("Выберите дату сольника для кнопки брони")

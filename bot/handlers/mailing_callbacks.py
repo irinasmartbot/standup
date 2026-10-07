@@ -13,6 +13,7 @@ from bot.db.mailing import (
     FOLLOWUP_EXPIRED_TEXT,
     claim_mail_followup_send,
     followup_is_booking_flow,
+    followup_is_residents_dates_flow,
     get_campaign_followup,
     parse_mailing_residents_event_id,
 )
@@ -44,6 +45,31 @@ async def mailing_followup(call: CallbackQuery, state: FSMContext) -> None:
     # Сольник 15.09 уже прошёл: старые кнопки не открывают бронь.
     if followup_is_booking_flow(text):
         text = FOLLOWUP_EXPIRED_TEXT
+
+    if followup_is_residents_dates_flow(text):
+        user_id = int(call.from_user.id) if call.from_user else 0
+        if user_id and not claim_mail_followup_send(user_id=user_id, text=text):
+            logger.info(
+                "Skip duplicate mailing residents dates tg_id=%s campaign=%s",
+                user_id,
+                raw,
+            )
+            try:
+                await call.answer()
+            except Exception:
+                pass
+            return
+        from bot.handlers.residents import send_residents_dates_from_mailing
+
+        if call.message:
+            await send_residents_dates_from_mailing(
+                call.message, telegram_id=user_id or None
+            )
+        try:
+            await call.answer()
+        except Exception:
+            pass
+        return
 
     residents_event_id = parse_mailing_residents_event_id(text)
     if residents_event_id:

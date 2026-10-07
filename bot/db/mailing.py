@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any
 
 import psycopg
@@ -385,6 +385,15 @@ def mailing_residents_event_date_iso(event_id: str | int | None) -> str | None:
     return None
 
 
+def mailing_residents_last_date_iso() -> str | None:
+    dates = [
+        str(item.get("date_iso") or "")
+        for item in list_mailing_residents_shows()
+        if item.get("date_iso")
+    ]
+    return max(dates) if dates else None
+
+
 # Отбивка, если нажали кнопку после даты актуальности рассылки.
 FOLLOWUP_EXPIRED_TEXT = (
     "Здравствуйте! Это предложение уже неактуально — мероприятие прошло 😊\n"
@@ -395,6 +404,7 @@ FOLLOWUP_EXPIRED_TEXT = (
 MAIL_FLOW_BOOKING_RESIDENT = "__flow:booking_resident__"
 MAIL_FLOW_RESIDENTS_PREFIX = "__flow:residents:"
 MAIL_FLOW_RESIDENTS_SUFFIX = "__"
+MAIL_FLOW_RESIDENTS_DATES = "__flow:residents_dates__"
 
 
 def mailing_residents_flow_marker(event_id: str | int) -> str:
@@ -415,6 +425,10 @@ def followup_is_residents_booking_flow(text: str | None) -> bool:
     return parse_mailing_residents_event_id(text) is not None
 
 
+def followup_is_residents_dates_flow(text: str | None) -> bool:
+    return (text or "").strip() == MAIL_FLOW_RESIDENTS_DATES
+
+
 def followup_is_booking_flow(text: str | None) -> bool:
     return (text or "").strip() == MAIL_FLOW_BOOKING_RESIDENT
 
@@ -423,6 +437,8 @@ def followup_preview_label(text: str | None) -> str:
     raw = (text or "").strip()
     if followup_is_booking_flow(raw):
         return "Сценарий брони (шоу уже прошло)"
+    if followup_is_residents_dates_flow(raw):
+        return "Выбор даты сольника"
     event_id = parse_mailing_residents_event_id(raw)
     if event_id:
         for item in list_mailing_residents_shows():
@@ -446,6 +462,10 @@ def form_starts_residents_booking(value: str | None) -> bool:
     return (value or "").strip().casefold() in {"1", "on", "true", "yes"}
 
 
+def form_opens_residents_dates(value: str | None) -> bool:
+    return (value or "").strip().casefold() in {"1", "on", "true", "yes"}
+
+
 def resolve_mailing_button_fields(
     *,
     starts_booking: bool,
@@ -453,9 +473,14 @@ def resolve_mailing_button_fields(
     followup_html: str | None,
     followup_until: str | None = None,
     residents_event_id: str | None = None,
+    residents_dates: bool = False,
 ) -> tuple[str, str, str | None]:
     """URL / follow-up / дата кнопки. Для брони URL очищаем, follow-up — служебный маркер."""
     until = (followup_until or "").strip() or None
+    if residents_dates:
+        if not until:
+            until = mailing_residents_last_date_iso()
+        return "", MAIL_FLOW_RESIDENTS_DATES, until
     event_id = str(residents_event_id or "").strip()
     if event_id:
         if not until:
@@ -762,6 +787,74 @@ def campaign_followup_until(campaign: dict | None) -> date | None:
     if not isinstance(filters, dict):
         return None
     return _parse_iso_date(filters.get("date_to")) or _parse_iso_date(filters.get("date_from"))
+
+
+_SHOW_CLOCK_PATTERNS = (
+    re.compile(r"начало[^.\n]{0,48}?\bв\s+(\d{1,2}:\d{2})", re.IGNORECASE),
+    re.compile(r"шоу[^.\n]{0,48}?\bв\s+(\d{1,2}:\d{2})", re.IGNORECASE),
+    re.compile(r"\bв\s+(\d{1,2}:\d{2})", re.IGNORECASE),
+)
+
+
+def _parse_show_clock(raw: str | None) -> time | None:
+    text = (raw or "").strip()
+    if not text or ":" not in text:
+        return None
+    hour_s, _, minute_s = text.partition(":")
+    try:
+        hour, minute = int(hour_s), int(minute_s)
+    except ValueError:
+        return None
+    if hour > 23 or minute > 59:
+        return None
+    return time(hour, minute)
+
+
+def parse_mailing_show_clock(text: str | None) -> time | None:
+    """Время начала шоу из текста письма / follow-up («начало в 20:00», «Шоу в 20:00»)."""
+    blob = text or ""
+    if not blob:
+        return None
+    for pattern in _SHOW_CLOCK_PATTERNS:
+        match = pattern.search(blob)
+        if match:
+            parsed = _parse_show_clock(match.group(1))
+            if parsed:
+                return parsed
+    return None
+
+
+def campaign_show_clock(campaign: dict | None) -> time | None:
+    if not campaign:
+        return None
+    return parse_mailing_show_clock(campaign.get("followup_html")) or parse_mailing_show_clock(
+        campaign.get("body_html")
+    )
+
+
+def campaign_followup_expired(
+    campaign: dict | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Кнопка уже неактуальна: день после даты шоу или в этот день после времени начала."""
+    until = campaign_followup_until(campaign)
+    if not until:
+        return False
+    now = now or now_msk()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=MSK)
+    else:
+        now = now.astimezone(MSK)
+    if now.date() > until:
+        return True
+    if now.date() < until:
+        return False
+    clock = campaign_show_clock(campaign)
+    if clock is None:
+        return False
+    start = datetime.combine(until, clock, tzinfo=MSK)
+    return now > start
 
 
 def normalize_filters(raw: dict | None) -> dict[str, Any]:
@@ -1332,15 +1425,14 @@ def get_campaign(campaign_id: int) -> dict | None:
 
 
 def get_campaign_followup(campaign_id: int) -> str | None:
-    """Текст после кнопки: обычный follow-up или «уже неактуально», если дата прошла."""
+    """Текст после кнопки: обычный follow-up или «уже неактуально», если шоу прошло."""
     row = get_campaign(campaign_id)
     if not row:
         return None
     text = (row.get("followup_html") or "").strip()
     if not text:
         return None
-    until = campaign_followup_until(row)
-    if until and now_msk().date() > until:
+    if campaign_followup_expired(row):
         return FOLLOWUP_EXPIRED_TEXT
     return text
 

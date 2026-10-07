@@ -723,6 +723,8 @@ class VKBotApp:
         self.peer_browse: dict[int, str] = {}
         # Deep link / mini app #flow=residents → «В главное меню»; из меню → «◀️ Назад».
         self.peer_residents_from_deeplink: dict[int, bool] = {}
+        # Кнопка рассылки «Выбрать дату»: даты без картинки, письмо не удаляем.
+        self.peer_residents_from_mailing: dict[int, bool] = {}
         self.booking_sessions: dict[int, dict] = {}
         self.manage_sessions: dict[int, dict] = {}
         # Розыгрыш: kind / awaiting screenshot (до шага модерации).
@@ -1288,6 +1290,7 @@ class VKBotApp:
         self.peer_my_bookings_message_ids.pop(int(peer_id), None)
         self.peer_venues_message_ids.pop(int(peer_id), None)
         self.peer_residents_from_deeplink.pop(int(peer_id), None)
+        self.peer_residents_from_mailing.pop(int(peer_id), None)
         if is_start:
             self._track(user_id, EVENT_BOT_START)
         else:
@@ -2527,6 +2530,7 @@ class VKBotApp:
                 FOLLOWUP_EXPIRED_TEXT,
                 claim_mail_followup_send,
                 followup_is_booking_flow,
+                followup_is_residents_dates_flow,
                 get_campaign_followup,
                 parse_mailing_residents_event_id,
             )
@@ -2538,6 +2542,23 @@ class VKBotApp:
             follow = (
                 await asyncio.to_thread(get_campaign_followup, cid) if cid else None
             )
+            if followup_is_residents_dates_flow(follow):
+                if not claim_mail_followup_send(user_id=int(vk_id), text=follow or ""):
+                    logger.info(
+                        "Skip duplicate mailing residents dates peer_id=%s vk_id=%s cid=%s",
+                        peer_id,
+                        vk_id,
+                        cid,
+                    )
+                    return
+                await self._send_residents_dates(
+                    peer_id,
+                    0,
+                    entry=True,
+                    vk_id=vk_id,
+                    from_mailing=True,
+                )
+                return
             residents_event_id = parse_mailing_residents_event_id(follow)
             if residents_event_id:
                 if not claim_mail_followup_send(user_id=int(vk_id), text=follow or ""):
@@ -2634,6 +2655,8 @@ class VKBotApp:
         # Deep link резидентов: не путать с «Назад» на выбор форматов (cmd=book).
         if payload.get("rdl"):
             self.peer_residents_from_deeplink[int(peer_id)] = True
+        if payload.get("rml"):
+            self.peer_residents_from_mailing[int(peer_id)] = True
         if cmd in {"residents_home"} or (cmd == "book" and payload.get("rdl")):
             cmd = "main_menu"
         elif cmd == "book":
@@ -3022,8 +3045,14 @@ class VKBotApp:
         if cmd in {"residents_date_page"}:
             page = int(payload.get("page") or 0)
             from_dl = True if payload.get("rdl") else None
+            from_mail = True if payload.get("rml") else None
             await self._send_residents_dates(
-                peer_id, page, edit="page" in payload, vk_id=vk_id, from_deep_link=from_dl
+                peer_id,
+                page,
+                edit="page" in payload,
+                vk_id=vk_id,
+                from_deep_link=from_dl,
+                from_mailing=from_mail,
             )
             return
         if cmd == "residents_date":
@@ -3031,6 +3060,8 @@ class VKBotApp:
             self._clear_dates_card(peer_id)
             if payload.get("rdl"):
                 self.peer_residents_from_deeplink[peer_id] = True
+            if payload.get("rml"):
+                self.peer_residents_from_mailing[peer_id] = True
             await self._send_residents_date(peer_id, payload.get("date") or "", vk_id=vk_id)
             return
         if cmd == "residents_event":
@@ -4757,13 +4788,17 @@ class VKBotApp:
         edit: bool = False,
         vk_id: int | None = None,
         from_deep_link: bool | None = None,
+        from_mailing: bool | None = None,
     ) -> None:
         self.peer_context[peer_id] = "residents"
         self.peer_browse[peer_id] = "date"
         if from_deep_link is not None:
             self.peer_residents_from_deeplink[peer_id] = bool(from_deep_link)
+        if from_mailing is not None:
+            self.peer_residents_from_mailing[peer_id] = bool(from_mailing)
         from_deeplink = self.peer_residents_from_deeplink.get(peer_id, False)
-        if from_deeplink:
+        from_mail = self.peer_residents_from_mailing.get(peer_id, False)
+        if from_mail or from_deeplink:
             back_cmd, back_label = "residents_home", "В главное меню"
         else:
             back_cmd, back_label = "book", "◀️ Назад"
@@ -4786,16 +4821,31 @@ class VKBotApp:
             kb = VKKeyboardBuilder(inline=True)
             kb.button("В главное меню", _payload("main_menu"))
             kb.adjust(1)
-            await self.client.send_message(
-                peer_id,
-                RESIDENTS_EMPTY_TEXT,
-                keyboard=kb.as_json(),
-            )
+            if from_mail:
+                await self._send_text(
+                    peer_id,
+                    RESIDENTS_EMPTY_TEXT,
+                    keyboard=kb.as_json(),
+                    replace_nav=False,
+                    force_new=True,
+                )
+            else:
+                await self.client.send_message(
+                    peer_id,
+                    RESIDENTS_EMPTY_TEXT,
+                    keyboard=kb.as_json(),
+                )
             return
         max_page = max(0, (len(dates) - 1) // DATES_PAGE_SIZE)
         page = max(0, min(int(page or 0), max_page))
         text = RESIDENTS_ENTRY_TEXT if entry else "Выбирай дату 👇"
-        payload_extra = {"rdl": 1} if from_deeplink else None
+        payload_extra: dict[str, Any] | None = None
+        if from_deeplink or from_mail:
+            payload_extra = {}
+            if from_deeplink:
+                payload_extra["rdl"] = 1
+            if from_mail:
+                payload_extra["rml"] = 1
         keyboard = _dates_keyboard(
             dates,
             "residents_date",
@@ -4804,6 +4854,27 @@ class VKBotApp:
             back_label=back_label,
             payload_extra=payload_extra,
         )
+        if from_mail:
+            peer = int(peer_id)
+            existing_id = self.peer_dates_message_ids.pop(peer, None)
+            if existing_id:
+                try:
+                    await self._safe_delete_messages(peer, [int(existing_id)])
+                except Exception:
+                    logger.exception(
+                        "Failed to delete previous mailing dates card peer_id=%s",
+                        peer_id,
+                    )
+            mid = await self._send_text(
+                peer_id,
+                text,
+                keyboard=keyboard,
+                replace_nav=False,
+                force_new=True,
+            )
+            if mid:
+                self.peer_dates_message_ids[peer] = int(mid)
+            return
         await self._send_or_edit_dates_card(
             peer_id,
             text,
@@ -4861,6 +4932,8 @@ class VKBotApp:
         back_dates: dict[str, Any] = {"cmd": "residents_date_page"}
         if self.peer_residents_from_deeplink.get(peer_id):
             back_dates["rdl"] = 1
+        if self.peer_residents_from_mailing.get(peer_id):
+            back_dates["rml"] = 1
         kb.button("Назад к датам", back_dates)
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)

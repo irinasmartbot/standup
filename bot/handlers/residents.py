@@ -38,7 +38,11 @@ async def load_resident_events() -> list[dict]:
     return await load_events(RESIDENTS)
 
 
-async def residents_dates_kb(*, back_callback: str = "book"):
+async def residents_dates_kb(
+    *,
+    back_callback: str | None = "book",
+    back_label: str | None = None,
+):
     events = await load_resident_events()
     dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
     kb = InlineKeyboardBuilder()
@@ -49,13 +53,18 @@ async def residents_dates_kb(*, back_callback: str = "book"):
         except Exception:
             label = date
         kb.button(text=label, callback_data=f"res_date_{date}")
-    kb.button(text="◀️ Назад", callback_data=back_callback)
     n = len(dates)
     widths = [2] * (n // 2)
     if n % 2:
         widths.append(1)
-    widths.append(1)
-    kb.adjust(*widths)
+    if back_callback:
+        label = back_label or (
+            "В главное меню" if back_callback == "main_menu" else "◀️ Назад"
+        )
+        kb.button(text=label, callback_data=back_callback)
+        widths.append(1)
+    if widths:
+        kb.adjust(*widths)
     return kb.as_markup(), dates
 
 
@@ -89,6 +98,21 @@ async def residents_format_entry(message, *, telegram_id: int | None = None):
         parse_mode="HTML",
         track_nav=True,
     )
+
+
+async def send_residents_dates_from_mailing(message, *, telegram_id: int | None = None) -> None:
+    """Список дат сольника без картинки. Письмо рассылки не трогаем."""
+    tid = telegram_id or getattr(getattr(message, "from_user", None), "id", None)
+    if tid:
+        track_event(EVENT_BRANCH_RESIDENTS, telegram_id=tid, props={"via": "mailing"})
+    events = await load_resident_events()
+    if not events:
+        sent = await message.answer(EMPTY_TEXT, reply_markup=_empty_kb())
+        remember_booking_nav(message.chat.id, sent.message_id)
+        return
+    kb, _ = await residents_dates_kb(back_callback="main_menu")
+    sent = await message.answer(ENTRY_TEXT, reply_markup=kb, parse_mode="HTML")
+    remember_booking_nav(message.chat.id, sent.message_id)
 
 
 async def send_residents_event_card(message, event, back_callback="residents", *, telegram_id=None):

@@ -263,7 +263,8 @@ def render_mailing_tab(
                 f'<input type="date" name="followup_until" value="{_h(until_val)}"></label>'
                 '<button type="submit">Сохранить дату</button>'
                 "<p class='muted' style='margin:0;flex-basis:100%'>"
-                "После этой даты по кнопке уйдёт текст «мероприятие уже неактуально».</p>"
+                "После этой даты, и в день шоу после времени начала из письма, "
+                "по кнопке уйдёт текст «мероприятие уже неактуально».</p>"
                 "</form>"
             )
         detail_html = (
@@ -412,16 +413,17 @@ def render_mailing_tab(
       <textarea name="followup_html" rows="3" placeholder="Отлично! Вот детали..."></textarea>
     </label>
     <fieldset class="mailing-row">
-      <legend>Кнопка сразу бронирует сольник</legend>
+      <legend>Кнопка сольника</legend>
+      <label><input type="checkbox" name="opens_residents_dates" value="1" id="mail-residents-dates"> После «Выбрать дату» показать список дат сольника (без картинки, письмо не удаляется)</label>
       <label><input type="checkbox" name="starts_residents_booking" value="1" id="mail-residents-booking"> После «Забронировать» сразу начать бронь выбранной даты</label>
       <label id="mail-residents-show-wrap" hidden>Дата сольника
         <select name="residents_event_id" id="mail-residents-event-id">{''.join(residents_opts)}</select>
       </label>
-      <p class="muted" style="margin:6px 0 0">Для анонса 7 / 14 / 21 / 28 октября (и следующих дат из афиши) выберите шоу — ссылку и текст «после кнопки» заполнять не нужно.</p>
+      <p class="muted" style="margin:6px 0 0">Список дат — все активные сольники из афиши. Либо выберите одну дату для прямой брони. Ссылку и текст «после кнопки» заполнять не нужно.</p>
     </fieldset>
     <label>Кнопка актуальна до (дата шоу)
       <input type="date" name="followup_until">
-      <span class="muted">После этой даты по кнопке — «мероприятие уже неактуально». Если пусто, возьмём дату шоу из фильтров ниже.</span>
+      <span class="muted">После этой даты и в день шоу после времени начала из письма — «мероприятие уже неактуально». Если пусто, возьмём дату шоу из фильтров ниже.</span>
     </label>
     <fieldset class="mailing-row">
       <legend>Превью ссылок в Телеграме</legend>
@@ -719,6 +721,13 @@ var MAIL_BEST_SHOWS = """
 var MAIL_TEST_DEFAULTS = """
         + test_defaults_json
         + """;
+var MAIL_RESIDENTS_LAST_DATE = """
+        + json.dumps(
+            max((item.get("date_iso") or "") for item in residents_shows)
+            if residents_shows
+            else ""
+        )
+        + """;
 (function(){
   var form = document.getElementById('mailing-form');
   var btn = document.getElementById('mail-preview-btn');
@@ -834,24 +843,43 @@ var MAIL_TEST_DEFAULTS = """
   if (tplSel) tplSel.addEventListener('change', syncShowWrap);
   syncShowWrap();
   var resBooking = document.getElementById('mail-residents-booking');
+  var resDates = document.getElementById('mail-residents-dates');
   var resShow = document.getElementById('mail-residents-event-id');
+  var residentsLastDate = MAIL_RESIDENTS_LAST_DATE || '';
   function residentsDateIso(){
     if (!resShow) return '';
     var opt = resShow.options[resShow.selectedIndex];
     return (opt && opt.getAttribute('data-date')) || '';
   }
   function syncResidentsBooking(){
-    var on = !!(resBooking && resBooking.checked);
+    var datesOn = !!(resDates && resDates.checked);
+    var bookOn = !!(resBooking && resBooking.checked);
+    if (datesOn && bookOn && resBooking) resBooking.checked = false;
+    bookOn = !!(resBooking && resBooking.checked);
     var wrap = document.getElementById('mail-residents-show-wrap');
-    if (wrap) wrap.hidden = !on;
-    if (!on) return;
+    if (wrap) wrap.hidden = !bookOn;
     var btnEl = form.querySelector('[name=button_text]');
-    if (btnEl && !btnEl.value.trim()) btnEl.value = 'Забронировать';
     var untilEl = form.querySelector('[name=followup_until]');
+    if (datesOn) {
+      if (btnEl && (!btnEl.value.trim() || btnEl.value.trim() === 'Забронировать')) btnEl.value = 'Выбрать дату';
+      if (untilEl && residentsLastDate && !untilEl.value) untilEl.value = residentsLastDate;
+      return;
+    }
+    if (!bookOn) return;
+    if (btnEl && (!btnEl.value.trim() || btnEl.value.trim() === 'Выбрать дату')) btnEl.value = 'Забронировать';
     var iso = residentsDateIso();
     if (untilEl && iso && !untilEl.value) untilEl.value = iso;
   }
-  if (resBooking) resBooking.addEventListener('change', syncResidentsBooking);
+  if (resDates) resDates.addEventListener('change', function(){
+    if (resDates.checked && resBooking) resBooking.checked = false;
+    syncResidentsBooking();
+    saveDraft();
+  });
+  if (resBooking) resBooking.addEventListener('change', function(){
+    if (resBooking.checked && resDates) resDates.checked = false;
+    syncResidentsBooking();
+    saveDraft();
+  });
   if (resShow) resShow.addEventListener('change', function(){
     var untilEl = form.querySelector('[name=followup_until]');
     var iso = residentsDateIso();
