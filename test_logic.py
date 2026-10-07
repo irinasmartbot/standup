@@ -297,6 +297,10 @@ def test_mailing_vk_denied_and_defaults():
     assert MAILING_TEST_USER_IDS["telegram"] == 243
     assert MAILING_TEST_USER_IDS["vkontakte"] == 20622
     assert MAIL_FOLLOWUP_DEDUPE_SEC == 900.0
+    from bot.admin.mailing_worker import _vk_photo_send_failed
+
+    assert _vk_photo_send_failed(RuntimeError("invalid photo attachment"))
+    assert not _vk_photo_send_failed(RuntimeError("timeout"))
     print("mailing vk denied and defaults: OK")
 
 

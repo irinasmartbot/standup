@@ -27,6 +27,9 @@ _worker_started = False
 _tg_bot = None
 # file_id картинки по campaign_id: без повторной загрузки одного и того же файла.
 _tg_photo_file_ids: dict[int, str] = {}
+_vk_client = None
+# VK attachment баннера по campaign_id — без upload на каждого получателя.
+_vk_photo_attachments: dict[int, str] = {}
 
 
 def _bot_token() -> str:
@@ -132,30 +135,56 @@ async def _send_telegram(
     return None
 
 
-async def _send_vkontakte(campaign: dict, peer_id: int) -> None:
+async def _get_vk_client():
+    global _vk_client
     from bot.vk.client import VKClient
     from bot.vk.config import load_vk_settings
+
+    if _vk_client is None:
+        settings = load_vk_settings()
+        if not settings.is_configured:
+            raise RuntimeError("VK не настроен")
+        _vk_client = VKClient(settings)
+    return _vk_client
+
+
+def _vk_photo_send_failed(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        needle in text
+        for needle in ("attachment", "photo", "access denied", "invalid", "can't send")
+    )
+
+
+async def _upload_vk_mailing_photo(client, campaign: dict, peer_id: int) -> str | None:
+    photo_path = (campaign.get("photo_path") or "").strip()
+    if not photo_path or not Path(photo_path).is_file():
+        return None
+    data = Path(photo_path).read_bytes()
+    return await client.upload_message_photo(
+        int(peer_id),
+        data,
+        filename=Path(photo_path).name,
+    )
+
+
+async def _send_vkontakte(campaign: dict, peer_id: int) -> None:
     from bot.vk.keyboards import VKKeyboardBuilder
 
-    settings = load_vk_settings()
-    if not settings.is_configured:
-        raise RuntimeError("VK не настроен")
-
+    client = await _get_vk_client()
+    campaign_id = int(campaign["id"])
     text = (campaign.get("body_html") or "").strip() or " "
     photo_path = (campaign.get("photo_path") or "").strip()
     button_text = (campaign.get("button_text") or "").strip()
     button_url = (campaign.get("button_url") or "").strip()
     followup = (campaign.get("followup_html") or "").strip()
 
-    client = VKClient(settings)
-    attachment = None
-    if photo_path and Path(photo_path).is_file():
-        data = Path(photo_path).read_bytes()
-        attachment = await client.upload_message_photo(
-            int(peer_id),
-            data,
-            filename=Path(photo_path).name,
-        )
+    attachment = _vk_photo_attachments.get(campaign_id) if photo_path else None
+    used_cache = bool(attachment)
+    if photo_path and not attachment:
+        attachment = await _upload_vk_mailing_photo(client, campaign, peer_id)
+        if attachment:
+            _vk_photo_attachments[campaign_id] = attachment
 
     keyboard = None
     if button_text:
@@ -171,12 +200,34 @@ async def _send_vkontakte(campaign: dict, peer_id: int) -> None:
             )
         keyboard = kb.as_json()
 
-    await client.send_message(
-        int(peer_id),
-        text,
-        keyboard=keyboard,
-        attachment=attachment,
-    )
+    try:
+        await client.send_message(
+            int(peer_id),
+            text,
+            keyboard=keyboard,
+            attachment=attachment,
+        )
+    except Exception as exc:
+        if used_cache and mailing_error_is_vk_denied(str(exc)):
+            raise
+        if not (used_cache and _vk_photo_send_failed(exc)):
+            raise
+        logger.warning(
+            "mailing VK cached photo failed campaign=%s peer=%s: %s; reuploading",
+            campaign_id,
+            peer_id,
+            exc,
+        )
+        _vk_photo_attachments.pop(campaign_id, None)
+        attachment = await _upload_vk_mailing_photo(client, campaign, peer_id)
+        if attachment:
+            _vk_photo_attachments[campaign_id] = attachment
+        await client.send_message(
+            int(peer_id),
+            text,
+            keyboard=keyboard,
+            attachment=attachment,
+        )
 
 
 async def send_one(campaign: dict, recipient: dict, *, bot=None) -> None:
