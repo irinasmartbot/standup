@@ -830,7 +830,7 @@ class VKBotApp:
         file_map = {
             "hitloto_start": "hitloto_start.png",
             "residents_start": "residents_start.jpg",
-            "show_cover": "show_01.png",
+            "show_cover": "show_01.jpg",
             "temple_bar": "temple_bar.jpg",
             "escobar": "escobar.jpg",
             "nebar": "nebar.jpg",

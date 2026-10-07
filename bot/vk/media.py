@@ -12,7 +12,7 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 _MAX_RANDOM_PHOTO_SIZE = 5 * 1024 * 1024
-_DEFAULT_SHOW_COVER = "фото/show_01.png"
+_DEFAULT_SHOW_COVER = "фото/show_01.jpg"
 
 
 def _repo_root() -> Path:

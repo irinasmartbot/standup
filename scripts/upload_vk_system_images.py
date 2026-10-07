@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import os
 import ssl
 import sys
@@ -37,7 +38,7 @@ DEFAULT_IMAGE_NAMES = [
 ]
 
 DEFAULT_IMAGE_KEYS = {
-    "show_cover": "фото/show_01.png",
+    "show_cover": "фото/show_01.jpg",
 }
 
 # Same exclusions as TG random covers: venues, ticket, hitloto, reviews.
@@ -207,7 +208,7 @@ async def main():
             print(f"{key}: {attachment}")
             ok += 1
             await asyncio.sleep(0.35)
-        except (VKAPIError, RuntimeError, OSError, aiohttp.ClientError) as exc:
+        except (VKAPIError, RuntimeError, OSError, aiohttp.ClientError, json.JSONDecodeError) as exc:
             failed += 1
             print(f"FAIL {key} ({path.name}): {exc}")
             continue

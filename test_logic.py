@@ -750,14 +750,15 @@ def test_random_show_covers():
     from bot.vk.media import _DEFAULT_SHOW_COVER, _is_random_cover_file, _live_random_cover_ids
 
     photos = Path("фото")
-    shows = sorted(photos.glob("show_*.png"))
+    shows = sorted(photos.glob("show_*.jpg"))
     assert len(shows) == 11
     for path in shows:
         assert _is_random_cover_file(path)
     assert not (photos / "IMG_20220511_201818.jpg").exists()
+    assert not list(photos.glob("show_*.png"))
     assert Path(_DEFAULT_SHOW_COVER).is_file()
     live = _live_random_cover_ids()
-    assert "show_01.png" in live
+    assert "show_01.jpg" in live
     assert "show_01" in live
     assert "escobar.jpg" not in live
     assert "residents_start.jpg" not in live
