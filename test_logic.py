@@ -744,6 +744,26 @@ def test_vk_same_day_warning_import():
     print("vk same-day warning import: OK")
 
 
+def test_random_show_covers():
+    from pathlib import Path
+
+    from bot.vk.media import _DEFAULT_SHOW_COVER, _is_random_cover_file, _live_random_cover_ids
+
+    photos = Path("фото")
+    shows = sorted(photos.glob("show_*.png"))
+    assert len(shows) == 11
+    for path in shows:
+        assert _is_random_cover_file(path)
+    assert not (photos / "IMG_20220511_201818.jpg").exists()
+    assert Path(_DEFAULT_SHOW_COVER).is_file()
+    live = _live_random_cover_ids()
+    assert "show_01.png" in live
+    assert "show_01" in live
+    assert "escobar.jpg" not in live
+    assert "residents_start.jpg" not in live
+    print("random show covers: OK")
+
+
 def test_vk_dispatch_ensures_user_name():
     from pathlib import Path
 
@@ -771,6 +791,7 @@ async def main():
     test_vk_raffle_vs_show_gift_routing()
     test_vk_raffle_screenshot_avoids_tg_handler_import()
     test_vk_same_day_warning_import()
+    test_random_show_covers()
     test_vk_dispatch_ensures_user_name()
     events = await load_events()
     print(f"events loaded: {len(events)}")

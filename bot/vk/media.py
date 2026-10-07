@@ -12,7 +12,7 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 _MAX_RANDOM_PHOTO_SIZE = 5 * 1024 * 1024
-_DEFAULT_SHOW_COVER = "фото/IMG_20220511_201818.jpg"
+_DEFAULT_SHOW_COVER = "фото/show_01.png"
 
 
 def _repo_root() -> Path:
@@ -135,8 +135,26 @@ def system_cover_attachment(cache: VKSystemImageCache, *keys: str) -> str | None
     return None
 
 
+def _live_random_cover_ids() -> set[str]:
+    """Имена и stem файлов, которые сейчас в пуле рандома на диске."""
+    ids: set[str] = set()
+    for directory in _photos_dirs():
+        try:
+            paths = list(directory.iterdir())
+        except OSError:
+            continue
+        for path in paths:
+            if path.is_file() and _is_random_cover_file(path):
+                ids.add(path.name.lower())
+                ids.add(path.stem.lower())
+    return ids
+
+
 def random_show_cover_attachment(cache: VKSystemImageCache) -> str | None:
     """Случайная обложка шоу из кэша VK (без площадок / хитлото / билета)."""
+    live = _live_random_cover_ids()
+    if not live:
+        return None
     banned_keys = set(_EXCLUDED_RANDOM_COVER_KEYS)
     banned_attachments = {(cache.get(key) or "").strip() for key in banned_keys}
     banned_attachments.discard("")
@@ -147,6 +165,8 @@ def random_show_cover_attachment(cache: VKSystemImageCache) -> str | None:
         name = path.rsplit("/", 1)[-1] if path else key
         attachment = (img.attachment or "").strip()
         if not key or not attachment:
+            continue
+        if key not in live and name not in live:
             continue
         if attachment in banned_attachments:
             continue

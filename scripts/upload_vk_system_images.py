@@ -37,7 +37,7 @@ DEFAULT_IMAGE_NAMES = [
 ]
 
 DEFAULT_IMAGE_KEYS = {
-    "show_cover": "фото/IMG_20220511_201818.jpg",
+    "show_cover": "фото/show_01.png",
 }
 
 # Same exclusions as TG random covers: venues, ticket, hitloto, reviews.
