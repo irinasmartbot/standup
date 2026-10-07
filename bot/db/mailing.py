@@ -491,12 +491,12 @@ def resolve_mailing_button_fields(
     return "", MAIL_FLOW_BOOKING_RESIDENT, until
 
 
-# Повтор того же текста после кнопки рассылки — не чаще чем раз в 30 мин.
-MAIL_FOLLOWUP_DEDUPE_SEC = 1800.0
+# Повтор того же текста после кнопки рассылки — не чаще чем раз в 15 мин.
+MAIL_FOLLOWUP_DEDUPE_SEC = 900.0
 
 
 def claim_mail_followup_send(*, user_id: int, text: str) -> bool:
-    """True — можно отправить; False — такой же текст уже уходил этому user_id < 30 мин."""
+    """True — можно отправить; False — такой же текст уже уходил этому user_id < 15 мин."""
     if not user_id or not (text or "").strip():
         return True
     import hashlib

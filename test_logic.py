@@ -281,7 +281,11 @@ def test_mailing_best_show_fill():
 
 
 def test_mailing_vk_denied_and_defaults():
-    from bot.db.mailing import MAILING_TEST_USER_IDS, mailing_error_is_vk_denied
+    from bot.db.mailing import (
+        MAIL_FOLLOWUP_DEDUPE_SEC,
+        MAILING_TEST_USER_IDS,
+        mailing_error_is_vk_denied,
+    )
 
     assert mailing_error_is_vk_denied(
         "messages.send: Can't send messages for users without permission"
@@ -292,6 +296,7 @@ def test_mailing_vk_denied_and_defaults():
     assert not mailing_error_is_vk_denied(None)
     assert MAILING_TEST_USER_IDS["telegram"] == 243
     assert MAILING_TEST_USER_IDS["vkontakte"] == 20622
+    assert MAIL_FOLLOWUP_DEDUPE_SEC == 900.0
     print("mailing vk denied and defaults: OK")
 
 
