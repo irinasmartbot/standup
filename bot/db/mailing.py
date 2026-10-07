@@ -1612,21 +1612,45 @@ def save_mailing_templates(items: list[dict]) -> list[dict]:
     return list_mailing_templates()
 
 
-def claim_next_campaign() -> dict | None:
-    """Pick queued campaign that is due, or continue a running one."""
+def mailing_worker_channels(worker_channel: str) -> tuple[str, ...]:
+    """Какие campaign.channel берёт воркер Telegram или VK."""
+    ch = (worker_channel or "").strip()
+    if ch == "telegram":
+        return ("telegram", "both")
+    if ch == "vkontakte":
+        return ("vkontakte", "both")
+    return ("telegram", "vkontakte", "both")
+
+
+def claim_next_campaign(worker_channel: str = "telegram") -> dict | None:
+    """Очередная кампания для воркера канала. TG и VK могут идти параллельно."""
     ensure_mailing_tables()
     if not _use_postgres():
         return None
+    worker = (worker_channel or "").strip()
+    if worker not in ("telegram", "vkontakte"):
+        worker = "telegram"
+    channels = list(mailing_worker_channels(worker))
+    params = {"channels": channels, "worker_channel": worker}
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id FROM mailing_campaigns
-                WHERE status = 'running'
-                ORDER BY id
+                SELECT c.id
+                FROM mailing_campaigns c
+                WHERE c.status = 'running'
+                  AND c.channel = ANY(%(channels)s)
+                  AND EXISTS (
+                      SELECT 1
+                      FROM mailing_recipients r
+                      WHERE r.campaign_id = c.id
+                        AND r.status = 'pending'
+                        AND r.channel = %(worker_channel)s
+                  )
+                ORDER BY c.id
                 LIMIT 1
-                FOR UPDATE SKIP LOCKED
-                """
+                """,
+                params,
             )
             row = cur.fetchone()
             if not row:
@@ -1634,11 +1658,13 @@ def claim_next_campaign() -> dict | None:
                     """
                     SELECT id FROM mailing_campaigns
                     WHERE status = 'queued'
+                      AND channel = ANY(%(channels)s)
                       AND (scheduled_at IS NULL OR scheduled_at <= NOW())
                     ORDER BY COALESCE(scheduled_at, created_at), id
                     LIMIT 1
                     FOR UPDATE SKIP LOCKED
-                    """
+                    """,
+                    params,
                 )
                 row = cur.fetchone()
                 if not row:
@@ -1664,19 +1690,32 @@ def claim_next_campaign() -> dict | None:
     return campaign
 
 
-def fetch_pending_recipients(campaign_id: int, limit: int = 25) -> list[dict]:
+def fetch_pending_recipients(
+    campaign_id: int,
+    limit: int = 25,
+    *,
+    channel: str | None = None,
+) -> list[dict]:
+    extra = ""
+    params: dict[str, Any] = {
+        "cid": int(campaign_id),
+        "limit": max(1, min(int(limit), 100)),
+    }
+    if channel in ("telegram", "vkontakte"):
+        extra = " AND channel = %(channel)s"
+        params["channel"] = channel
     with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT *
                 FROM mailing_recipients
-                WHERE campaign_id = %s AND status = 'pending'
+                WHERE campaign_id = %(cid)s AND status = 'pending'{extra}
                 ORDER BY id
-                LIMIT %s
+                LIMIT %(limit)s
                 FOR UPDATE SKIP LOCKED
                 """,
-                (int(campaign_id), max(1, min(int(limit), 100))),
+                params,
             )
             rows = [dict(r) for r in cur.fetchall()]
         conn.commit()

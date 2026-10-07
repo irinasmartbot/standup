@@ -282,18 +282,19 @@ async def _send_with_flood_retry(campaign: dict, recipient: dict, *, bot=None) -
             await asyncio.sleep(sleep_for)
 
 
-async def mailing_worker_loop() -> None:
+async def mailing_worker_loop(worker_channel: str = "telegram") -> None:
     ensure_mailing_tables()
-    logger.info("mailing worker started")
+    logger.info("mailing worker started channel=%s", worker_channel)
     bot = None
-    try:
-        bot = await _get_tg_bot()
-    except Exception:
-        logger.warning("mailing worker: TG bot not ready yet (BOT_TOKEN?)")
+    if worker_channel == "telegram":
+        try:
+            bot = await _get_tg_bot()
+        except Exception:
+            logger.warning("mailing worker: TG bot not ready yet (BOT_TOKEN?)")
 
     while True:
         try:
-            campaign = await asyncio.to_thread(claim_next_campaign)
+            campaign = await asyncio.to_thread(claim_next_campaign, worker_channel)
             if not campaign:
                 await asyncio.sleep(2.0)
                 continue
@@ -305,10 +306,11 @@ async def mailing_worker_loop() -> None:
             status_check_every = 25
             sent_in_run = 0
             last_status_check = 0.0
-            try:
-                bot = await _get_tg_bot()
-            except Exception:
-                bot = None
+            if worker_channel == "telegram":
+                try:
+                    bot = await _get_tg_bot()
+                except Exception:
+                    bot = None
 
             while True:
                 now = time.monotonic()
@@ -329,7 +331,12 @@ async def mailing_worker_loop() -> None:
                 else:
                     fresh = campaign
 
-                batch = await asyncio.to_thread(fetch_pending_recipients, campaign_id, 50)
+                batch = await asyncio.to_thread(
+                    fetch_pending_recipients,
+                    campaign_id,
+                    50,
+                    channel=worker_channel,
+                )
                 if not batch:
                     await asyncio.to_thread(finalize_if_complete, campaign_id)
                     break
@@ -392,13 +399,26 @@ def start_mailing_worker(app) -> None:
 
     async def _on_startup(_app):
         ensure_mailing_tables()
-        _app["mailing_worker"] = asyncio.create_task(mailing_worker_loop())
+        tasks = [
+            asyncio.create_task(
+                mailing_worker_loop("telegram"), name="mailing-telegram"
+            ),
+            asyncio.create_task(
+                mailing_worker_loop("vkontakte"), name="mailing-vkontakte"
+            ),
+        ]
+        _app["mailing_workers"] = tasks
+        _app["mailing_worker"] = tasks[0]
 
     async def _on_cleanup(_app):
         global _tg_bot
-        task = _app.get("mailing_worker")
-        if task:
+        tasks = list(_app.get("mailing_workers") or [])
+        one = _app.get("mailing_worker")
+        if one is not None and one not in tasks:
+            tasks.append(one)
+        for task in tasks:
             task.cancel()
+        for task in tasks:
             try:
                 await task
             except asyncio.CancelledError:

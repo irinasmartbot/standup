@@ -281,6 +281,8 @@ def test_mailing_best_show_fill():
 
 
 def test_mailing_vk_denied_and_defaults():
+    from pathlib import Path
+
     from bot.db.mailing import (
         MAIL_FOLLOWUP_DEDUPE_SEC,
         MAILING_TEST_USER_IDS,
@@ -297,6 +299,13 @@ def test_mailing_vk_denied_and_defaults():
     assert MAILING_TEST_USER_IDS["telegram"] == 243
     assert MAILING_TEST_USER_IDS["vkontakte"] == 20622
     assert MAIL_FOLLOWUP_DEDUPE_SEC == 900.0
+    from bot.db.mailing import mailing_worker_channels
+
+    assert mailing_worker_channels("telegram") == ("telegram", "both")
+    assert mailing_worker_channels("vkontakte") == ("vkontakte", "both")
+    worker_src = Path("bot/admin/mailing_worker.py").read_text(encoding="utf-8")
+    assert 'mailing_worker_loop("telegram")' in worker_src
+    assert 'mailing_worker_loop("vkontakte")' in worker_src
     from bot.admin.mailing_worker import _vk_photo_send_failed
 
     assert _vk_photo_send_failed(RuntimeError("invalid photo attachment"))
