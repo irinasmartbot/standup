@@ -5,6 +5,7 @@ from typing import Optional
 import psycopg
 
 from bot.config import BOOKINGS_SOURCE, DATABASE_URL, DB_PATH
+from bot.utils.show_formats import OFFLINE_GIFT_EVENT_FORMATS
 
 
 BOOKING_SELECT_SQL = """
@@ -2017,12 +2018,12 @@ def get_offline_gift_dates(limit: int = 14) -> list[dict]:
                 FROM events e
                 WHERE e.status = 'active'
                   AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
-                  AND e.format IN ('proverka', 'best', 'hitloto')
+                  AND e.format = ANY(%s)
                 GROUP BY e.event_date
                 ORDER BY e.event_date
                 LIMIT %s
                 """,
-                (int(limit),),
+                (list(OFFLINE_GIFT_EVENT_FORMATS), int(limit)),
             )
             return [
                 {"date": row[0], "weekday": row[1] or "", "events_count": int(row[2] or 0)}
@@ -2053,11 +2054,11 @@ def get_offline_gift_events_for_date(event_date: str) -> list[dict]:
                 LEFT JOIN vk_offline_gift_entries g ON g.event_id = e.id
                 WHERE e.status = 'active'
                   AND e.event_date = %s
-                  AND e.format IN ('proverka', 'best', 'hitloto')
+                  AND e.format = ANY(%s)
                 GROUP BY e.id
                 ORDER BY e.event_time, e.location, e.format
                 """,
-                (_parse_event_date(event_date),),
+                (_parse_event_date(event_date), list(OFFLINE_GIFT_EVENT_FORMATS)),
             )
             return [_offline_event_row(row) for row in cur.fetchall()]
 
@@ -2085,10 +2086,11 @@ def get_offline_gift_today_events() -> list[dict]:
                 LEFT JOIN vk_offline_gift_entries g ON g.event_id = e.id
                 WHERE e.status = 'active'
                   AND e.event_date = (now() AT TIME ZONE 'Europe/Moscow')::date
-                  AND e.format IN ('proverka', 'best', 'hitloto')
+                  AND e.format = ANY(%s)
                 GROUP BY e.id
                 ORDER BY e.event_time, e.location, e.format
-                """
+                """,
+                (list(OFFLINE_GIFT_EVENT_FORMATS),),
             )
             return [_offline_event_row(row) for row in cur.fetchall()]
 
@@ -2116,10 +2118,10 @@ def get_offline_gift_event(event_id: int) -> dict | None:
                 LEFT JOIN vk_offline_gift_entries g ON g.event_id = e.id
                 WHERE e.id = %s
                   AND e.status = 'active'
-                  AND e.format IN ('proverka', 'best', 'hitloto')
+                  AND e.format = ANY(%s)
                 GROUP BY e.id
                 """,
-                (int(event_id),),
+                (int(event_id), list(OFFLINE_GIFT_EVENT_FORMATS)),
             )
             row = cur.fetchone()
             return _offline_event_row(row) if row else None

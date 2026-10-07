@@ -418,11 +418,17 @@ def test_vk_message_item_has_photo():
 def test_residents_format():
     from bot.db.events_admin import AFISHA_FORMATS, AFISHA_FORMAT_LABELS
     from bot.handlers.formats import FREE_FORMATS_TEXT, FORMATS_TEXT
+    from pathlib import Path
+
     from bot.utils.show_formats import (
+        BEST,
         BOOKING_FORMAT_CHECK,
         EVENT_FORMAT_CHECK,
+        HITLOTO,
         MANAGER_STATA_FORMATS,
         MY_BOOKINGS_FORMATS,
+        OFFLINE_GIFT_EVENT_FORMATS,
+        PROVERKA,
         RESIDENTS,
         RESIDENTS_LABEL,
     )
@@ -434,6 +440,10 @@ def test_residents_format():
     assert RESIDENTS in BOOKING_FORMAT_CHECK
     assert RESIDENTS in MANAGER_STATA_FORMATS
     assert RESIDENTS in MY_BOOKINGS_FORMATS
+    assert OFFLINE_GIFT_EVENT_FORMATS == (PROVERKA, BEST, HITLOTO, RESIDENTS)
+    crud_src = Path("bot/db/crud.py").read_text(encoding="utf-8")
+    assert "OFFLINE_GIFT_EVENT_FORMATS" in crud_src
+    assert "e.format IN ('proverka', 'best', 'hitloto')" not in crud_src
     assert RESIDENTS_LABEL == "StandUp Сольники от резидентов"
     assert "StandUp Сольники от резидентов" in FORMATS_TEXT
     assert "StandUp Проверка материала" in FREE_FORMATS_TEXT
