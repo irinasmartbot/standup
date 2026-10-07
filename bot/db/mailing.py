@@ -478,9 +478,7 @@ def resolve_mailing_button_fields(
     """URL / follow-up / дата кнопки. Для брони URL очищаем, follow-up — служебный маркер."""
     until = (followup_until or "").strip() or None
     if residents_dates:
-        if not until:
-            until = mailing_residents_last_date_iso()
-        return "", MAIL_FLOW_RESIDENTS_DATES, until
+        return "", MAIL_FLOW_RESIDENTS_DATES, None
     event_id = str(residents_event_id or "").strip()
     if event_id:
         if not until:
@@ -836,8 +834,20 @@ def campaign_followup_expired(
     campaign: dict | None,
     *,
     now: datetime | None = None,
+    residents_shows: list[dict] | None = None,
 ) -> bool:
-    """Кнопка уже неактуальна: день после даты шоу или в этот день после времени начала."""
+    """Кнопка уже неактуальна: день после даты шоу или в этот день после времени начала.
+
+    Список дат сольника из рассылки живой: не смотрим followup_until, а афишу.
+    """
+    follow_text = (campaign or {}).get("followup_html") or ""
+    if followup_is_residents_dates_flow(follow_text):
+        shows = (
+            list_mailing_residents_shows()
+            if residents_shows is None
+            else residents_shows
+        )
+        return not shows
     until = campaign_followup_until(campaign)
     if not until:
         return False

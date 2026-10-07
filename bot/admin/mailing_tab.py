@@ -419,11 +419,11 @@ def render_mailing_tab(
       <label id="mail-residents-show-wrap" hidden>Дата сольника
         <select name="residents_event_id" id="mail-residents-event-id">{''.join(residents_opts)}</select>
       </label>
-      <p class="muted" style="margin:6px 0 0">Список дат — все активные сольники из афиши. Либо выберите одну дату для прямой брони. Ссылку и текст «после кнопки» заполнять не нужно.</p>
+      <p class="muted" style="margin:6px 0 0">Список дат живой: при каждом нажатии из текущей афиши (прошедшие пропадают, новые вроде 11 ноября появляются). Либо выберите одну дату для прямой брони. Ссылку и текст «после кнопки» заполнять не нужно.</p>
     </fieldset>
     <label>Кнопка актуальна до (дата шоу)
       <input type="date" name="followup_until">
-      <span class="muted">После этой даты и в день шоу после времени начала из письма — «мероприятие уже неактуально». Если пусто, возьмём дату шоу из фильтров ниже.</span>
+      <span class="muted">Для «Выбрать дату» оставьте пустым — список всегда из афиши. Для остальных писем: после этой даты и в день шоу после начала — «уже неактуально». Если пусто, возьмём дату шоу из фильтров ниже.</span>
     </label>
     <fieldset class="mailing-row">
       <legend>Превью ссылок в Телеграме</legend>
@@ -862,7 +862,7 @@ var MAIL_RESIDENTS_LAST_DATE = """
     var untilEl = form.querySelector('[name=followup_until]');
     if (datesOn) {
       if (btnEl && (!btnEl.value.trim() || btnEl.value.trim() === 'Забронировать')) btnEl.value = 'Выбрать дату';
-      if (untilEl && residentsLastDate && !untilEl.value) untilEl.value = residentsLastDate;
+      if (untilEl) untilEl.value = '';
       return;
     }
     if (!bookOn) return;

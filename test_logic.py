@@ -126,7 +126,7 @@ def test_mailing_booking_button_fields():
     assert follow4 == MAIL_FLOW_RESIDENTS_DATES
     assert followup_is_residents_dates_flow(follow4)
     assert not followup_is_residents_booking_flow(follow4)
-    assert until4 == "2026-10-28"
+    assert until4 is None
     assert parse_mailing_residents_event_id(MAIL_FLOW_RESIDENTS_DATES) is None
     print("mailing booking button fields: OK")
 
@@ -298,7 +298,11 @@ def test_mailing_vk_denied_and_defaults():
 def test_mailing_followup_expires_after_show_start():
     from datetime import date, datetime, time
 
-    from bot.db.mailing import campaign_followup_expired, parse_mailing_show_clock
+    from bot.db.mailing import (
+        MAIL_FLOW_RESIDENTS_DATES,
+        campaign_followup_expired,
+        parse_mailing_show_clock,
+    )
     from bot.utils.ticket import MSK
 
     assert parse_mailing_show_clock("Здравствуйте, начало в 20:00, успеваете?") == time(20, 0)
@@ -330,6 +334,20 @@ def test_mailing_followup_expires_after_show_start():
     }
     assert not campaign_followup_expired(no_clock, now=after)
     assert campaign_followup_expired(no_clock, now=next_day)
+
+    dates_flow = {
+        "followup_until": date(2026, 10, 7),
+        "followup_html": MAIL_FLOW_RESIDENTS_DATES,
+        "body_html": "",
+        "filters": {},
+    }
+    week_later = datetime(2026, 10, 14, 12, 0, tzinfo=MSK)
+    assert not campaign_followup_expired(
+        dates_flow,
+        now=week_later,
+        residents_shows=[{"date_iso": "2026-10-14"}, {"date_iso": "2026-11-11"}],
+    )
+    assert campaign_followup_expired(dates_flow, now=week_later, residents_shows=[])
     print("mailing followup expires after show start: OK")
 
 
