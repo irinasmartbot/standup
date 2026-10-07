@@ -306,6 +306,15 @@ def test_mailing_vk_denied_and_defaults():
     worker_src = Path("bot/admin/mailing_worker.py").read_text(encoding="utf-8")
     assert 'mailing_worker_loop("telegram")' in worker_src
     assert 'mailing_worker_loop("vkontakte")' in worker_src
+    loop_fn = worker_src[
+        worker_src.find("async def mailing_worker_loop") : worker_src.find(
+            "def start_mailing_worker"
+        )
+    ]
+    assert "ensure_mailing_tables()" not in loop_fn
+    mailing_src = Path("bot/db/mailing.py").read_text(encoding="utf-8")
+    assert "_ENSURE_LOCK" in mailing_src
+    assert "_ENSURED = True" in mailing_src
     from bot.admin.mailing_worker import _vk_photo_send_failed
 
     assert _vk_photo_send_failed(RuntimeError("invalid photo attachment"))

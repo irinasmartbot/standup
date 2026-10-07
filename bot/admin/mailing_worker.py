@@ -283,7 +283,6 @@ async def _send_with_flood_retry(campaign: dict, recipient: dict, *, bot=None) -
 
 
 async def mailing_worker_loop(worker_channel: str = "telegram") -> None:
-    ensure_mailing_tables()
     logger.info("mailing worker started channel=%s", worker_channel)
     bot = None
     if worker_channel == "telegram":

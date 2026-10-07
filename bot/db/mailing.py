@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from datetime import date, datetime, time, timezone
 from typing import Any
 
@@ -515,9 +516,23 @@ def _use_postgres() -> bool:
     return BOOKINGS_SOURCE == "postgres" and bool(DATABASE_URL)
 
 
+_ENSURE_LOCK = threading.Lock()
+_ENSURED = False
+
+
 def ensure_mailing_tables() -> None:
     if not _use_postgres():
         return
+    if _ENSURED:
+        return
+    with _ENSURE_LOCK:
+        if _ENSURED:
+            return
+        _ensure_mailing_tables_locked()
+
+
+def _ensure_mailing_tables_locked() -> None:
+    global _ENSURED
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
@@ -706,6 +721,7 @@ def ensure_mailing_tables() -> None:
                         },
                     )
             conn.commit()
+        _ENSURED = True
     except Exception:
         logger.exception("ensure_mailing_tables failed")
 
