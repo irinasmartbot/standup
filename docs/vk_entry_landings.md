@@ -32,7 +32,18 @@ https://vk.ru/app54704296#flow=residents
 https://vk.ru/app54704296#flow=platka
 https://vk.com/app54704296_-225298932#flow=raffle
 https://vk.com/app54704296_-225298932#flow=offline_gift
+https://vk.ru/app54704296_-225298932#flow=chek_list
 ```
+
+Служебный чек-лист участников зального розыгрыша (как Telegram `?start=chek_list`): даты → шоу → список VK, выбор победителя. Кнопки в общем меню mini app нет.
+
+```text
+https://vk.ru/app54704296_-225298932#flow=chek_list
+https://vk.ru/app54704296#flow=chek_list
+https://go.moscowstandupshow.ru/vk-mini/start/chek_list
+```
+
+На ПК ссылка с `_-225298932` иногда теряет hash и открывает общее меню — тогда короткая без группы. Это не участие гостя (`#flow=offline_gift`) и не розыгрыш за репост (`#flow=raffle`).
 
 Для `residents` только короткая без `_-group`: на ПК иначе теряется hash и открывается общее меню.
 
@@ -55,6 +66,7 @@ https://go.moscowstandupshow.ru/vk-mini/start/residents
 https://go.moscowstandupshow.ru/vk-mini/start/platka
 https://go.moscowstandupshow.ru/vk-mini/start/raffle
 https://go.moscowstandupshow.ru/vk-mini/start/offline_gift
+https://go.moscowstandupshow.ru/vk-mini/start/chek_list
 ```
 
 ## Как работает

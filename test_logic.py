@@ -714,6 +714,42 @@ def test_vk_raffle_vs_show_gift_routing():
     print("vk raffle vs show gift routing: OK")
 
 
+def test_vk_chek_list_flow():
+    from pathlib import Path
+
+    from bot.admin.vk_entry import (
+        FLOWS,
+        MINI_APP_DIRECT_FLOWS,
+        MINI_APP_VISIBLE_FLOWS,
+        parse_mini_app_flow,
+        remap_raffle_button_in_gift_session,
+    )
+
+    assert parse_mini_app_flow("chek_list") == "chek_list"
+    assert parse_mini_app_flow("#flow=chek_list") == "chek_list"
+    assert parse_mini_app_flow("flow=chek_list") == "chek_list"
+    assert parse_mini_app_flow("check_list") == "chek_list"
+    assert parse_mini_app_flow("checklist") == "chek_list"
+    assert "chek_list" in FLOWS
+    assert "chek_list" in MINI_APP_DIRECT_FLOWS
+    assert "chek_list" not in MINI_APP_VISIBLE_FLOWS
+    assert remap_raffle_button_in_gift_session("raffle", "#flow=chek_list") == "raffle"
+
+    entry_src = Path("bot/admin/vk_entry.py").read_text(encoding="utf-8")
+    body = entry_src[entry_src.find("async def _send_flow_chain_body") :]
+    chek_at = body.find('if flow_key == "chek_list"')
+    gift_at = body.find("get_offline_gift_today_events")
+    assert chek_at != -1 and gift_at != -1 and chek_at < gift_at
+    assert 'chek_list: "chek_list"' in entry_src
+
+    app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert "async def send_check_list_start_message" in app_src
+    assert "async def _handle_check_list_flow" in app_src
+    assert '"чек лист": "chek_list"' in app_src
+    assert '"розыгрыш": "offline_gift"' not in app_src
+    print("vk chek_list flow: OK")
+
+
 def test_vk_raffle_screenshot_avoids_tg_handler_import():
     from pathlib import Path
 
@@ -790,6 +826,7 @@ async def main():
     test_tg_keeps_ticket_message()
     test_vk_platka_flow()
     test_vk_raffle_vs_show_gift_routing()
+    test_vk_chek_list_flow()
     test_vk_raffle_screenshot_avoids_tg_handler_import()
     test_vk_same_day_warning_import()
     test_random_show_covers()

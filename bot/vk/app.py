@@ -94,6 +94,21 @@ _EXPIRED_SHOW_REF_VALUES = frozenset({
     "pushkin",
 })
 _OFFLINE_GIFT_REF_VALUES = frozenset({"offline_gift", "gift"})
+_CHECK_LIST_REF_VALUES = frozenset({"chek_list", "check_list", "checklist"})
+_CHECK_LIST_CMDS = frozenset({
+    "chek_list",
+    "check_list",
+    "og_dates",
+    "og_date",
+    "og_event",
+    "og_draw",
+    "og_redraw",
+    "og_refresh",
+    "og_back_event",
+    "og_dates_page",
+})
+CHECK_LIST_DATES_PAGE_SIZE = 8
+CHECK_LIST_DATES_TEXT = "🎁 <b>Чек-лист VK участников</b>\n\nВыберите дату:"
 _BOOKING_REF_SOURCE_PREFIXES = (
     "standup_book_source_",
     "standup_book_src_",
@@ -242,6 +257,10 @@ def _is_offline_gift_ref(ref: str) -> bool:
     return value in _OFFLINE_GIFT_REF_VALUES or _offline_gift_event_id_from_ref(value) is not None
 
 
+def _is_check_list_ref(ref: str) -> bool:
+    return (ref or "").strip().casefold() in _CHECK_LIST_REF_VALUES
+
+
 def _gift_format_label(value: str) -> str:
     return {
         "proverka": "Проверка",
@@ -268,6 +287,92 @@ def _offline_gift_success_keyboard() -> str:
     kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
+
+
+def _check_list_btn_label(text: str, limit: int = 40) -> str:
+    value = (text or "").strip()
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1] + "…"
+
+
+def _check_list_dates_keyboard(dates: list[dict[str, Any]], page: int = 0) -> str:
+    kb = VKKeyboardBuilder(inline=True)
+    page = max(0, int(page or 0))
+    start = page * CHECK_LIST_DATES_PAGE_SIZE
+    chunk = dates[start : start + CHECK_LIST_DATES_PAGE_SIZE]
+    for item in chunk:
+        label = str(item.get("date") or "")
+        if int(item.get("events_count") or 0) > 1:
+            label += f" · {item['events_count']} шоу"
+        kb.button(
+            _check_list_btn_label(label),
+            _payload("og_date", date=str(item.get("date") or "")),
+            color="primary",
+        )
+    kb.adjust(2)
+    has_prev = page > 0
+    has_next = start + CHECK_LIST_DATES_PAGE_SIZE < len(dates)
+    if has_prev or has_next:
+        kb.row()
+        if has_prev:
+            kb.button("◀️", _payload("og_dates_page", page=page - 1))
+        if has_next:
+            kb.button("▶️", _payload("og_dates_page", page=page + 1))
+    return kb.as_json()
+
+
+def _check_list_events_keyboard(events: list[dict[str, Any]]) -> str:
+    from bot.handlers.offline_gift import _event_label
+
+    kb = VKKeyboardBuilder(inline=True)
+    for event in events[:5]:
+        count = int(event.get("entries_count") or 0)
+        kb.button(
+            _check_list_btn_label(f"{_event_label(event)} · {count} чел."),
+            _payload("og_event", event_id=int(event["id"])),
+            color="primary",
+        )
+    kb.button("⬅️ К датам", _payload("og_dates"))
+    kb.adjust(1)
+    return kb.as_json()
+
+
+def _check_list_event_keyboard(
+    event_id: int,
+    *,
+    has_winner: bool = False,
+    show_back_to_shows: bool = True,
+) -> str:
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button(
+        "🎁 Выбрать победителя",
+        _payload("og_draw", event_id=int(event_id)),
+        color="primary",
+    )
+    if has_winner:
+        kb.button("🔁 Перевыбрать", _payload("og_redraw", event_id=int(event_id)))
+    kb.button("🔄 Обновить", _payload("og_refresh", event_id=int(event_id)))
+    if show_back_to_shows:
+        kb.button("⬅️ К шоу", _payload("og_back_event", event_id=int(event_id)))
+    kb.button("⬅️ К датам", _payload("og_dates"))
+    kb.adjust(1)
+    return kb.as_json()
+
+
+async def send_check_list_start_message(client: VKClient, vk_id: int) -> None:
+    from bot.db.crud import get_offline_gift_dates
+
+    dates = get_offline_gift_dates()
+    if not dates:
+        await client.send_message(vk_id, "Пока нет активных шоу в афише.")
+        return
+    await client.send_message(
+        vk_id,
+        CHECK_LIST_DATES_TEXT,
+        keyboard=_check_list_dates_keyboard(dates, 0),
+    )
+
 
 # HTML с <b>/<i> — client.send_message сам соберёт VK format_data.
 WELCOME_TEXT = (
@@ -2355,6 +2460,14 @@ class VKBotApp:
             "ogift_event",
             "ogift_sub_check",
             "ogift_today",
+            "og_dates",
+            "og_date",
+            "og_event",
+            "og_draw",
+            "og_redraw",
+            "og_refresh",
+            "og_back_event",
+            "og_dates_page",
             "venues_details",
             "venues_card",
         }:
@@ -2621,7 +2734,10 @@ class VKBotApp:
                 "мои брони": "my_bookings",
                 "розыгрыш": "raffle",
                 "участвовать в розыгрыше": "raffle",
-                # chek_list / check_list — только TG-чек-лист админа, не VK-клиент.
+                "chek_list": "chek_list",
+                "check_list": "chek_list",
+                "чек лист": "chek_list",
+                "чек-лист": "chek_list",
                 # Старые текстовые кнопки Salebot → наши сценарии
                 "отменить бронь": "my_bookings",
                 "изменить дату": "my_bookings",
@@ -2677,6 +2793,14 @@ class VKBotApp:
             peer_id,
             vk_id,
             text=text,
+            cmd=cmd,
+            payload=payload,
+        ):
+            return
+
+        if await self._handle_check_list_flow(
+            peer_id,
+            vk_id,
             cmd=cmd,
             payload=payload,
         ):
@@ -2803,6 +2927,17 @@ class VKBotApp:
                 vk_id=vk_id,
                 from_deep_link=bool(is_residents_deeplink or (cmd == "residents" and is_start_entry)),
             )
+            return
+
+        is_check_list_deeplink = _is_check_list_ref(ref) and is_start_entry and not cmd
+        if cmd in {"chek_list", "check_list"} or is_check_list_deeplink:
+            if is_check_list_deeplink:
+                self._track(
+                    vk_id,
+                    EVENT_BOT_START,
+                    props=_entry_props(raw_ref, fallback_payload="chek_list", source=source),
+                )
+            await self._send_check_list_dates(peer_id, 0)
             return
 
         is_platka_deeplink = _is_platka_ref(ref) and is_start_entry and not cmd
@@ -3090,6 +3225,124 @@ class VKBotApp:
             # Кнопка с чужим payload без cmd (старые цепочки Salebot и т.п.)
             logger.info("Unknown VK payload → menu peer_id=%s payload=%r", peer_id, payload)
             await self.send_menu(peer_id, vk_id=vk_id)
+
+    async def _handle_check_list_flow(
+        self,
+        peer_id: int,
+        vk_id: int,
+        *,
+        cmd: str | None,
+        payload: dict[str, Any] | None = None,
+    ) -> bool:
+        del vk_id
+        payload = payload or {}
+        if cmd not in _CHECK_LIST_CMDS:
+            return False
+
+        if cmd in {"chek_list", "check_list", "og_dates"}:
+            await self._send_check_list_dates(peer_id, 0)
+            return True
+
+        if cmd == "og_dates_page":
+            try:
+                page = int(payload.get("page") or 0)
+            except (TypeError, ValueError):
+                page = 0
+            await self._send_check_list_dates(peer_id, page)
+            return True
+
+        if cmd == "og_date":
+            event_date = str(payload.get("date") or "").strip()
+            if not event_date:
+                await self._send_check_list_dates(peer_id, 0)
+                return True
+            await self._send_check_list_events(peer_id, event_date)
+            return True
+
+        try:
+            event_id = int(payload.get("event_id") or 0)
+        except (TypeError, ValueError):
+            event_id = 0
+        if not event_id:
+            await self._send_check_list_dates(peer_id, 0)
+            return True
+
+        if cmd == "og_back_event":
+            from bot.db.crud import get_offline_gift_event
+
+            event = get_offline_gift_event(event_id)
+            if not event:
+                await self._send_text(peer_id, "Шоу не найдено.")
+                return True
+            await self._send_check_list_events(peer_id, str(event.get("date") or ""))
+            return True
+
+        if cmd in {"og_draw", "og_redraw"}:
+            from bot.db.crud import draw_offline_gift_winner, get_offline_gift_entries
+
+            redraw = cmd == "og_redraw"
+            if redraw:
+                entries = get_offline_gift_entries(event_id)
+                if not entries:
+                    await self._send_check_list_entries(peer_id, event_id)
+                    return True
+            winner = draw_offline_gift_winner(event_id, redraw=redraw)
+            if not winner:
+                await self._send_check_list_entries(peer_id, event_id)
+                return True
+            await self._send_check_list_entries(peer_id, event_id)
+            return True
+
+        await self._send_check_list_entries(peer_id, event_id)
+        return True
+
+    async def _send_check_list_dates(self, peer_id: int, page: int = 0) -> None:
+        from bot.db.crud import get_offline_gift_dates
+
+        dates = get_offline_gift_dates()
+        if not dates:
+            await self._send_text(peer_id, "Пока нет активных шоу в афише.")
+            return
+        await self._send_text(
+            peer_id,
+            CHECK_LIST_DATES_TEXT,
+            keyboard=_check_list_dates_keyboard(dates, page),
+        )
+
+    async def _send_check_list_events(self, peer_id: int, event_date: str) -> None:
+        from bot.db.crud import get_offline_gift_events_for_date
+
+        events = get_offline_gift_events_for_date(event_date)
+        if not events:
+            await self._send_text(peer_id, "На эту дату нет активных шоу.")
+            return
+        if len(events) == 1:
+            await self._send_check_list_entries(peer_id, int(events[0]["id"]))
+            return
+        await self._send_text(
+            peer_id,
+            f"Выберите шоу на <b>{html.escape(event_date)}</b>:",
+            keyboard=_check_list_events_keyboard(events),
+        )
+
+    async def _send_check_list_entries(self, peer_id: int, event_id: int) -> None:
+        from bot.db.crud import get_offline_gift_entries, get_offline_gift_event
+        from bot.handlers.offline_gift import _date_has_multiple_shows, _entries_text
+
+        event = get_offline_gift_event(event_id)
+        if not event:
+            await self._send_text(peer_id, "Шоу не найдено.")
+            return
+        entries = get_offline_gift_entries(event_id)
+        await self._send_text(
+            peer_id,
+            _entries_text(event, entries),
+            keyboard=_check_list_event_keyboard(
+                event_id,
+                has_winner=bool(event.get("winner_name")),
+                show_back_to_shows=_date_has_multiple_shows(event.get("date") or ""),
+            ),
+        )
 
     async def _handle_offline_gift_flow(
         self,

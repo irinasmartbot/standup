@@ -8,6 +8,7 @@
 3) пробуем открыть приложение VK (не сайт vk.com)
 
 GET  /vk/booking | /vk/residents | /vk/platka | /vk/raffle | /vk/offline-gift
+     Mini App direct: residents | platka | chek_list
 POST /vk/entry
 """
 
@@ -68,12 +69,19 @@ FLOWS: dict[str, dict[str, Any]] = {
         "lead": "Разрешите сообщения — пришлём платные форматы BEST и Хитлото в личку VK.",
         "ref": "standup_platka",
     },
+    "chek_list": {
+        "title": "Чек-лист",
+        "headline": "Чек-лист участников розыгрыша на шоу",
+        "button": "Чек-лист участников",
+        "lead": "Разрешите сообщения — пришлём чек-лист розыгрыша на шоу в личку VK.",
+        "ref": "chek_list",
+    },
 }
 
 # После модерации снова показываем все входные сценарии mini app.
 MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking", "raffle", "offline_gift")
 # Прямые ссылки с сайта, без кнопки в общем меню mini app.
-MINI_APP_DIRECT_FLOWS: tuple[str, ...] = ("residents", "platka")
+MINI_APP_DIRECT_FLOWS: tuple[str, ...] = ("residents", "platka", "chek_list")
 EXPIRED_DIRECT_FLOWS: frozenset[str] = frozenset(
     {
         "booking_resident",
@@ -105,6 +113,9 @@ _FLOW_ALIASES: dict[str, str] = {
     "buy": "platka",
     "buy_ticket": "platka",
     "standup_platka": "platka",
+    "chek_list": "chek_list",
+    "check_list": "chek_list",
+    "checklist": "chek_list",
 }
 
 
@@ -671,6 +682,12 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
             ),
             attachment=cover,
         )
+        return
+
+    if flow_key == "chek_list":
+        from bot.vk.app import send_check_list_start_message
+
+        await send_check_list_start_message(client, vk_id)
         return
 
     from bot.db.crud import get_offline_gift_today_events
@@ -1264,7 +1281,10 @@ def _mini_app_html(default_flow: str = "") -> str:
     paid: "platka",
     buy: "platka",
     buy_ticket: "platka",
-    standup_platka: "platka"
+    standup_platka: "platka",
+    chek_list: "chek_list",
+    check_list: "chek_list",
+    checklist: "chek_list"
   }};
   var EXPIRED_FLOWS = {{
     booking_resident: true,

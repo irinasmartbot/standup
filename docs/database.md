@@ -43,7 +43,7 @@
 | `hitloto` | Хит-лото | Нет |
 | `residents` | Резиденты стендап | Да |
 
-Подарок на шоу (`vk_offline_gift_*`, Telegram `?start=chek_list`): активные мероприятия форматов `proverka`, `best`, `hitloto`, `residents`.
+Подарок на шоу (`vk_offline_gift_*`, Telegram `?start=chek_list`, VK `#flow=chek_list` для статы / `#flow=offline_gift` для участия гостя): активные мероприятия форматов `proverka`, `best`, `hitloto`, `residents`.
 
 ### Статус мероприятия
 - Присваивается **автоматически** по дате — не нужно менять вручную

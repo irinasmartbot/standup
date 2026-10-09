@@ -17,7 +17,8 @@ FREE_BOOKING_FORMATS = (PROVERKA, RESIDENTS)
 # «Мои брони» and seat reports for door staff.
 MY_BOOKINGS_FORMATS = (PROVERKA, ROZYGRYSH, RESIDENTS)
 
-# Hall gift / Telegram chek_list (`?start=chek_list`, VK `#flow=offline_gift`).
+# Hall gift: guest join is VK `#flow=offline_gift`; staff checklist is
+# Telegram `?start=chek_list` and VK `#flow=chek_list`.
 OFFLINE_GIFT_EVENT_FORMATS = (PROVERKA, BEST, HITLOTO, RESIDENTS)
 
 # new_stata / new_stata_all: проверка + резиденты на одних ссылках.
