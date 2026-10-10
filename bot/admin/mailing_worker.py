@@ -38,7 +38,7 @@ def _bot_token() -> str:
 
 async def _get_tg_bot():
     global _tg_bot
-    from aiogram import Bot
+    from bot.utils.telegram_relay import create_telegram_bot
 
     token = _bot_token()
     if not token:
@@ -49,7 +49,7 @@ async def _get_tg_bot():
                 await _tg_bot.session.close()
             except Exception:
                 pass
-        _tg_bot = Bot(token=token)
+        _tg_bot = create_telegram_bot(token)
     return _tg_bot
 
 

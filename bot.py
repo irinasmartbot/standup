@@ -6,7 +6,7 @@ import os
 import logging
 from io import StringIO, BytesIO
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, F
+from aiogram import Dispatcher, F
 from aiogram.types import Message, CallbackQuery, FSInputFile, BufferedInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -14,6 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from PIL import Image, ImageDraw, ImageFont
+from bot.utils.telegram_relay import create_telegram_bot
 
 # ===== НАСТРОЙКИ =====
 def load_env_file(path=".env"):
@@ -50,7 +51,7 @@ TICKET_TEMPLATE = os.getenv("TICKET_TEMPLATE", "photo_2023-06-26_15-06-46.jpg")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set. Create .env from .env.example and add Telegram bot token.")
 
-bot = Bot(token=BOT_TOKEN)
+bot = create_telegram_bot(BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 

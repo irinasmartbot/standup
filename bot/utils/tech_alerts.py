@@ -10,9 +10,6 @@ import json
 import logging
 import os
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -148,25 +145,16 @@ def notify_tech_sync(
         }
         if reply_markup:
             fields["reply_markup"] = reply_markup
-        payload = urllib.parse.urlencode(fields).encode("utf-8")
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=payload,
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            resp.read()
+        from bot.utils.telegram_relay import telegram_api_post_form
+
+        status, body = telegram_api_post_form(token, "sendMessage", fields, timeout=15)
+        if status >= 400:
+            detail = body.decode("utf-8", errors="replace")
+            logger.warning("tech alert send failed HTTP %s: %s", status, detail)
+            print(f"tech alert HTTP {status}: {detail}", flush=True)
+            return False
         return True
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            detail = str(exc)
-        logger.warning("tech alert send failed HTTP %s: %s", exc.code, detail)
-        print(f"tech alert HTTP {exc.code}: {detail}", flush=True)
-        return False
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (TimeoutError, OSError) as exc:
         logger.warning("tech alert send failed: %s", exc)
         print(f"tech alert error: {exc}", flush=True)
         return False

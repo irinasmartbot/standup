@@ -68,8 +68,8 @@ async def send_cancel_and_raffle_dates(
     reset_raffle: bool = True,
 ) -> dict[str, Any]:
     """Сброс розыгрыша (опц.) → текст → меню дат BEST без сегодня."""
-    from aiogram import Bot
     from bot.db.crud import reset_raffle_for_user
+    from bot.utils.telegram_relay import create_telegram_bot
 
     token = (os.getenv("BOT_TOKEN") or "").strip()
     if not token:
@@ -91,7 +91,7 @@ async def send_cancel_and_raffle_dates(
                 "telegram_id": telegram_id,
             }
 
-    bot = Bot(token=token)
+    bot = create_telegram_bot(token)
     try:
         await bot.send_message(chat_id=int(telegram_id), text=text)
         markup, dates = await _raffle_dates_markup()

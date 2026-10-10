@@ -95,10 +95,11 @@ ROZYGRYSH_SKIP_SUB_USERNAMES = {
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set. Create .env from .env.example and fill in the token.")
 
-from aiogram import Bot, Dispatcher
+from aiogram import Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from bot.utils.telegram_relay import create_telegram_bot
 
-bot = Bot(token=BOT_TOKEN)
+bot = create_telegram_bot(BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 logging.basicConfig(level=logging.INFO)

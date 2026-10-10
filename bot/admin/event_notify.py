@@ -68,12 +68,12 @@ def list_event_notify_recipients(event_id: int, audience: str) -> list[dict]:
 
 
 async def _send_tg(telegram_id: int, text: str) -> None:
-    from aiogram import Bot
+    from bot.utils.telegram_relay import create_telegram_bot
 
     token = _bot_token()
     if not token:
         raise RuntimeError("BOT_TOKEN не задан")
-    bot = Bot(token=token)
+    bot = create_telegram_bot(token)
     try:
         await bot.send_message(chat_id=int(telegram_id), text=text)
     finally:
@@ -92,12 +92,12 @@ async def _send_vk(vk_id: int, text: str) -> None:
 
 
 async def _delete_tg_ticket(telegram_id: int, ticket_message_id, confirm_message_id) -> None:
-    from aiogram import Bot
+    from bot.utils.telegram_relay import create_telegram_bot
 
     token = _bot_token()
     if not token or not telegram_id:
         return
-    bot = Bot(token=token)
+    bot = create_telegram_bot(token)
     try:
         if confirm_message_id:
             try:

@@ -4647,7 +4647,9 @@ class VKBotApp:
         )
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         try:
-            async with aiohttp.ClientSession() as session:
+            from bot.utils.telegram_relay import create_telegram_aiohttp_session
+
+            async with create_telegram_aiohttp_session() as session:
                 async with session.post(
                     url,
                     json={

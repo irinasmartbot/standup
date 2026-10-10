@@ -197,11 +197,11 @@ async def _resend_ticket_telegram(row: dict, *, updated: bool, extra_note: str =
     if not telegram_id:
         return {"ok": False, "error": "нет telegram_id", "booking_id": booking_id}
 
-    from aiogram import Bot
     from aiogram.types import BufferedInputFile
     from bot.db.crud import save_ticket_message_id
+    from bot.utils.telegram_relay import create_telegram_bot
 
-    bot = Bot(token=token)
+    bot = create_telegram_bot(token)
     try:
         note = (extra_note or "").strip()
         if note:
@@ -430,11 +430,11 @@ async def _issue_ticket_telegram(row: dict, *, already_confirmed: bool) -> dict:
     if not telegram_id:
         return {"ok": False, "error": "нет telegram_id", "booking_id": booking_id}
 
-    from aiogram import Bot
     from aiogram.types import BufferedInputFile
     from bot.db.crud import save_ticket_message_id
+    from bot.utils.telegram_relay import create_telegram_bot
 
-    bot = Bot(token=token)
+    bot = create_telegram_bot(token)
     try:
         photo = BufferedInputFile(
             _ticket_bytes(row),

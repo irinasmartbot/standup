@@ -5882,9 +5882,9 @@ async def raffle_screen_page(request: web.Request) -> web.Response:
     if not token:
         raise web.HTTPServiceUnavailable(text="BOT_TOKEN не задан на сервере админки")
 
-    from aiogram import Bot
+    from bot.utils.telegram_relay import create_telegram_bot
 
-    bot = Bot(token=token)
+    bot = create_telegram_bot(token)
     try:
         tg_file = await bot.get_file(file_id)
         if not tg_file or not tg_file.file_path:
