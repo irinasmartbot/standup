@@ -750,6 +750,38 @@ def test_vk_chek_list_flow():
     print("vk chek_list flow: OK")
 
 
+def test_vk_new_stata_all_flow():
+    from pathlib import Path
+
+    from bot.admin.vk_entry import (
+        FLOWS,
+        MINI_APP_DIRECT_FLOWS,
+        MINI_APP_VISIBLE_FLOWS,
+        parse_mini_app_flow,
+        remap_raffle_button_in_gift_session,
+    )
+
+    assert parse_mini_app_flow("new_stata_all") == "new_stata_all"
+    assert parse_mini_app_flow("#flow=new_stata_all") == "new_stata_all"
+    assert parse_mini_app_flow("stata_all") == "new_stata_all"
+    assert "new_stata_all" in FLOWS
+    assert "new_stata_all" in MINI_APP_DIRECT_FLOWS
+    assert "new_stata_all" not in MINI_APP_VISIBLE_FLOWS
+    assert remap_raffle_button_in_gift_session("raffle", "#flow=new_stata_all") == "raffle"
+
+    entry_src = Path("bot/admin/vk_entry.py").read_text(encoding="utf-8")
+    body = entry_src[entry_src.find("async def _send_flow_chain_body") :]
+    stata_at = body.find('if flow_key == "new_stata_all"')
+    gift_at = body.find("get_offline_gift_today_events")
+    assert stata_at != -1 and gift_at != -1 and stata_at < gift_at
+
+    app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert "async def send_manager_stata_all_start_message" in app_src
+    assert "async def _handle_manager_stata_all_flow" in app_src
+    assert "build_stata_report_all" in app_src
+    print("vk new_stata_all flow: OK")
+
+
 def test_vk_raffle_screenshot_avoids_tg_handler_import():
     from pathlib import Path
 
@@ -827,6 +859,7 @@ async def main():
     test_vk_platka_flow()
     test_vk_raffle_vs_show_gift_routing()
     test_vk_chek_list_flow()
+    test_vk_new_stata_all_flow()
     test_vk_raffle_screenshot_avoids_tg_handler_import()
     test_vk_same_day_warning_import()
     test_random_show_covers()

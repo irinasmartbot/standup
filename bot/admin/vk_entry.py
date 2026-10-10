@@ -8,7 +8,7 @@
 3) пробуем открыть приложение VK (не сайт vk.com)
 
 GET  /vk/booking | /vk/residents | /vk/platka | /vk/raffle | /vk/offline-gift
-     Mini App direct: residents | platka | chek_list
+     Mini App direct: residents | platka | chek_list | new_stata_all
 POST /vk/entry
 """
 
@@ -76,12 +76,19 @@ FLOWS: dict[str, dict[str, Any]] = {
         "lead": "Разрешите сообщения — пришлём чек-лист розыгрыша на шоу в личку VK.",
         "ref": "chek_list",
     },
+    "new_stata_all": {
+        "title": "Стата",
+        "headline": "Стата по мероприятиям",
+        "button": "Стата по мероприятиям",
+        "lead": "Разрешите сообщения — пришлём стату броней по датам в личку VK.",
+        "ref": "new_stata_all",
+    },
 }
 
 # После модерации снова показываем все входные сценарии mini app.
 MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking", "raffle", "offline_gift")
 # Прямые ссылки с сайта, без кнопки в общем меню mini app.
-MINI_APP_DIRECT_FLOWS: tuple[str, ...] = ("residents", "platka", "chek_list")
+MINI_APP_DIRECT_FLOWS: tuple[str, ...] = ("residents", "platka", "chek_list", "new_stata_all")
 EXPIRED_DIRECT_FLOWS: frozenset[str] = frozenset(
     {
         "booking_resident",
@@ -116,6 +123,9 @@ _FLOW_ALIASES: dict[str, str] = {
     "chek_list": "chek_list",
     "check_list": "chek_list",
     "checklist": "chek_list",
+    "new_stata_all": "new_stata_all",
+    "newstataall": "new_stata_all",
+    "stata_all": "new_stata_all",
 }
 
 
@@ -688,6 +698,12 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
         from bot.vk.app import send_check_list_start_message
 
         await send_check_list_start_message(client, vk_id)
+        return
+
+    if flow_key == "new_stata_all":
+        from bot.vk.app import send_manager_stata_all_start_message
+
+        await send_manager_stata_all_start_message(client, vk_id)
         return
 
     from bot.db.crud import get_offline_gift_today_events
@@ -1284,7 +1300,10 @@ def _mini_app_html(default_flow: str = "") -> str:
     standup_platka: "platka",
     chek_list: "chek_list",
     check_list: "chek_list",
-    checklist: "chek_list"
+    checklist: "chek_list",
+    new_stata_all: "new_stata_all",
+    newstataall: "new_stata_all",
+    stata_all: "new_stata_all"
   }};
   var EXPIRED_FLOWS = {{
     booking_resident: true,

@@ -45,6 +45,8 @@
 
 Подарок на шоу (`vk_offline_gift_*`, Telegram `?start=chek_list`, VK `#flow=chek_list` для статы / `#flow=offline_gift` для участия гостя): активные мероприятия форматов `proverka`, `best`, `hitloto`, `residents`.
 
+Стата менеджера (`?start=new_stata` / `new_stata_all`, VK `#flow=new_stata_all`): брони проверки и резидентов (`MANAGER_STATA_FORMATS`). `new_stata_all` показывает booked + confirmed.
+
 ### Статус мероприятия
 - Присваивается **автоматически** по дате — не нужно менять вручную
 - `active` — дата >= сегодня

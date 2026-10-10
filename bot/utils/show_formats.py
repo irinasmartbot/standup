@@ -21,7 +21,8 @@ MY_BOOKINGS_FORMATS = (PROVERKA, ROZYGRYSH, RESIDENTS)
 # Telegram `?start=chek_list` and VK `#flow=chek_list`.
 OFFLINE_GIFT_EVENT_FORMATS = (PROVERKA, BEST, HITLOTO, RESIDENTS)
 
-# new_stata / new_stata_all: проверка + резиденты на одних ссылках.
+# new_stata / new_stata_all: проверка + резиденты на одних ссылках
+# (Telegram `?start=new_stata_all`, VK `#flow=new_stata_all`).
 MANAGER_STATA_FORMATS = (PROVERKA, RESIDENTS)
 
 EVENT_FORMAT_CHECK = (

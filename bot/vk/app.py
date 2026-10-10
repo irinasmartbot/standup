@@ -2,6 +2,7 @@ import asyncio
 import html
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -95,6 +96,15 @@ _EXPIRED_SHOW_REF_VALUES = frozenset({
 })
 _OFFLINE_GIFT_REF_VALUES = frozenset({"offline_gift", "gift"})
 _CHECK_LIST_REF_VALUES = frozenset({"chek_list", "check_list", "checklist"})
+_STATA_ALL_REF_VALUES = frozenset({"new_stata_all", "newstataall", "stata_all"})
+_STATA_ALL_CMDS = frozenset({
+    "new_stata_all",
+    "nsta_date",
+    "nsta_back",
+    "nsta_page",
+})
+_STATA_ALL_DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
+STATA_ALL_DATES_PAGE_SIZE = 8
 _CHECK_LIST_CMDS = frozenset({
     "chek_list",
     "check_list",
@@ -261,6 +271,10 @@ def _is_check_list_ref(ref: str) -> bool:
     return (ref or "").strip().casefold() in _CHECK_LIST_REF_VALUES
 
 
+def _is_stata_all_ref(ref: str) -> bool:
+    return (ref or "").strip().casefold() in _STATA_ALL_REF_VALUES
+
+
 def _gift_format_label(value: str) -> str:
     return {
         "proverka": "Проверка",
@@ -372,6 +386,49 @@ async def send_check_list_start_message(client: VKClient, vk_id: int) -> None:
         CHECK_LIST_DATES_TEXT,
         keyboard=_check_list_dates_keyboard(dates, 0),
     )
+
+
+def _stata_all_dates_keyboard(dates: list[str], page: int = 0) -> str:
+    kb = VKKeyboardBuilder(inline=True)
+    page = max(0, int(page or 0))
+    start = page * STATA_ALL_DATES_PAGE_SIZE
+    chunk = dates[start : start + STATA_ALL_DATES_PAGE_SIZE]
+    for day in chunk:
+        kb.button(str(day), _payload("nsta_date", date=str(day)), color="primary")
+    kb.adjust(2)
+    has_prev = page > 0
+    has_next = start + STATA_ALL_DATES_PAGE_SIZE < len(dates)
+    if has_prev or has_next:
+        kb.row()
+        if has_prev:
+            kb.button("◀️", _payload("nsta_page", page=page - 1))
+        if has_next:
+            kb.button("▶️", _payload("nsta_page", page=page + 1))
+    return kb.as_json()
+
+
+def _stata_all_back_keyboard() -> str:
+    kb = VKKeyboardBuilder(inline=True)
+    kb.button("⬅️ Назад к датам", _payload("nsta_back"))
+    kb.adjust(1)
+    return kb.as_json()
+
+
+def _stata_all_choose_text(dates: list[str]) -> str:
+    from bot.handlers.manager_stata import CHOOSE_DATE_TEXT_ALL
+
+    text = CHOOSE_DATE_TEXT_ALL
+    if not dates:
+        text += "\n\n(В афише пока нет ближайших дат — напиши дату вручную.)"
+    return text
+
+
+async def send_manager_stata_all_start_message(client: VKClient, vk_id: int) -> None:
+    from bot.handlers.manager_stata import _dates_for_mode
+
+    dates = _dates_for_mode("all")
+    keyboard = _stata_all_dates_keyboard(dates, 0) if dates else None
+    await client.send_message(vk_id, _stata_all_choose_text(dates), keyboard=keyboard)
 
 
 # HTML с <b>/<i> — client.send_message сам соберёт VK format_data.
@@ -855,6 +912,7 @@ class VKBotApp:
         self._offline_gift_launch_at: dict[int, float] = {}
         self._offline_gift_timer_tasks: dict[int, asyncio.Task] = {}
         self._offline_gift_await_choice: set[int] = set()
+        self._stata_all_await_date: set[int] = set()
         # cmid кнопки из текущего message_event — переживает рестарт бота.
         self._peer_event_cmid: dict[int, int] = {}
         self._seen_event_ids: dict[str, float] = {}
@@ -1396,6 +1454,10 @@ class VKBotApp:
         self.peer_venues_message_ids.pop(int(peer_id), None)
         self.peer_residents_from_deeplink.pop(int(peer_id), None)
         self.peer_residents_from_mailing.pop(int(peer_id), None)
+        self._stata_all_await_date.discard(int(user_id))
+        from bot.vk.entry_dedupe import clear_flow_send
+
+        clear_flow_send(int(user_id), "new_stata_all")
         if is_start:
             self._track(user_id, EVENT_BOT_START)
         else:
@@ -2468,6 +2530,9 @@ class VKBotApp:
             "og_refresh",
             "og_back_event",
             "og_dates_page",
+            "nsta_date",
+            "nsta_back",
+            "nsta_page",
             "venues_details",
             "venues_card",
         }:
@@ -2738,6 +2803,7 @@ class VKBotApp:
                 "check_list": "chek_list",
                 "чек лист": "chek_list",
                 "чек-лист": "chek_list",
+                "new_stata_all": "new_stata_all",
                 # Старые текстовые кнопки Salebot → наши сценарии
                 "отменить бронь": "my_bookings",
                 "изменить дату": "my_bookings",
@@ -2803,6 +2869,15 @@ class VKBotApp:
             vk_id,
             cmd=cmd,
             payload=payload,
+        ):
+            return
+
+        if await self._handle_manager_stata_all_flow(
+            peer_id,
+            vk_id,
+            cmd=cmd,
+            payload=payload,
+            text=text,
         ):
             return
 
@@ -2938,6 +3013,17 @@ class VKBotApp:
                     props=_entry_props(raw_ref, fallback_payload="chek_list", source=source),
                 )
             await self._send_check_list_dates(peer_id, 0)
+            return
+
+        is_stata_all_deeplink = _is_stata_all_ref(ref) and is_start_entry and not cmd
+        if cmd == "new_stata_all" or is_stata_all_deeplink:
+            if is_stata_all_deeplink:
+                self._track(
+                    vk_id,
+                    EVENT_BOT_START,
+                    props=_entry_props(raw_ref, fallback_payload="new_stata_all", source=source),
+                )
+            await self._send_stata_all_dates(peer_id, vk_id, 0)
             return
 
         is_platka_deeplink = _is_platka_ref(ref) and is_start_entry and not cmd
@@ -3225,6 +3311,85 @@ class VKBotApp:
             # Кнопка с чужим payload без cmd (старые цепочки Salebot и т.п.)
             logger.info("Unknown VK payload → menu peer_id=%s payload=%r", peer_id, payload)
             await self.send_menu(peer_id, vk_id=vk_id)
+
+    def _stata_all_is_awaiting(self, vk_id: int) -> bool:
+        if int(vk_id) in self._stata_all_await_date:
+            return True
+        from bot.vk.entry_dedupe import recent_flow_send
+
+        return recent_flow_send(int(vk_id), "new_stata_all", within_sec=3600.0)
+
+    async def _handle_manager_stata_all_flow(
+        self,
+        peer_id: int,
+        vk_id: int,
+        *,
+        cmd: str | None,
+        payload: dict[str, Any] | None = None,
+        text: str = "",
+    ) -> bool:
+        payload = payload or {}
+        if cmd in _STATA_ALL_CMDS:
+            if cmd in {"new_stata_all", "nsta_back"}:
+                await self._send_stata_all_dates(peer_id, vk_id, 0)
+                return True
+            if cmd == "nsta_page":
+                try:
+                    page = int(payload.get("page") or 0)
+                except (TypeError, ValueError):
+                    page = 0
+                await self._send_stata_all_dates(peer_id, vk_id, page)
+                return True
+            event_date = str(payload.get("date") or "").strip()
+            if not _STATA_ALL_DATE_RE.match(event_date):
+                await self._send_stata_all_dates(peer_id, vk_id, 0)
+                return True
+            await self._send_stata_all_report(peer_id, vk_id, event_date)
+            return True
+
+        raw = (text or "").strip()
+        if cmd or not raw or not _STATA_ALL_DATE_RE.match(raw):
+            return False
+        if not self._stata_all_is_awaiting(vk_id):
+            return False
+        await self._send_stata_all_report(peer_id, vk_id, raw)
+        return True
+
+    async def _send_stata_all_dates(self, peer_id: int, vk_id: int, page: int = 0) -> None:
+        from bot.handlers.manager_stata import _dates_for_mode
+
+        self._stata_all_await_date.add(int(vk_id))
+        dates = _dates_for_mode("all")
+        keyboard = _stata_all_dates_keyboard(dates, page) if dates else None
+        await self._send_text(peer_id, _stata_all_choose_text(dates), keyboard=keyboard)
+
+    async def _send_stata_all_report(self, peer_id: int, vk_id: int, event_date: str) -> None:
+        from bot.db.crud import get_manager_stata_bookings_for_date
+        from bot.handlers.manager_stata import (
+            EMPTY_TEXT_ALL,
+            _split_text,
+            build_stata_report_all,
+        )
+        from bot.utils.show_formats import MANAGER_STATA_FORMATS
+
+        self._stata_all_await_date.add(int(vk_id))
+        rows = get_manager_stata_bookings_for_date(
+            event_date,
+            booking_format="proverka",
+            event_format="proverka",
+            statuses=("booked", "confirmed"),
+            event_formats=MANAGER_STATA_FORMATS,
+            booking_formats=MANAGER_STATA_FORMATS,
+        )
+        chunks = _split_text(build_stata_report_all(rows, empty_text=EMPTY_TEXT_ALL))
+        back = _stata_all_back_keyboard()
+        if len(chunks) == 1:
+            await self._send_text(peer_id, chunks[0], keyboard=back)
+            return
+        await self._send_text(peer_id, chunks[0])
+        for chunk in chunks[1:-1]:
+            await self._send_text(peer_id, chunk, replace_nav=False)
+        await self._send_text(peer_id, chunks[-1], keyboard=back, replace_nav=False)
 
     async def _handle_check_list_flow(
         self,
