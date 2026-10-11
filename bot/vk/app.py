@@ -1758,6 +1758,15 @@ class VKBotApp:
                 task.cancel()
         except Exception as exc:
             logger.exception("VK ticket issue failed booking_id=%s", booking_id)
+            if self._vk_ticket_already_delivered(int(booking_id)):
+                logger.info(
+                    "VK ticket already in chat after issue error booking_id=%s, skip fail notice",
+                    booking_id,
+                )
+                task = self._ticket_retry_tasks.pop(int(booking_id), None)
+                if task and not task.done():
+                    task.cancel()
+                return
             try:
                 from bot.utils.tech_alerts import alert_ticket_failure
 
@@ -1770,20 +1779,9 @@ class VKBotApp:
             except Exception:
                 pass
             scheduled = self._schedule_ticket_retry(peer_id, booking_id)
-            if scheduled:
-                await self.client.send_message(
-                    peer_id,
-                    "Не удалось отправить билет картинкой с первого раза.\n\n"
-                    "Пробуем ещё раз автоматически — обычно билет приходит в течение пары минут.\n"
-                    "Можно также снова нажать «Получить билет».",
-                    keyboard=vk_booking.after_booking_keyboard(
-                        int(booking_id),
-                        offer_ticket=True,
-                        manager_link=self.settings.manager_link,
-                        community_link=self.settings.community_link,
-                    ),
-                )
-            else:
+            # Не пугаем гостя: билет часто уже в чате или придёт с автоповтора.
+            # Сообщение только если повторять уже нечего.
+            if not scheduled:
                 await self.client.send_message(
                     peer_id,
                     "Не удалось отправить билет картинкой. Напишите менеджеру — поможем вручную.",
@@ -1791,6 +1789,24 @@ class VKBotApp:
                 )
         finally:
             self._ticket_in_progress.discard(booking_id)
+
+    @staticmethod
+    def _vk_ticket_already_delivered(booking_id: int) -> bool:
+        """True, если билет уже записан или бронь подтверждена — гость его видел."""
+        try:
+            from bot.db.crud import get_active_booking_by_id
+
+            row = get_active_booking_by_id(int(booking_id))
+        except Exception:
+            logger.exception(
+                "VK ticket delivered check failed booking_id=%s", booking_id
+            )
+            return False
+        if not row:
+            return False
+        status = row[10] if len(row) > 10 else ""
+        ticket_mid = row[15] if len(row) > 15 else None
+        return bool(ticket_mid) or status == "confirmed"
 
     def _schedule_ticket_retry(self, peer_id: int, booking_id: int) -> bool:
         """Фоновые повторы выдачи билета после сбоя upload (empty photo и т.п.)."""
@@ -1812,9 +1828,8 @@ class VKBotApp:
                         row = get_active_booking_by_id(bid)
                         if not row:
                             return
-                        status = row[10] if len(row) > 10 else ""
                         ticket_mid = row[15] if len(row) > 15 else None
-                        if status == "confirmed" and ticket_mid:
+                        if ticket_mid:
                             return
                     except Exception:
                         logger.exception(

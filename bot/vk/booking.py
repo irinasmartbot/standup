@@ -707,7 +707,20 @@ async def issue_ticket(
         attachment=attachment,
         keyboard=keyboard,
     )
-    await client.require_sent_photo(msg_id, peer_id=peer_id)
+    try:
+        await client.require_sent_photo(msg_id, peer_id=peer_id)
+    except Exception:
+        # Повторное чтение: проверка могла моргнуть, а картинка уже в диалоге.
+        item = await client.get_message_by_id(int(msg_id)) if msg_id else None
+        if item is None and msg_id:
+            item = await client.get_message_by_cmid(int(peer_id), int(msg_id))
+        if not client.message_item_has_photo(item):
+            raise
+        logger.warning(
+            "VK ticket photo verify recovered booking_id=%s message_id=%s",
+            booking_id,
+            msg_id,
+        )
     # Билет ушёл — снимаем кнопки с сообщения «Получить билет» (клик + сохранённый id).
     await clear_inline_keyboard(
         client,

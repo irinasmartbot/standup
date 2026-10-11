@@ -191,21 +191,35 @@ class VKClient:
         """Проверяет, что отправленное сообщение реально содержит фото.
 
         Если сообщение не удаётся прочитать (права API) — только warning.
-        Если прочитали и photo нет — ошибка, чтобы сработал повтор выдачи билета.
+        Если несколько раз прочитали и photo нет — ошибка, чтобы сработал повтор.
+        Не рвём выдачу из‑за одного пустого getById: VK так отвечает, когда
+        картинка уже видна гостю.
         """
         if not message_id:
             raise VKAPIError("VK send returned no message_id")
         item: dict[str, Any] | None = None
-        for delay in (0.4, 0.8):
+        # VK getById часто отдаёт сообщение без attachments первые секунды,
+        # хотя гость уже видит картинку. Ждём дольше, прежде чем считать сбой.
+        seen_empty = 0
+        for delay in (0.5, 1.2, 2.0, 3.0):
             await asyncio.sleep(delay)
             item = await self.get_message_by_id(int(message_id))
             if item is None and peer_id:
                 item = await self.get_message_by_cmid(int(peer_id), int(message_id))
             if self.message_item_has_photo(item):
                 return
+            if item is not None:
+                seen_empty += 1
         if item is None:
             logger.warning(
                 "Could not re-fetch VK message %s to verify photo peer_id=%s",
+                message_id,
+                peer_id,
+            )
+            return
+        if seen_empty < 2:
+            logger.warning(
+                "VK message %s photo verify inconclusive peer_id=%s, keep message",
                 message_id,
                 peer_id,
             )

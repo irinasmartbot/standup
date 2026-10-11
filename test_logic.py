@@ -422,6 +422,8 @@ def test_db_schema():
 
 
 def test_vk_message_item_has_photo():
+    from pathlib import Path
+
     from bot.vk.client import VKClient
 
     assert VKClient.message_item_has_photo(
@@ -430,6 +432,15 @@ def test_vk_message_item_has_photo():
     assert not VKClient.message_item_has_photo({"attachments": []})
     assert not VKClient.message_item_has_photo({"attachments": [{"type": "doc", "doc": {"id": 1}}]})
     assert not VKClient.message_item_has_photo(None)
+
+    client_src = Path("bot/vk/client.py").read_text(encoding="utf-8")
+    assert "for delay in (0.5, 1.2, 2.0, 3.0):" in client_src
+    assert "seen_empty" in client_src
+    booking_src = Path("bot/vk/booking.py").read_text(encoding="utf-8")
+    assert "VK ticket photo verify recovered" in booking_src
+    app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert "Не удалось отправить билет картинкой с первого раза." not in app_src
+    assert "_vk_ticket_already_delivered" in app_src
     print("vk message photo check: OK")
 
 
