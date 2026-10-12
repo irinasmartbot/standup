@@ -5,7 +5,7 @@ from datetime import datetime
 from html import escape
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, FSInputFile, BufferedInputFile, InputMediaPhoto
+from aiogram.types import Message, CallbackQuery, FSInputFile, BufferedInputFile
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from bot.utils.reply_keyboard import clear_reply_keyboard
 from aiogram.fsm.context import FSMContext
@@ -316,20 +316,16 @@ async def check_dates(call: CallbackQuery):
     message = reply_target(call)
     telegram_id = call.from_user.id if call.from_user else None
     clicked_mid = call.message.message_id if call.message else None
-    # Билет не переписываем датами. Остальные карточки можно править in-place.
+    # Билет не переписываем датами.
+    # Сообщение с фото не правим in-place: edit_media оставляет в истории
+    # старый постер шоу, и при выборе даты Telegram на секунду его вспыхивает.
+    if getattr(call.message, "photo", None):
+        await _delete_previous_menu_message(call)
+        await _answer_with_check_photo(reply_target(call), text, reply_markup=kb, track_nav=True)
+        return
     if not is_protected_ticket_message(telegram_id, clicked_mid):
         try:
-            if getattr(call.message, "photo", None):
-                photo = _random_check_photo()
-                if photo:
-                    await call.message.edit_media(
-                        media=InputMediaPhoto(media=photo, caption=text),
-                        reply_markup=kb,
-                    )
-                else:
-                    await call.message.edit_caption(caption=text, reply_markup=kb)
-            else:
-                await call.message.edit_text(text, reply_markup=kb)
+            await call.message.edit_text(text, reply_markup=kb)
             forget_booking_nav(message.chat.id, call.message.message_id)
             remember_booking_nav(message.chat.id, call.message.message_id)
             return

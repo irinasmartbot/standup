@@ -670,9 +670,10 @@ def test_tg_check_dates_back_uses_random_photo():
 
     src = Path("bot/handlers/booking.py").read_text(encoding="utf-8")
     chunk = src[src.find("async def check_dates") : src.find("async def by_venue")]
-    assert "edit_media" in chunk
-    assert "InputMediaPhoto" in chunk
-    assert "_random_check_photo()" in chunk
+    assert "edit_media(" not in chunk
+    assert "InputMediaPhoto" not in chunk
+    assert "_delete_previous_menu_message(call)" in chunk
+    assert "_answer_with_check_photo" in chunk
     print("tg check dates back uses random photo: OK")
 
 
