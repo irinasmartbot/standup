@@ -5,7 +5,7 @@ from datetime import datetime
 from html import escape
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, FSInputFile, BufferedInputFile
+from aiogram.types import Message, CallbackQuery, FSInputFile, BufferedInputFile, InputMediaPhoto
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from bot.utils.reply_keyboard import clear_reply_keyboard
 from aiogram.fsm.context import FSMContext
@@ -320,7 +320,14 @@ async def check_dates(call: CallbackQuery):
     if not is_protected_ticket_message(telegram_id, clicked_mid):
         try:
             if getattr(call.message, "photo", None):
-                await call.message.edit_caption(caption=text, reply_markup=kb)
+                photo = _random_check_photo()
+                if photo:
+                    await call.message.edit_media(
+                        media=InputMediaPhoto(media=photo, caption=text),
+                        reply_markup=kb,
+                    )
+                else:
+                    await call.message.edit_caption(caption=text, reply_markup=kb)
             else:
                 await call.message.edit_text(text, reply_markup=kb)
             forget_booking_nav(message.chat.id, call.message.message_id)

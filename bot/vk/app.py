@@ -973,11 +973,13 @@ class VKBotApp:
                 return attachment
         return None
 
-    def _random_cover_attachment(self) -> str | None:
+    def _random_cover_attachment(self, *, exclude: str | None = None) -> str | None:
         """Случайная обложка шоу из кэша (без upload)."""
         from bot.vk.media import random_show_cover_attachment
 
-        return random_show_cover_attachment(self.images) or self._cover_attachment("show_cover")
+        return random_show_cover_attachment(
+            self.images, exclude=exclude
+        ) or self._cover_attachment("show_cover")
 
     async def _ensure_cover_attachment(
         self,
@@ -1398,9 +1400,11 @@ class VKBotApp:
         """
         del edit  # листание больше не через in-place edit
         peer = int(peer_id)
+        prev_att = (self.peer_dates_attachments.get(peer) or "").strip()
         keep_att = attachment
-        if not keep_att:
-            keep_att = self._random_cover_attachment()
+        if keep_att is None:
+            # Проверка / BEST: каждый заход на даты, в том числе «Назад» с шоу.
+            keep_att = self._random_cover_attachment(exclude=prev_att)
         if not keep_att:
             keep_att = await self._ensure_cover_attachment(peer_id)
         if keep_att:
@@ -1422,6 +1426,7 @@ class VKBotApp:
             text,
             keyboard=keyboard,
             attachment=keep_att,
+            force_new=True,
         )
         if keep_att:
             self._remember_dates_attachment(peer, keep_att)
@@ -4786,7 +4791,6 @@ class VKBotApp:
             peer_id,
             "Проверка материала. Выбирай дату:",
             keyboard=keyboard,
-            attachment=await self._ensure_cover_attachment(peer_id),
             edit=edit,
         )
         logger.info("Sent check dates: %s items page=%s", len(dates), page)
@@ -4939,7 +4943,6 @@ class VKBotApp:
             peer_id,
             "StandUp BEST. Выбирай дату:",
             keyboard=keyboard,
-            attachment=await self._ensure_cover_attachment(peer_id),
             edit=edit,
         )
         logger.info("Sent BEST dates: %s items page=%s", len(dates), page)

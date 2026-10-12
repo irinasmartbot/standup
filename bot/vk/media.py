@@ -150,7 +150,11 @@ def _live_random_cover_ids() -> set[str]:
     return ids
 
 
-def random_show_cover_attachment(cache: VKSystemImageCache) -> str | None:
+def random_show_cover_attachment(
+    cache: VKSystemImageCache,
+    *,
+    exclude: str | None = None,
+) -> str | None:
     """Случайная обложка шоу из кэша VK (без площадок / хитлото / билета)."""
     live = _live_random_cover_ids()
     if not live:
@@ -186,6 +190,11 @@ def random_show_cover_attachment(cache: VKSystemImageCache) -> str | None:
         if "ticket" in key or "ticket" in name:
             continue
         pool.append(attachment)
+    skip = (exclude or "").strip()
+    if skip and len(pool) > 1:
+        other = [item for item in pool if item != skip]
+        if other:
+            pool = other
     if pool:
         return random.choice(pool)
     return None

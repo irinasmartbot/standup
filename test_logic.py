@@ -665,6 +665,30 @@ def test_tg_keeps_ticket_message():
     print("tg keep ticket except cancel/date change: OK")
 
 
+def test_tg_check_dates_back_uses_random_photo():
+    from pathlib import Path
+
+    src = Path("bot/handlers/booking.py").read_text(encoding="utf-8")
+    chunk = src[src.find("async def check_dates") : src.find("async def by_venue")]
+    assert "edit_media" in chunk
+    assert "InputMediaPhoto" in chunk
+    assert "_random_check_photo()" in chunk
+    print("tg check dates back uses random photo: OK")
+
+
+def test_vk_dates_card_back_uses_random_photo():
+    from pathlib import Path
+
+    app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    body = app_src[app_src.find("async def _send_or_edit_dates_card") :]
+    body = body[: body.find("async def _load_events")]
+    assert "force_new=True" in body
+    assert "_random_cover_attachment(exclude=prev_att)" in body
+    media_src = Path("bot/vk/media.py").read_text(encoding="utf-8")
+    assert "exclude: str | None = None" in media_src
+    print("vk dates card back uses random photo: OK")
+
+
 def test_vk_platka_flow():
     from pathlib import Path
 
@@ -867,6 +891,8 @@ async def main():
     test_vk_residents_deeplink_back_button()
     test_vk_main_menu_keeps_ticket_message()
     test_tg_keeps_ticket_message()
+    test_tg_check_dates_back_uses_random_photo()
+    test_vk_dates_card_back_uses_random_photo()
     test_vk_platka_flow()
     test_vk_raffle_vs_show_gift_routing()
     test_vk_chek_list_flow()
