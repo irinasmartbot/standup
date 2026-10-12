@@ -17,6 +17,7 @@ from bot.db.analytics import (
     browse_mode_from_callback,
     track_event,
 )
+from bot.services.sheets import load_events
 from bot.utils.show_formats import RESIDENTS_BUTTON, RESIDENTS_MENU_BUTTON
 from bot.utils.ticket import MONTHS, format_date
 from bot.utils.nav_messages import (

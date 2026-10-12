@@ -665,6 +665,15 @@ def test_tg_keeps_ticket_message():
     print("tg keep ticket except cancel/date change: OK")
 
 
+def test_formats_module_imports_load_events():
+    from pathlib import Path
+
+    src = Path("bot/handlers/formats.py").read_text(encoding="utf-8")
+    assert "from bot.services.sheets import load_events" in src
+    assert src.find("from bot.services.sheets import load_events") < src.find("async def _best_dates_kb")
+    print("formats module imports load_events: OK")
+
+
 def test_tg_check_dates_back_uses_random_photo():
     from pathlib import Path
 
@@ -892,6 +901,7 @@ async def main():
     test_vk_residents_deeplink_back_button()
     test_vk_main_menu_keeps_ticket_message()
     test_tg_keeps_ticket_message()
+    test_formats_module_imports_load_events()
     test_tg_check_dates_back_uses_random_photo()
     test_vk_dates_card_back_uses_random_photo()
     test_vk_platka_flow()
