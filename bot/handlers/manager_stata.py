@@ -18,6 +18,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.crud import get_manager_stata_bookings_for_date, get_manager_stata_dates
+from bot.utils.phone import format_stata_phone
 from bot.utils.show_formats import MANAGER_STATA_FORMATS, RESIDENTS
 from bot.utils.ticket import now_msk
 
@@ -112,28 +113,10 @@ def _dates_keyboard(dates: list[str], mode: str):
     return kb.as_markup()
 
 
-def _phone_digits(phone: str) -> str:
-    return re.sub(r"\D+", "", phone or "")
-
-
-def _phone_plus(phone: str) -> str:
-    """Формат +7926… — Telegram сам делает номер кликабельным."""
-    digits = _phone_digits(phone)
-    if not digits:
-        return "—"
-    if len(digits) == 11 and digits.startswith("8"):
-        digits = "7" + digits[1:]
-    if digits.startswith("7") and not digits.startswith("+"):
-        return f"+{digits}"
-    if digits.startswith("+"):
-        return digits
-    return f"+{digits}"
-
-
 def _guest_line(row: dict) -> str:
     name = (row.get("name") or "").strip() or "—"
     guests = int(row.get("guests") or 0)
-    phone = _phone_plus(row.get("phone") or "")
+    phone = format_stata_phone(row.get("phone") or "")
     return f"{escape(name)} · {escape(phone)} · {guests}"
 
 

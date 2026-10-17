@@ -438,6 +438,12 @@ def test_vk_message_item_has_photo():
     assert "seen_empty" in client_src
     booking_src = Path("bot/vk/booking.py").read_text(encoding="utf-8")
     assert "VK ticket photo verify recovered" in booking_src
+    assert "alert_ticket_unrecorded" in booking_src
+    assert "VK ticket in chat but DB incomplete" in booking_src
+    alerts_src = Path("bot/utils/tech_alerts.py").read_text(encoding="utf-8")
+    assert "Билет ушёл, база не обновлена" in alerts_src
+    tg_src = Path("bot/handlers/booking.py").read_text(encoding="utf-8")
+    assert "TG ticket in chat but DB incomplete" in tg_src
     app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
     assert "Не удалось отправить билет картинкой с первого раза." not in app_src
     assert "_vk_ticket_already_delivered" in app_src
@@ -878,6 +884,20 @@ def test_random_show_covers():
     print("random show covers: OK")
 
 
+def test_stata_phone_format():
+    from bot.utils.phone import format_stata_phone
+
+    assert format_stata_phone("9001234567") == "+79001234567"
+    assert format_stata_phone("+9001234567") == "+79001234567"
+    assert format_stata_phone("4951234567") == "+74951234567"
+    assert format_stata_phone("89001234567") == "+79001234567"
+    assert format_stata_phone("+7 900 123-45-67") == "+79001234567"
+    assert format_stata_phone("+380501112233") == "+380501112233"
+    assert format_stata_phone("380501112233") == "380501112233"
+    assert format_stata_phone("") == "—"
+    print("stata phone format: OK")
+
+
 def test_vk_dispatch_ensures_user_name():
     from pathlib import Path
 
@@ -911,6 +931,7 @@ async def main():
     test_vk_raffle_screenshot_avoids_tg_handler_import()
     test_vk_same_day_warning_import()
     test_random_show_covers()
+    test_stata_phone_format()
     test_vk_dispatch_ensures_user_name()
     events = await load_events()
     print(f"events loaded: {len(events)}")

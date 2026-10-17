@@ -212,6 +212,39 @@ async def notify_exception(
     return await notify_tech(text, key=key, throttle_sec=throttle_sec, bot=bot)
 
 
+def alert_ticket_unrecorded(
+    *,
+    channel: str,
+    booking_id: int,
+    user_id: int | None = None,
+    message_id: int | str | None = None,
+    error: str = "",
+    extra: str = "",
+) -> bool:
+    """Картинка билета уже ушла, а запись в базе не дописалась → TECH_CHAT_ID."""
+    lines = [
+        f"channel={channel}",
+        f"booking_id={booking_id}",
+    ]
+    if user_id is not None:
+        lines.append(f"user_id={user_id}")
+    if message_id not in (None, ""):
+        lines.append(f"message_id={message_id}")
+    if error:
+        lines.append(error.strip())
+    if extra:
+        lines.append(extra.strip())
+    return notify_tech_sync(
+        format_alert(
+            "Билет ушёл, база не обновлена",
+            "\n".join(lines),
+            source="ticket",
+        ),
+        key=f"ticket_unrecorded:{channel}:{booking_id}",
+        throttle_sec=60,
+    )
+
+
 def alert_ticket_failure(
     *,
     channel: str,

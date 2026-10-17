@@ -721,41 +721,73 @@ async def issue_ticket(
             booking_id,
             msg_id,
         )
-    # Билет ушёл — снимаем кнопки с сообщения «Получить билет» (клик + сохранённый id).
-    await clear_inline_keyboard(
-        client,
-        peer_id,
-        confirm_message_id,
-        conversation_message_id=conversation_message_id,
-    )
-    save_ticket_message_id(booking_id, msg_id)
+    # Картинка уже в чате. Сначала пишем отметки в базу, потом кнопки.
+    # Если упадём после send, в техчат уйдёт «билет ушёл, база не обновлена».
     try:
-        from bot.db.analytics import EVENT_BOOKING_TICKET_SENT, track_event
+        if msg_id:
+            save_ticket_message_id(booking_id, msg_id)
+        try:
+            from bot.db.analytics import EVENT_BOOKING_TICKET_SENT, track_event
 
-        track_event(
-            EVENT_BOOKING_TICKET_SENT,
-            vk_id=int(peer_id),
-            channel="vkontakte",
-            booking_id=int(booking_id),
-            props={"resent": already_confirmed},
-        )
-    except Exception:
-        pass
-    if not already_confirmed:
-        update_booking_status(booking_id, "confirmed")
-        if is_raffle:
-            try:
-                from bot.db.crud import set_rozygrysh_used
+            track_event(
+                EVENT_BOOKING_TICKET_SENT,
+                vk_id=int(peer_id),
+                channel="vkontakte",
+                booking_id=int(booking_id),
+                props={"resent": already_confirmed},
+            )
+        except Exception:
+            pass
+        if not already_confirmed:
+            update_booking_status(booking_id, "confirmed")
+            if is_raffle:
+                try:
+                    from bot.db.crud import set_rozygrysh_used
 
-                set_rozygrysh_used(vk_id=int(peer_id), used=True)
-            except Exception:
-                logger.exception("set_rozygrysh_used failed booking_id=%s", booking_id)
-    elif not ticket_message_id:
-        logger.warning(
-            "VK ticket resent after confirmed-without-message booking_id=%s peer_id=%s",
-            booking_id,
+                    set_rozygrysh_used(vk_id=int(peer_id), used=True)
+                except Exception:
+                    logger.exception("set_rozygrysh_used failed booking_id=%s", booking_id)
+        elif not ticket_message_id:
+            logger.warning(
+                "VK ticket resent after confirmed-without-message booking_id=%s peer_id=%s",
+                booking_id,
+                peer_id,
+            )
+        await clear_inline_keyboard(
+            client,
             peer_id,
+            confirm_message_id,
+            conversation_message_id=conversation_message_id,
         )
+    except Exception as exc:
+        logger.exception(
+            "VK ticket in chat but DB incomplete booking_id=%s msg_id=%s",
+            booking_id,
+            msg_id,
+        )
+        try:
+            from bot.utils.tech_alerts import alert_ticket_unrecorded
+
+            alert_ticket_unrecorded(
+                channel="vk",
+                booking_id=int(booking_id),
+                user_id=int(peer_id),
+                message_id=msg_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception:
+            pass
+        try:
+            if msg_id:
+                save_ticket_message_id(booking_id, msg_id)
+        except Exception:
+            logger.exception("VK ticket id save retry failed booking_id=%s", booking_id)
+        try:
+            if not already_confirmed:
+                update_booking_status(booking_id, "confirmed")
+        except Exception:
+            logger.exception("VK ticket confirm retry failed booking_id=%s", booking_id)
+        raise
 
 
 def saved_phone_for(vk_id: int) -> str | None:

@@ -36,3 +36,25 @@ def normalize_phone(phone: str | None) -> str | None:
 
 def is_valid_phone(phone: str | None) -> bool:
     return normalize_phone(phone) is not None
+
+
+def format_stata_phone(phone: str | None) -> str:
+    """Телефон в отчёте менеджера: без кода страны добавляем +7, иначе как записан."""
+    raw = (phone or "").strip()
+    if not raw:
+        return "—"
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return raw
+
+    # 8XXXXXXXXXX / 7XXXXXXXXXX — восьмёрка или уже 7.
+    if len(digits) == 11 and digits[0] in ("7", "8"):
+        return "+7" + digits[1:]
+
+    # 10 цифр без международного кода — как местный РФ, даже если стоял голый +.
+    if len(digits) == 10:
+        return "+7" + digits
+
+    if raw.startswith("+"):
+        return "+" + digits
+    return raw

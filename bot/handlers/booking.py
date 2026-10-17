@@ -1016,13 +1016,42 @@ async def get_ticket(call: CallbackQuery):
             )
             await call.answer()
             return
-        save_ticket_message_id(booking_id, ticket_msg.message_id)
-        remember_issued_ticket_message(call.from_user.id, booking_id, ticket_msg.message_id)
-        if not already_confirmed:
-            update_booking_status(booking_id, "confirmed")
-        await _remove_ticket_button(booking_id, call.from_user.id)
-        await refresh_user_commands(call.message.bot, call.from_user.id)
-        await call.answer()
+        try:
+            save_ticket_message_id(booking_id, ticket_msg.message_id)
+            remember_issued_ticket_message(call.from_user.id, booking_id, ticket_msg.message_id)
+            if not already_confirmed:
+                update_booking_status(booking_id, "confirmed")
+            await _remove_ticket_button(booking_id, call.from_user.id)
+            await refresh_user_commands(call.message.bot, call.from_user.id)
+            await call.answer()
+        except Exception as exc:
+            logger.exception(
+                "TG ticket in chat but DB incomplete booking_id=%s msg_id=%s",
+                booking_id,
+                getattr(ticket_msg, "message_id", None),
+            )
+            try:
+                from bot.utils.tech_alerts import alert_ticket_unrecorded
+
+                alert_ticket_unrecorded(
+                    channel="telegram",
+                    booking_id=int(booking_id),
+                    user_id=call.from_user.id if call.from_user else None,
+                    message_id=getattr(ticket_msg, "message_id", None),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+            try:
+                save_ticket_message_id(booking_id, ticket_msg.message_id)
+            except Exception:
+                logger.exception("TG ticket id save retry failed booking_id=%s", booking_id)
+            try:
+                if not already_confirmed:
+                    update_booking_status(booking_id, "confirmed")
+            except Exception:
+                logger.exception("TG ticket confirm retry failed booking_id=%s", booking_id)
+            raise
     finally:
         _TICKET_IN_PROGRESS.discard(booking_id)
 
