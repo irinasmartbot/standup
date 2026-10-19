@@ -1,6 +1,6 @@
 # Telegram API relay
 
-Статус: реализовано локально в ветке `feat/telegram-api-relay`, требует PR, deploy и production verification.
+Статус: в production с 2026-10-10 как `always` через туннель. Режим `fallback` (прямое обращение, туннель при сбое) реализован локально в ветке `feat/telegram-relay-fallback`.
 
 ## Назначение
 
@@ -10,23 +10,59 @@ Relay нужен, чтобы сервер бота обращался к `https:
 
 ## Настройки приложения
 
-Пустой `TELEGRAM_RELAY_HOST` означает прямое подключение к Telegram:
+Пустой `TELEGRAM_RELAY_HOST` означает только прямое подключение к Telegram.
 
-```env
-TELEGRAM_RELAY_HOST=
-TELEGRAM_RELAY_PORT=18443
-TELEGRAM_RELAY_LIMIT=4
+Режимы `TELEGRAM_RELAY_MODE` при заданном host:
+
+- `fallback` — сначала прямое соединение с Beget, при сетевом сбое повтор через туннель. Журнал: `data/telegram_transport.jsonl`.
+- `always` — все запросы `api.telegram.org:443` только через туннель.
+- `off` — только напрямую, туннель не используется.
+
+Проверка прямого доступа без выкладки кода:
+
+```bash
+ssh standup@31.128.47.4
+curl --connect-timeout 8 --max-time 15 -I https://api.telegram.org/
 ```
 
-Включение relay на сервере бота:
+Если есть HTTP-ответ Telegram, прямой путь с VPS открыт. Для сравнения туннель:
+
+```bash
+curl --connect-timeout 5 --max-time 15 \
+  --connect-to api.telegram.org:443:127.0.0.1:18443 \
+  -I https://api.telegram.org/
+```
+
+Включение fallback на сервере бота (туннель не останавливать):
 
 ```env
 TELEGRAM_RELAY_HOST=127.0.0.1
 TELEGRAM_RELAY_PORT=18443
 TELEGRAM_RELAY_LIMIT=4
+TELEGRAM_RELAY_MODE=fallback
 ```
 
-`TELEGRAM_RELAY_LIMIT` задает лимит одновременных Telegram API соединений в HTTP-клиенте приложения. Начальное production-значение: `4`.
+Те же строки нужны в `/home/standup/vk-app/.env`. Затем restart `standup-bot`, `standup-admin`, `standup-vk-bot`.
+
+Как часто бот уходит в мост: не по расписанию. Каждый запрос сначала идёт напрямую. Если Beget отвечает, мост не используется. Если напрямую 3 раза подряд не вышло — около минуты только мост, потом снова проба напрямую.
+
+Удобная сводка (русский текст, без токенов):
+
+```bash
+ssh standup@31.128.47.4
+cat /home/standup/app/data/telegram_transport_summary.txt
+```
+
+Или:
+
+```bash
+cd /home/standup/app
+./venv/bin/python scripts/telegram_transport_report.py
+```
+
+В сводке: сейчас напрямую или через мост, сколько запросов каждым путём, доля через мост, последние события. Подробный JSONL остаётся в `data/telegram_transport.jsonl`. Успешные `getUpdates` туда не пишутся, но в счётчики сводки входят.
+
+`TELEGRAM_RELAY_LIMIT` ограничивает только туннельные соединения. Начальное значение: `4`.
 
 ## Туннель на сервере бота
 

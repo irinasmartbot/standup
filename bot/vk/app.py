@@ -4667,20 +4667,19 @@ class VKBotApp:
         )
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         try:
-            from bot.utils.telegram_relay import create_telegram_aiohttp_session
+            from bot.utils.telegram_relay import telegram_aiohttp_post_json
 
-            async with create_telegram_aiohttp_session() as session:
-                async with session.post(
-                    url,
-                    json={
-                        "chat_id": help_chat_id,
-                        "text": body,
-                        "parse_mode": "HTML",
-                        "disable_web_page_preview": True,
-                    },
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    data = await resp.json(content_type=None)
+            data = await telegram_aiohttp_post_json(
+                url,
+                json_body={
+                    "chat_id": help_chat_id,
+                    "text": body,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+                timeout=aiohttp.ClientTimeout(total=15),
+                source="vk_help",
+            )
             if not data.get("ok"):
                 logger.warning("TG help forward failed for VK vk_id=%s: %s", vk_id, data)
                 return False
