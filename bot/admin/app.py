@@ -6134,6 +6134,55 @@ async def mailing_users_search_page(request: web.Request) -> web.Response:
     return web.json_response({"users": users})
 
 
+_MAILING_PHOTO_FIELDS = ("photo", "photo2", "photo3")
+_MAILING_PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _read_mailing_photo_uploads(form) -> list[tuple[bytes, str]]:
+    out: list[tuple[bytes, str]] = []
+    for name in _MAILING_PHOTO_FIELDS:
+        item = form.get(name)
+        if item is None or not getattr(item, "file", None):
+            continue
+        raw = item.file.read()
+        if not raw:
+            continue
+        filename = getattr(item, "filename", "") or "photo.jpg"
+        out.append((raw, filename))
+        if len(out) >= 3:
+            break
+    return out
+
+
+def _write_mailing_photos(uploads: list[tuple[bytes, str]], stem: str) -> list[str]:
+    from pathlib import Path
+
+    if not uploads:
+        return []
+    root = Path(__file__).resolve().parents[2]
+    media_dir = root / "data" / "mailing"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[str] = []
+    for i, (raw, filename) in enumerate(uploads, 1):
+        ext = Path(filename).suffix.lower()
+        if ext not in _MAILING_PHOTO_EXTS:
+            ext = ".jpg"
+        dest = media_dir / f"{stem}_{i}{ext}"
+        dest.write_bytes(raw)
+        paths.append(str(dest))
+    return paths
+
+
+def _unlink_mailing_photos(paths: list[str] | None) -> None:
+    from pathlib import Path
+
+    for path in paths or []:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 async def mailing_test_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config) or not _can_resend_tickets(request, config):
@@ -6154,25 +6203,13 @@ async def mailing_test_page(request: web.Request) -> web.Response:
         "yes",
     }
 
-    photo_path = None
-    photo = form.get("photo")
-    if photo is not None and getattr(photo, "file", None):
-        raw = photo.file.read()
-        if raw:
-            from pathlib import Path
+    photo_paths = _write_mailing_photos(
+        _read_mailing_photo_uploads(form),
+        f"test_{user_id_raw}",
+    )
+    photo_path = photo_paths[0] if photo_paths else None
 
-            root = Path(__file__).resolve().parents[2]
-            media_dir = root / "data" / "mailing"
-            media_dir.mkdir(parents=True, exist_ok=True)
-            filename = getattr(photo, "filename", "") or "photo.jpg"
-            ext = Path(filename).suffix.lower()
-            if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
-                ext = ".jpg"
-            dest = media_dir / f"test_{user_id_raw}{ext}"
-            dest.write_bytes(raw)
-            photo_path = str(dest)
-
-    if not body_html and not photo_path:
+    if not body_html and not photo_paths:
         return web.json_response({"error": "Нужен текст или картинка"}, status=400)
 
     from bot.admin.mailing_worker import send_one
@@ -6277,6 +6314,7 @@ async def mailing_test_page(request: web.Request) -> web.Response:
         "id": campaign_id,
         "body_html": body_html,
         "photo_path": photo_path,
+        "photo_paths": photo_paths,
         "button_text": button_text,
         "button_url": button_url,
         "followup_html": followup_html,
@@ -6388,24 +6426,11 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     }
     interval = _parse_interval_sec(form.get("interval_sec"))
 
-    photo_path = None
-    photo = form.get("photo")
-    if photo is not None and getattr(photo, "file", None):
-        raw = photo.file.read()
-        if raw:
-            from pathlib import Path
-
-            root = Path(__file__).resolve().parents[2]
-            media_dir = root / "data" / "mailing"
-            media_dir.mkdir(parents=True, exist_ok=True)
-            filename = getattr(photo, "filename", "") or "photo.jpg"
-            ext = Path(filename).suffix.lower()
-            if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
-                ext = ".jpg"
-            tmp_name = f"upload_{int(asyncio.get_running_loop().time() * 1000)}{ext}"
-            dest = media_dir / tmp_name
-            dest.write_bytes(raw)
-            photo_path = str(dest)
+    photo_paths = _write_mailing_photos(
+        _read_mailing_photo_uploads(form),
+        f"upload_{int(asyncio.get_running_loop().time() * 1000)}",
+    )
+    photo_path = photo_paths[0] if photo_paths else None
 
     from pathlib import Path
     from urllib.parse import quote
@@ -6417,7 +6442,7 @@ async def mailing_create_page(request: web.Request) -> web.Response:
         form_starts_residents_booking,
         parse_admin_datetime,
         resolve_mailing_button_fields,
-        set_campaign_photo,
+        set_campaign_photos,
     )
 
     try:
@@ -6462,6 +6487,7 @@ async def mailing_create_page(request: web.Request) -> web.Response:
                 interval_sec=interval,
                 filters=filters,
                 photo_path=photo_path,
+                photo_paths=photo_paths,
                 button_text=button_text,
                 button_url=button_url,
                 followup_html=followup_html,
@@ -6473,26 +6499,31 @@ async def mailing_create_page(request: web.Request) -> web.Response:
             ),
         )
     except Exception as exc:
-        if photo_path:
-            try:
-                Path(photo_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+        _unlink_mailing_photos(photo_paths)
         raise web.HTTPFound(
             f"/admin?tab=mailing&m_err={quote(f'{type(exc).__name__}: {exc}'[:200])}"
         )
 
-    if photo_path and campaign.get("id"):
+    if photo_paths and campaign.get("id"):
+        cid = int(campaign["id"])
         root = Path(__file__).resolve().parents[2]
-        final = root / "data" / "mailing" / f"{int(campaign['id'])}{Path(photo_path).suffix}"
+        media_dir = root / "data" / "mailing"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        finals: list[str] = []
         try:
-            Path(photo_path).replace(final)
+            for i, tmp in enumerate(photo_paths, 1):
+                src = Path(tmp)
+                final = media_dir / f"{cid}_{i}{src.suffix.lower() or '.jpg'}"
+                if src.resolve() != final.resolve():
+                    src.replace(final)
+                finals.append(str(final))
             await asyncio.get_running_loop().run_in_executor(
-                None, set_campaign_photo, int(campaign["id"]), str(final)
+                None, set_campaign_photos, cid, finals
             )
-            campaign["photo_path"] = str(final)
+            campaign["photo_path"] = finals[0]
+            campaign["photo_paths"] = finals
         except Exception:
-            pass
+            logger.exception("mailing photo rename failed campaign=%s", cid)
 
     log_admin_action(
         actor_role=_admin_role(request, config) or "owner",

@@ -25,6 +25,38 @@ CAMPAIGN_STATUSES = ("draft", "queued", "running", "paused", "done", "cancelled"
 MAIL_SKIP_USERNAMES = ("nastya_stand_up", "ccoverr")
 # Тестовые получатели в админке (Ирина TG / VK).
 MAILING_TEST_USER_IDS = {"telegram": 243, "vkontakte": 20622}
+MAILING_PHOTO_MAX = 3
+
+
+def campaign_photo_paths(campaign: dict | None) -> list[str]:
+    """Up to three image paths: photo_paths JSON, else legacy photo_path."""
+    campaign = campaign or {}
+    raw = campaign.get("photo_paths")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = None
+    paths: list[str] = []
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            path = str(item or "").strip()
+            if path:
+                paths.append(path)
+    if not paths:
+        one = str(campaign.get("photo_path") or "").strip()
+        if one:
+            paths.append(one)
+    seen: set[str] = set()
+    out: list[str] = []
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        out.append(path)
+        if len(out) >= MAILING_PHOTO_MAX:
+            break
+    return out
 
 
 def mailing_error_is_vk_denied(error: str | None) -> bool:
@@ -549,6 +581,7 @@ def _ensure_mailing_tables_locked() -> None:
                             )),
                         body_html TEXT NOT NULL DEFAULT '',
                         photo_path TEXT,
+                        photo_paths JSONB NOT NULL DEFAULT '[]'::jsonb,
                         button_text TEXT,
                         button_url TEXT,
                         followup_html TEXT,
@@ -659,6 +692,20 @@ def _ensure_mailing_tables_locked() -> None:
                     """
                     ALTER TABLE mailing_campaigns
                     ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE mailing_campaigns
+                    ADD COLUMN IF NOT EXISTS photo_paths JSONB NOT NULL DEFAULT '[]'::jsonb
+                    """
+                )
+                cur.execute(
+                    """
+                    UPDATE mailing_campaigns
+                    SET photo_paths = jsonb_build_array(photo_path)
+                    WHERE COALESCE(photo_path, '') <> ''
+                      AND (photo_paths IS NULL OR photo_paths = '[]'::jsonb)
                     """
                 )
                 cur.execute(
@@ -1125,6 +1172,7 @@ def create_campaign(
     created_by: str = "owner",
     start: bool = True,
     scheduled_at: datetime | str | None = None,
+    photo_paths: list[str] | None = None,
 ) -> dict:
     ensure_mailing_tables()
     if not _use_postgres():
@@ -1132,7 +1180,9 @@ def create_campaign(
     if channel not in CHANNELS:
         raise ValueError("bad channel")
     body_html = (body_html or "").strip()
-    if not body_html and not photo_path:
+    paths = campaign_photo_paths({"photo_paths": photo_paths or [], "photo_path": photo_path})
+    photo_path = paths[0] if paths else None
+    if not body_html and not paths:
         raise ValueError("Нужен текст или картинка")
     interval_sec = max(0.0, min(float(interval_sec), 60.0))
     filters_n = normalize_filters(filters)
@@ -1161,13 +1211,13 @@ def create_campaign(
             cur.execute(
                 """
                 INSERT INTO mailing_campaigns (
-                    title, channel, status, body_html, photo_path,
+                    title, channel, status, body_html, photo_path, photo_paths,
                     button_text, button_url, followup_html, followup_until,
                     disable_link_preview, interval_sec, batch_limit, filters,
                     total_count, created_by, scheduled_at
                 )
                 VALUES (
-                    %(title)s, %(channel)s, %(status)s, %(body_html)s, %(photo_path)s,
+                    %(title)s, %(channel)s, %(status)s, %(body_html)s, %(photo_path)s, %(photo_paths)s,
                     %(button_text)s, %(button_url)s, %(followup_html)s, %(followup_until)s,
                     %(disable_link_preview)s, %(interval_sec)s, %(batch_limit)s, %(filters)s,
                     0, %(created_by)s, %(scheduled_at)s
@@ -1180,6 +1230,7 @@ def create_campaign(
                     "status": "queued" if start else "draft",
                     "body_html": body_html,
                     "photo_path": photo_path,
+                    "photo_paths": Json(paths),
                     "button_text": button_text,
                     "button_url": button_url,
                     "followup_html": followup_html,
@@ -1322,7 +1373,8 @@ def create_remainder_campaign(limited_id: int, *, created_by: str = "owner") -> 
         raise ValueError(
             "Не кого досылать: нет предыдущей более крупной очереди или все из неё уже были в этой рассылке"
         )
-    if not (limited.get("body_html") or "").strip() and not (limited.get("photo_path") or "").strip():
+    remainder_photos = campaign_photo_paths(limited)
+    if not (limited.get("body_html") or "").strip() and not remainder_photos:
         raise ValueError("У этой рассылки нет текста и картинки")
     title = (limited.get("title") or "Рассылка").strip()
     if "остаток" not in title.casefold():
@@ -1340,13 +1392,13 @@ def create_remainder_campaign(limited_id: int, *, created_by: str = "owner") -> 
             cur.execute(
                 """
                 INSERT INTO mailing_campaigns (
-                    title, channel, status, body_html, photo_path,
+                    title, channel, status, body_html, photo_path, photo_paths,
                     button_text, button_url, followup_html, followup_until,
                     disable_link_preview, interval_sec, batch_limit, filters,
                     total_count, created_by
                 )
                 VALUES (
-                    %(title)s, %(channel)s, 'queued', %(body_html)s, %(photo_path)s,
+                    %(title)s, %(channel)s, 'queued', %(body_html)s, %(photo_path)s, %(photo_paths)s,
                     %(button_text)s, %(button_url)s, %(followup_html)s, %(followup_until)s,
                     %(disable_link_preview)s, %(interval_sec)s, NULL, %(filters)s,
                     0, %(created_by)s
@@ -1357,7 +1409,8 @@ def create_remainder_campaign(limited_id: int, *, created_by: str = "owner") -> 
                     "title": title,
                     "channel": channel,
                     "body_html": limited.get("body_html") or "",
-                    "photo_path": limited.get("photo_path"),
+                    "photo_path": remainder_photos[0] if remainder_photos else limited.get("photo_path"),
+                    "photo_paths": Json(remainder_photos),
                     "button_text": limited.get("button_text"),
                     "button_url": limited.get("button_url"),
                     "followup_html": limited.get("followup_html"),
@@ -1888,14 +1941,24 @@ def list_recipients(
     return {"rows": rows, "total": total, "page": page, "pages": pages}
 
 
-def set_campaign_photo(campaign_id: int, photo_path: str | None) -> None:
+def set_campaign_photos(campaign_id: int, photo_paths: list[str] | None) -> None:
+    paths = campaign_photo_paths({"photo_paths": photo_paths or []})
+    first = paths[0] if paths else None
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE mailing_campaigns SET photo_path = %s WHERE id = %s",
-                (photo_path, int(campaign_id)),
+                """
+                UPDATE mailing_campaigns
+                SET photo_path = %s, photo_paths = %s
+                WHERE id = %s
+                """,
+                (first, Json(paths), int(campaign_id)),
             )
         conn.commit()
+
+
+def set_campaign_photo(campaign_id: int, photo_path: str | None) -> None:
+    set_campaign_photos(campaign_id, [photo_path] if photo_path else [])
 
 
 def iso(dt: Any) -> str:

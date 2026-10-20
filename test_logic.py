@@ -322,6 +322,43 @@ def test_mailing_vk_denied_and_defaults():
     print("mailing vk denied and defaults: OK")
 
 
+def test_mailing_photo_paths():
+    from pathlib import Path
+
+    from bot.db.mailing import MAILING_PHOTO_MAX, campaign_photo_paths
+
+    assert MAILING_PHOTO_MAX == 3
+    assert campaign_photo_paths(None) == []
+    assert campaign_photo_paths({}) == []
+    assert campaign_photo_paths({"photo_path": "a.jpg"}) == ["a.jpg"]
+    assert campaign_photo_paths({"photo_paths": [], "photo_path": "old.jpg"}) == ["old.jpg"]
+    assert campaign_photo_paths({"photo_paths": ["a.jpg", "b.jpg", "c.jpg"]}) == [
+        "a.jpg",
+        "b.jpg",
+        "c.jpg",
+    ]
+    assert campaign_photo_paths({"photo_paths": ["a.jpg", "b.jpg", "c.jpg", "d.jpg"]}) == [
+        "a.jpg",
+        "b.jpg",
+        "c.jpg",
+    ]
+    assert campaign_photo_paths({"photo_paths": ["a.jpg", "a.jpg", "b.jpg"]}) == [
+        "a.jpg",
+        "b.jpg",
+    ]
+    assert campaign_photo_paths({"photo_paths": '["x.jpg","y.jpg"]'}) == ["x.jpg", "y.jpg"]
+    worker_src = Path("bot/admin/mailing_worker.py").read_text(encoding="utf-8")
+    assert "send_media_group" in worker_src
+    assert 'return ",".join(parts)' in worker_src
+    tab_src = Path("bot/admin/mailing_tab.py").read_text(encoding="utf-8")
+    assert 'name="photo2"' in tab_src
+    assert 'name="photo3"' in tab_src
+    mailing_src = Path("bot/db/mailing.py").read_text(encoding="utf-8")
+    assert "photo_paths JSONB" in mailing_src
+    assert "def set_campaign_photos" in mailing_src
+    print("mailing photo paths: OK")
+
+
 def test_mailing_followup_expires_after_show_start():
     from datetime import date, datetime, time
 
@@ -914,6 +951,7 @@ async def main():
     test_mailing_schedule_and_templates()
     test_mailing_best_show_fill()
     test_mailing_vk_denied_and_defaults()
+    test_mailing_photo_paths()
     test_mailing_followup_expires_after_show_start()
     test_db_schema()
     test_vk_message_item_has_photo()

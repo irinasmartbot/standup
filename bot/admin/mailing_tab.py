@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from bot.db.mailing import (
+    campaign_photo_paths,
     estimate_duration_sec,
     format_admin_datetime,
     format_duration,
@@ -236,11 +237,13 @@ def render_mailing_tab(
         until_val = ""
         if until_raw:
             until_val = str(until_raw)[:10]
+        n_photos = len(campaign_photo_paths(detail))
         msg_meta = (
             f"<p class='muted'>Кнопка: {_h(btn) or '—'} · "
             f"ссылка: {_h(btn_url) or 'нет'} · "
             f"превью ссылок: {'выкл' if preview_off else 'вкл'} · "
-            f"кнопка до: {_h(until_val) or 'не задано'}</p>"
+            f"кнопка до: {_h(until_val) or 'не задано'} · "
+            f"картинок: {n_photos}</p>"
         )
         follow_block = ""
         if follow:
@@ -398,9 +401,19 @@ def render_mailing_tab(
     <label>Текст сообщения
       <textarea name="body_html" rows="8" placeholder="Привет! В эту пятницу..."></textarea>
     </label>
-    <label>Картинка (необязательно)
-      <input type="file" name="photo" accept="image/jpeg,image/png,image/webp">
-    </label>
+    <fieldset class="mailing-row">
+      <legend>Картинки (до 3, необязательно)</legend>
+      <label>1
+        <input type="file" name="photo" accept="image/jpeg,image/png,image/webp">
+      </label>
+      <label>2
+        <input type="file" name="photo2" accept="image/jpeg,image/png,image/webp">
+      </label>
+      <label>3
+        <input type="file" name="photo3" accept="image/jpeg,image/png,image/webp">
+      </label>
+      <p class="muted" style="margin:6px 0 0">В Telegram две и три фото уйдут альбомом, кнопка — следующим сообщением. В VK — одним сообщением с кнопкой.</p>
+    </fieldset>
     <div class="mailing-grid mailing-grid-2">
       <label>Текст кнопки
         <input type="text" name="button_text" maxlength="40" placeholder="Забронировать">
@@ -904,7 +917,7 @@ var MAIL_RESIDENTS_LAST_DATE = """
     var btnEl = form.querySelector('[name=button_text]');
     var urlEl = form.querySelector('[name=button_url]');
     var untilEl = form.querySelector('[name=followup_until]');
-    var photoEl = form.querySelector('[name=photo]');
+    var photoEls = form.querySelectorAll('[name=photo], [name=photo2], [name=photo3]');
     var hasText = !!(
       (body && body.value.trim()) ||
       (fu && fu.value.trim()) ||
@@ -919,7 +932,7 @@ var MAIL_RESIDENTS_LAST_DATE = """
     if (btnEl) btnEl.value = '';
     if (urlEl) urlEl.value = '';
     if (untilEl) untilEl.value = '';
-    if (photoEl) photoEl.value = '';
+    photoEls.forEach(function(el){ el.value = ''; });
     var tg = form.querySelector('input[name=channel][value="telegram"]');
     if (tg) tg.checked = true;
     syncShowWrap();
@@ -1006,6 +1019,8 @@ var MAIL_RESIDENTS_LAST_DATE = """
     var fd = new FormData(form);
     // Без картинки — обычный urlencoded надёжнее для preview.
     fd.delete('photo');
+    fd.delete('photo2');
+    fd.delete('photo3');
     box.innerHTML = '<span class="muted">Считаем…</span>';
     fetch('/admin/mailing/preview', {method:'POST', body: fd, credentials:'same-origin'})
       .then(function(r){
@@ -1053,7 +1068,7 @@ var MAIL_RESIDENTS_LAST_DATE = """
           (d.batch_limit ? (', лимит ' + d.batch_limit) : '') +
           '; в базе всего телеграм ' + (db.telegram||0) + ' · вк ' + (db.vkontakte||0) +
           ')</span><br>Примерное время: <b>' + eta + '</b> при интервале ' + interval + ' сек' +
-          '<br><span class="muted">Время ≈ только паузы между сообщениями. Если телеграм попросит подождать — растянется. Картинка грузится один раз на всю рассылку.</span>' +
+          '<br><span class="muted">Время ≈ только паузы между сообщениями. Если телеграм попросит подождать — растянется. Картинки грузятся один раз на всю рассылку.</span>' +
           '<br><span class="muted">Считаем по: ' + statuses + ' · ' + dateLabel +
           ' · exclude ' + (f.exclude_sent_days || 0) + ' дн.' +
           (f.exclude_today_bookings ? ' · без сегодняшних шоу' : '') +

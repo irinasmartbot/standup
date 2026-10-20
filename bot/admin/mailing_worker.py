@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from bot.db.mailing import (
+    campaign_photo_paths,
     claim_next_campaign,
     ensure_mailing_tables,
     finalize_if_complete,
@@ -25,10 +26,10 @@ _worker_started = False
 
 # Переиспользуем HTTP-сессию бота на всю жизнь воркера — иначе TLS на каждое сообщение.
 _tg_bot = None
-# file_id картинки по campaign_id: без повторной загрузки одного и того же файла.
-_tg_photo_file_ids: dict[int, str] = {}
+# file_id картинок по campaign_id: без повторной загрузки одних и тех же файлов.
+_tg_photo_file_ids: dict[int, list[str]] = {}
 _vk_client = None
-# VK attachment баннера по campaign_id — без upload на каждого получателя.
+# VK attachments баннеров по campaign_id — без upload на каждого получателя.
 _vk_photo_attachments: dict[int, str] = {}
 
 
@@ -79,6 +80,10 @@ def _tg_markup(campaign: dict):
     return None
 
 
+def _campaign_photo_files(campaign: dict) -> list[str]:
+    return [path for path in campaign_photo_paths(campaign) if Path(path).is_file()]
+
+
 def _tg_preview_kwargs(campaign: dict) -> dict:
     if not bool(campaign.get("disable_link_preview")):
         return {}
@@ -96,20 +101,24 @@ async def _send_telegram(
     *,
     bot=None,
     photo_file_id: str | None = None,
-) -> str | None:
-    """Send one TG message. Returns photo file_id if a photo was sent (for reuse)."""
-    from aiogram.types import FSInputFile
+) -> list[str] | None:
+    """Send one TG letter. Returns photo file_ids if photos were sent (for reuse)."""
+    from aiogram.types import FSInputFile, InputMediaPhoto
 
     bot = bot or await _get_tg_bot()
     text = (campaign.get("body_html") or "").strip()
-    photo_path = (campaign.get("photo_path") or "").strip()
+    paths = _campaign_photo_files(campaign)
     markup = _tg_markup(campaign)
     send_kwargs = _tg_preview_kwargs(campaign)
     campaign_id = int(campaign["id"])
+    cached = _tg_photo_file_ids.get(campaign_id)
+    if photo_file_id:
+        cached = [photo_file_id]
+    if cached and len(cached) != len(paths):
+        cached = None
 
-    if photo_path and Path(photo_path).is_file():
-        cached = photo_file_id or _tg_photo_file_ids.get(campaign_id)
-        photo = cached if cached else FSInputFile(photo_path)
+    if len(paths) == 1:
+        photo = cached[0] if cached else FSInputFile(paths[0])
         msg = await bot.send_photo(
             chat_id=int(peer_id),
             photo=photo,
@@ -117,11 +126,37 @@ async def _send_telegram(
             parse_mode="HTML" if text else None,
             reply_markup=markup,
         )
-        file_id = None
+        file_ids: list[str] = []
         if msg.photo:
-            file_id = msg.photo[-1].file_id
-            _tg_photo_file_ids[campaign_id] = file_id
-        return file_id
+            file_ids = [msg.photo[-1].file_id]
+            _tg_photo_file_ids[campaign_id] = file_ids
+        return file_ids or None
+
+    if len(paths) >= 2:
+        media = []
+        for i, path in enumerate(paths):
+            media_ref = cached[i] if cached else FSInputFile(path)
+            item: dict = {"media": media_ref}
+            if i == 0 and text:
+                item["caption"] = text
+                item["parse_mode"] = "HTML"
+            media.append(InputMediaPhoto(**item))
+        msgs = await bot.send_media_group(chat_id=int(peer_id), media=media)
+        file_ids = []
+        for msg in msgs or []:
+            if getattr(msg, "photo", None):
+                file_ids.append(msg.photo[-1].file_id)
+        if file_ids:
+            _tg_photo_file_ids[campaign_id] = file_ids
+        if markup:
+            button_label = (campaign.get("button_text") or "").strip() or "👇"
+            await bot.send_message(
+                chat_id=int(peer_id),
+                text=button_label,
+                reply_markup=markup,
+                **send_kwargs,
+            )
+        return file_ids or None
 
     if not text:
         raise RuntimeError("Пустое сообщение")
@@ -157,15 +192,21 @@ def _vk_photo_send_failed(exc: BaseException) -> bool:
 
 
 async def _upload_vk_mailing_photo(client, campaign: dict, peer_id: int) -> str | None:
-    photo_path = (campaign.get("photo_path") or "").strip()
-    if not photo_path or not Path(photo_path).is_file():
+    paths = _campaign_photo_files(campaign)
+    if not paths:
         return None
-    data = Path(photo_path).read_bytes()
-    return await client.upload_message_photo(
-        int(peer_id),
-        data,
-        filename=Path(photo_path).name,
-    )
+    parts: list[str] = []
+    for photo_path in paths:
+        data = Path(photo_path).read_bytes()
+        attachment = await client.upload_message_photo(
+            int(peer_id),
+            data,
+            filename=Path(photo_path).name,
+        )
+        if not attachment:
+            raise RuntimeError("VK photo upload empty")
+        parts.append(attachment)
+    return ",".join(parts)
 
 
 async def _send_vkontakte(campaign: dict, peer_id: int) -> None:
@@ -174,14 +215,14 @@ async def _send_vkontakte(campaign: dict, peer_id: int) -> None:
     client = await _get_vk_client()
     campaign_id = int(campaign["id"])
     text = (campaign.get("body_html") or "").strip() or " "
-    photo_path = (campaign.get("photo_path") or "").strip()
+    paths = _campaign_photo_files(campaign)
     button_text = (campaign.get("button_text") or "").strip()
     button_url = (campaign.get("button_url") or "").strip()
     followup = (campaign.get("followup_html") or "").strip()
 
-    attachment = _vk_photo_attachments.get(campaign_id) if photo_path else None
+    attachment = _vk_photo_attachments.get(campaign_id) if paths else None
     used_cache = bool(attachment)
-    if photo_path and not attachment:
+    if paths and not attachment:
         attachment = await _upload_vk_mailing_photo(client, campaign, peer_id)
         if attachment:
             _vk_photo_attachments[campaign_id] = attachment
