@@ -6551,6 +6551,39 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     raise web.HTTPFound(f"/admin?tab=mailing&m_flash={flash}")
 
 
+async def mailing_title_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin/login")
+    form = await request.post()
+    from urllib.parse import quote
+
+    from bot.db.admin_audit import log_admin_action
+    from bot.db.mailing import set_campaign_title
+
+    cid_raw = (form.get("campaign_id") or "").strip()
+    if not cid_raw.isdigit():
+        raise web.HTTPFound("/admin?tab=mailing")
+    cid = int(cid_raw)
+    title = _form_text(form, "title")
+    row = await asyncio.get_running_loop().run_in_executor(
+        None, set_campaign_title, cid, title
+    )
+    if not row:
+        raise web.HTTPFound(f"/admin?tab=mailing&m_err={quote('Кампания не найдена')}")
+    log_admin_action(
+        actor_role=_admin_role(request, config) or "owner",
+        action="mailing_title",
+        entity_type="mailing_campaign",
+        entity_id=str(cid),
+        details={"title": row.get("title")},
+    )
+    flash = quote(f"Название #{cid} сохранено")
+    if (form.get("from_detail") or "") in {"1", "on", "true", "yes"}:
+        raise web.HTTPFound(f"/admin?tab=mailing&campaign={cid}&m_flash={flash}")
+    raise web.HTTPFound(f"/admin?tab=mailing&m_flash={flash}")
+
+
 async def mailing_followup_until_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config) or not _can_resend_tickets(request, config):
@@ -6766,6 +6799,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_post("/admin/mailing/templates", mailing_templates_page)
     app.router.add_post("/admin/mailing/retry-remainder", mailing_retry_remainder_page)
     app.router.add_post("/admin/mailing/followup-until", mailing_followup_until_page)
+    app.router.add_post("/admin/mailing/title", mailing_title_page)
     app.router.add_get("/admin/mailing/users-search", mailing_users_search_page)
     app.router.add_post("/admin/mailing/test", mailing_test_page)
     app.router.add_post("/admin/mailing/raffle-cancel-notify", mailing_raffle_cancel_notify_page)

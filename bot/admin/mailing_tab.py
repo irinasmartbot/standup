@@ -129,7 +129,11 @@ def render_mailing_tab(
         rows.append(
             "<tr>"
             f"<td data-label=\"id\">{cid}</td>"
-            f"<td data-label=\"Название\">{_h(c.get('title'))}<br>"
+            f"<td data-label=\"Название\">"
+            f'<form method="post" action="/admin/mailing/title" class="inline-form mailing-rename">'
+            f'<input type="hidden" name="campaign_id" value="{cid}">'
+            f'<input type="text" name="title" value="{_h(c.get("title"))}" maxlength="120" aria-label="Название">'
+            f'<button type="submit">Сохранить</button></form>'
             f"<span class='muted'>{_h(_channel_label(c.get('channel')))}</span></td>"
             f"<td data-label=\"Статус / время\">{_h(status_label)}"
             f"<br><span class='muted'>{_h(when_label)}</span></td>"
@@ -270,9 +274,18 @@ def render_mailing_tab(
                 "по кнопке уйдёт текст «мероприятие уже неактуально».</p>"
                 "</form>"
             )
+        title_form = (
+            f'<form method="post" action="/admin/mailing/title" class="inline-form mailing-rename mailing-rename-detail">'
+            f'<input type="hidden" name="campaign_id" value="{int(cid)}">'
+            f'<input type="hidden" name="from_detail" value="1">'
+            f"<label>Название"
+            f'<input type="text" name="title" value="{_h(detail.get("title"))}" maxlength="120"></label>'
+            f'<button type="submit">Сохранить название</button></form>'
+        )
         detail_html = (
             '<section class="card mailing-detail">'
-            f"<h2>Кампания #{_h(cid)} · {_h(detail.get('title'))}</h2>"
+            f"<h2>Кампания #{_h(cid)}</h2>"
+            f"{title_form}"
             f"<p class='muted'>Статус: {_h(STATUS_LABELS.get(detail.get('status'), detail.get('status')))} · "
             f"канал {_h(_channel_label(detail.get('channel')))} · интервал {_h(detail.get('interval_sec'))} сек"
             f"{(' · план ' + format_admin_datetime(detail.get('scheduled_at'))) if detail.get('scheduled_at') else ''}</p>"
@@ -1256,6 +1269,14 @@ var MAIL_RESIDENTS_LAST_DATE = """
   .mailing-reschedule input[type=datetime-local] {
     padding:8px 10px; border-radius:12px; border:1px solid var(--mail-line); font:inherit;
   }
+  .mailing-rename { display:flex; flex-direction:column; align-items:stretch; gap:6px; }
+  .mailing-rename input[type=text] {
+    width:100%; max-width:280px; padding:8px 10px; border-radius:12px; border:1px solid var(--mail-line); font:inherit;
+  }
+  .mailing-rename button { align-self:flex-start; }
+  .mailing-rename-detail { margin:8px 0 12px; }
+  .mailing-rename-detail label { display:flex; flex-direction:column; gap:6px; font-weight:700; }
+  .mailing-rename-detail input[type=text] { max-width:420px; }
   .mailing-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
   .mailing-grid-2 { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .mailing-tpl-bar {
@@ -1372,6 +1393,7 @@ var MAIL_RESIDENTS_LAST_DATE = """
       content:attr(data-label); display:block; font-size:12px;
       color:var(--mail-muted); font-weight:700; margin-bottom:2px;
     }
+    .mailing-history .mailing-rename input[type=text] { max-width:100%; }
     .mailing-history td.mailing-actions {
       display:flex; flex-direction:column; align-items:stretch; gap:8px; padding-top:10px;
     }

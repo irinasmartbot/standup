@@ -1516,6 +1516,26 @@ def get_campaign_followup(campaign_id: int) -> str | None:
     return text
 
 
+def set_campaign_title(campaign_id: int, title: str) -> dict | None:
+    """Переименовать кампанию. Имя только для админки, в письмо не уходит."""
+    ensure_mailing_tables()
+    title = (title or "").strip()[:120] or "Рассылка"
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE mailing_campaigns
+                SET title = %(title)s
+                WHERE id = %(id)s
+                RETURNING *
+                """,
+                {"id": int(campaign_id), "title": title},
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+
+
 def set_campaign_followup_until(campaign_id: int, until: date | str | None) -> dict | None:
     """Проставить/сбросить дату актуальности кнопки для уже созданной кампании."""
     ensure_mailing_tables()

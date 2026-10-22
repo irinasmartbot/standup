@@ -180,6 +180,15 @@ def test_mailing_schedule_and_templates():
     assert "20:30" in by_key["hitloto_vk"]["followup_html"]
     assert "@ccoverr" in by_key["hitloto_tg"]["body_html"]
     assert not by_key["hitloto_tg"]["followup_html"]
+    from pathlib import Path
+
+    mailing_src = Path("bot/db/mailing.py").read_text(encoding="utf-8")
+    tab_src = Path("bot/admin/mailing_tab.py").read_text(encoding="utf-8")
+    app_src = Path("bot/admin/app.py").read_text(encoding="utf-8")
+    assert "def set_campaign_title" in mailing_src
+    assert 'action="/admin/mailing/title"' in tab_src
+    assert "mailing-rename" in tab_src
+    assert 'app.router.add_post("/admin/mailing/title"' in app_src
     print("mailing schedule and templates: OK")
 
 
