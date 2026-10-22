@@ -30,6 +30,28 @@ def _h(value) -> str:
     )
 
 
+def _rename_form(cid, title: str, *, from_detail: bool = False) -> str:
+    extra = '<input type="hidden" name="from_detail" value="1">' if from_detail else ""
+    cls = "inline-form mailing-rename"
+    if from_detail:
+        cls += " mailing-rename-detail"
+    return (
+        f'<form method="post" action="/admin/mailing/title" class="{cls}">'
+        f'<input type="hidden" name="campaign_id" value="{cid}">'
+        f"{extra}"
+        f'<span class="mailing-rename-view">'
+        f'<span class="mailing-rename-text">{_h(title)}</span>'
+        f'<button type="button" class="mailing-rename-edit" title="Поправить название" '
+        f'aria-label="Поправить название">&#9998;</button>'
+        f"</span>"
+        f'<span class="mailing-rename-editbox" hidden>'
+        f'<input type="text" name="title" value="{_h(title)}" maxlength="120" aria-label="Название">'
+        f'<button type="submit" class="mailing-rename-save">Сохранить</button>'
+        f'<button type="button" class="mailing-rename-cancel">Отмена</button>'
+        f"</span></form>"
+    )
+
+
 STATUS_LABELS = {
     "draft": "черновик",
     "queued": "в очереди",
@@ -130,10 +152,7 @@ def render_mailing_tab(
             "<tr>"
             f"<td data-label=\"id\">{cid}</td>"
             f"<td data-label=\"Название\">"
-            f'<form method="post" action="/admin/mailing/title" class="inline-form mailing-rename">'
-            f'<input type="hidden" name="campaign_id" value="{cid}">'
-            f'<input type="text" name="title" value="{_h(c.get("title"))}" maxlength="120" aria-label="Название">'
-            f'<button type="submit">Сохранить</button></form>'
+            f"{_rename_form(cid, c.get('title') or '')}"
             f"<span class='muted'>{_h(_channel_label(c.get('channel')))}</span></td>"
             f"<td data-label=\"Статус / время\">{_h(status_label)}"
             f"<br><span class='muted'>{_h(when_label)}</span></td>"
@@ -274,17 +293,10 @@ def render_mailing_tab(
                 "по кнопке уйдёт текст «мероприятие уже неактуально».</p>"
                 "</form>"
             )
-        title_form = (
-            f'<form method="post" action="/admin/mailing/title" class="inline-form mailing-rename mailing-rename-detail">'
-            f'<input type="hidden" name="campaign_id" value="{int(cid)}">'
-            f'<input type="hidden" name="from_detail" value="1">'
-            f"<label>Название"
-            f'<input type="text" name="title" value="{_h(detail.get("title"))}" maxlength="120"></label>'
-            f'<button type="submit">Сохранить название</button></form>'
-        )
+        title_form = _rename_form(int(cid), detail.get("title") or "", from_detail=True)
         detail_html = (
             '<section class="card mailing-detail">'
-            f"<h2>Кампания #{_h(cid)}</h2>"
+            f'<h2 class="mailing-detail-head">Кампания #{_h(cid)}</h2>'
             f"{title_form}"
             f"<p class='muted'>Статус: {_h(STATUS_LABELS.get(detail.get('status'), detail.get('status')))} · "
             f"канал {_h(_channel_label(detail.get('channel')))} · интервал {_h(detail.get('interval_sec'))} сек"
@@ -1269,13 +1281,36 @@ var MAIL_RESIDENTS_LAST_DATE = """
   .mailing-reschedule input[type=datetime-local] {
     padding:8px 10px; border-radius:12px; border:1px solid var(--mail-line); font:inherit;
   }
-  .mailing-rename { display:flex; flex-direction:column; align-items:stretch; gap:6px; }
+  form.mailing-rename {
+    display:flex; flex-direction:column; align-items:flex-start; gap:2px; margin:0;
+  }
+  .mailing-rename-view {
+    display:inline-flex; align-items:flex-start; gap:6px; max-width:280px;
+  }
+  .mailing-rename-text { font-weight:700; color:var(--mail-ink); word-break:break-word; }
+  .mailing-rename-edit {
+    flex:none; margin:0; padding:0 2px !important; border:0 !important;
+    background:transparent !important; color:var(--mail-muted) !important;
+    box-shadow:none !important; border-radius:4px !important; cursor:pointer;
+    font-size:14px !important; font-weight:400 !important; line-height:1.2 !important;
+    min-height:0 !important; width:auto !important;
+  }
+  .mailing-rename-edit:hover { color:var(--mail-accent-deep) !important; }
+  .mailing-rename-editbox { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
   .mailing-rename input[type=text] {
     width:100%; max-width:280px; padding:8px 10px; border-radius:12px; border:1px solid var(--mail-line); font:inherit;
   }
-  .mailing-rename button { align-self:flex-start; }
-  .mailing-rename-detail { margin:8px 0 12px; }
-  .mailing-rename-detail label { display:flex; flex-direction:column; gap:6px; font-weight:700; }
+  .mailing-rename-save {
+    padding:6px 12px !important; font-size:13px !important; font-weight:700 !important;
+    min-height:0 !important; width:auto !important;
+  }
+  .mailing-rename-cancel {
+    border:0 !important; background:transparent !important; color:var(--mail-muted) !important;
+    padding:6px 8px !important; font-weight:600 !important; box-shadow:none !important;
+    min-height:0 !important; width:auto !important;
+  }
+  .mailing-rename-detail { margin:4px 0 12px; }
+  .mailing-rename-detail .mailing-rename-view,
   .mailing-rename-detail input[type=text] { max-width:420px; }
   .mailing-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
   .mailing-grid-2 { grid-template-columns:repeat(2,minmax(0,1fr)); }
@@ -1309,7 +1344,7 @@ var MAIL_RESIDENTS_LAST_DATE = """
     border-radius:16px; border:1px solid #cfe8d6; color:#355944;
   }
   .mailing-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-  .mailing-actions button, .inline-form button, .rz-cancel-add,
+  .mailing-actions button, .inline-form button:not(.mailing-rename-edit):not(.mailing-rename-cancel), .rz-cancel-add,
   .mailing-tpl-bar > button {
     padding:10px 16px; border-radius:999px; border:1px solid var(--mail-accent-deep,#2d7a3b);
     background:var(--mail-accent,#3b9a4c); color:#fff; cursor:pointer; font:inherit; font-weight:800;
@@ -1319,8 +1354,8 @@ var MAIL_RESIDENTS_LAST_DATE = """
   .mailing-raffle-cancel .mailing-actions button,
   .mailing-history .mailing-actions button,
   .mailing-detail .mailing-actions button,
-  .mailing-history .inline-form button,
-  .mailing-detail .inline-form button,
+  .mailing-history .inline-form button:not(.mailing-rename-edit):not(.mailing-rename-cancel),
+  .mailing-detail .inline-form button:not(.mailing-rename-edit):not(.mailing-rename-cancel),
   .mailing-raffle-cancel .rz-cancel-add {
     border-color:var(--mail-accent-deep); background:var(--mail-accent); color:#fff;
   }
@@ -1393,7 +1428,9 @@ var MAIL_RESIDENTS_LAST_DATE = """
       content:attr(data-label); display:block; font-size:12px;
       color:var(--mail-muted); font-weight:700; margin-bottom:2px;
     }
+    .mailing-history .mailing-rename-view,
     .mailing-history .mailing-rename input[type=text] { max-width:100%; }
+    .mailing-history .mailing-rename-edit { width:auto !important; display:inline; }
     .mailing-history td.mailing-actions {
       display:flex; flex-direction:column; align-items:stretch; gap:8px; padding-top:10px;
     }
@@ -1409,4 +1446,38 @@ var MAIL_RESIDENTS_LAST_DATE = """
   }
 </style>
 """
-    return styles + flash_html + error_html + detail_html + form + raffle_cancel + history
+    rename_js = """
+<script>
+(function(){
+  function closeEdit(form){
+    form.classList.remove('is-editing');
+    var box = form.querySelector('.mailing-rename-editbox');
+    var view = form.querySelector('.mailing-rename-view');
+    if (box) box.hidden = true;
+    if (view) view.hidden = false;
+    var input = form.querySelector('input[name=title]');
+    var text = form.querySelector('.mailing-rename-text');
+    if (input && text) input.value = text.textContent;
+  }
+  function openEdit(form){
+    form.classList.add('is-editing');
+    var box = form.querySelector('.mailing-rename-editbox');
+    var view = form.querySelector('.mailing-rename-view');
+    if (view) view.hidden = true;
+    if (box) box.hidden = false;
+    var input = form.querySelector('input[name=title]');
+    if (input) { input.focus(); input.select(); }
+  }
+  document.querySelectorAll('form.mailing-rename').forEach(function(form){
+    var edit = form.querySelector('.mailing-rename-edit');
+    var cancel = form.querySelector('.mailing-rename-cancel');
+    if (edit) edit.addEventListener('click', function(ev){ ev.preventDefault(); openEdit(form); });
+    if (cancel) cancel.addEventListener('click', function(ev){ ev.preventDefault(); closeEdit(form); });
+    form.addEventListener('keydown', function(ev){
+      if (ev.key === 'Escape') { ev.preventDefault(); closeEdit(form); }
+    });
+  });
+})();
+</script>
+"""
+    return styles + flash_html + error_html + detail_html + form + raffle_cancel + history + rename_js

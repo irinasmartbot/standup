@@ -187,7 +187,8 @@ def test_mailing_schedule_and_templates():
     app_src = Path("bot/admin/app.py").read_text(encoding="utf-8")
     assert "def set_campaign_title" in mailing_src
     assert 'action="/admin/mailing/title"' in tab_src
-    assert "mailing-rename" in tab_src
+    assert "mailing-rename-edit" in tab_src
+    assert "mailing-rename-editbox" in tab_src
     assert 'app.router.add_post("/admin/mailing/title"' in app_src
     print("mailing schedule and templates: OK")
 
