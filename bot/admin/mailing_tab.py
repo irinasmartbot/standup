@@ -1296,7 +1296,11 @@ var MAIL_RESIDENTS_LAST_DATE = """
     min-height:0 !important; width:auto !important;
   }
   .mailing-rename-edit:hover { color:var(--mail-accent-deep) !important; }
-  .mailing-rename-editbox { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .mailing-rename-editbox { display:none !important; }
+  form.mailing-rename.is-editing .mailing-rename-view { display:none !important; }
+  form.mailing-rename.is-editing .mailing-rename-editbox {
+    display:flex !important; flex-wrap:wrap; gap:6px; align-items:center;
+  }
   .mailing-rename input[type=text] {
     width:100%; max-width:280px; padding:8px 10px; border-radius:12px; border:1px solid var(--mail-line); font:inherit;
   }

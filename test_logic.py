@@ -189,6 +189,8 @@ def test_mailing_schedule_and_templates():
     assert 'action="/admin/mailing/title"' in tab_src
     assert "mailing-rename-edit" in tab_src
     assert "mailing-rename-editbox" in tab_src
+    assert ".mailing-rename-editbox { display:none !important; }" in tab_src
+    assert "form.mailing-rename.is-editing .mailing-rename-editbox" in tab_src
     assert 'app.router.add_post("/admin/mailing/title"' in app_src
     print("mailing schedule and templates: OK")
 
