@@ -322,10 +322,20 @@ def raffle_not_alone_keyboard(*, paid_booking_link: str = "") -> str:
     return kb.as_json()
 
 
-def manage_ticket_keyboard(booking_id: int, settings_manager_link: str) -> str:
+def manage_ticket_keyboard(
+    booking_id: int,
+    settings_manager_link: str,
+    *,
+    can_change_guests: bool = False,
+) -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
     kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
+    if can_change_guests:
+        kb.button(
+            "Изменить количество гостей",
+            _payload("mb_change_guests_confirm", booking_id=booking_id),
+        )
     kb.button("Задать вопрос менеджеру", link=settings_manager_link)
     kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
@@ -614,6 +624,7 @@ async def issue_ticket(
             None,
         )
 
+    fmt = ""
     is_raffle = False
     try:
         from bot.db.crud import get_active_raffle_booking, get_booking_format
@@ -625,6 +636,12 @@ async def issue_ticket(
         )
     except Exception:
         pass
+    try:
+        from bot.utils.show_formats import FREE_BOOKING_FORMATS
+
+        can_change_guests = fmt in FREE_BOOKING_FORMATS and not is_raffle
+    except Exception:
+        can_change_guests = False
 
     # Места проверяем только у «Проверки» и только при первом подтверждении.
     # Розыгрыш / BEST: max_seats не ограничивает выдачу билета.
@@ -692,7 +709,11 @@ async def issue_ticket(
             f"Канал анонсов: {vk_community}"
             f"{escobar_proverka_ticket_ps(location=event_location, address=event_address)}"
         )
-        keyboard = manage_ticket_keyboard(booking_id, manager_link)
+        keyboard = manage_ticket_keyboard(
+            booking_id,
+            manager_link,
+            can_change_guests=can_change_guests,
+        )
 
     # Сначала картинка в чат, потом confirmed — иначе при сбое upload/send
     # в карточке «билет получен», а гость видит только «уже был выдан».

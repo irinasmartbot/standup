@@ -720,6 +720,36 @@ def test_tg_keeps_ticket_message():
     print("tg keep ticket except cancel/date change: OK")
 
 
+def test_change_guests_buttons_after_confirmation():
+    from pathlib import Path
+
+    vk_ticket_src = Path("bot/vk/booking.py").read_text(encoding="utf-8")
+    assert "def manage_ticket_keyboard" in vk_ticket_src
+    assert "can_change_guests: bool = False" in vk_ticket_src
+    assert '"Изменить количество гостей"' in vk_ticket_src
+    assert "can_change_guests = fmt in FREE_BOOKING_FORMATS and not is_raffle" in vk_ticket_src
+
+    vk_my_src = Path("bot/vk/my_bookings.py").read_text(encoding="utf-8")
+    confirmed_vk = vk_my_src[
+        vk_my_src.find('if status == "confirmed"') : vk_my_src.find("else:", vk_my_src.find('if status == "confirmed"'))
+    ]
+    assert "FREE_BOOKING_FORMATS" in vk_my_src
+    assert '"Изменить количество гостей"' in confirmed_vk
+    assert "can_change_guests = format_name in FREE_BOOKING_FORMATS" in vk_my_src
+
+    tg_my_src = Path("bot/handlers/start.py").read_text(encoding="utf-8")
+    confirmed_tg = tg_my_src[
+        tg_my_src.find('text="🎟 Билет по брони"') : tg_my_src.find("nav_count = 0")
+    ]
+    assert "FREE_BOOKING_FORMATS" in tg_my_src
+    assert "change_guests_confirm_" in confirmed_tg
+    assert "can_change_guests = format_name in FREE_BOOKING_FORMATS" in tg_my_src
+
+    resend_src = Path("bot/admin/ticket_resend.py").read_text(encoding="utf-8")
+    assert "can_change_guests=(row.get(\"booking_format\") or \"\") in FREE_BOOKING_FORMATS" in resend_src
+    print("change guests buttons after confirmation: OK")
+
+
 def test_formats_module_imports_load_events():
     from pathlib import Path
 
@@ -971,6 +1001,7 @@ async def main():
     test_vk_residents_deeplink_back_button()
     test_vk_main_menu_keeps_ticket_message()
     test_tg_keeps_ticket_message()
+    test_change_guests_buttons_after_confirmation()
     test_formats_module_imports_load_events()
     test_tg_check_dates_back_uses_random_photo()
     test_vk_dates_card_back_uses_random_photo()

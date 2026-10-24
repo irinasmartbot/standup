@@ -231,8 +231,11 @@ def _ticket_command_photo(row):
 
 def _booking_command_kb(row, page: int = 0, total: int = 1):
     booking_id, format_name, status, *_ = row
+    from bot.utils.show_formats import FREE_BOOKING_FORMATS
+
     kb = InlineKeyboardBuilder()
     action_count = 0
+    can_change_guests = format_name in FREE_BOOKING_FORMATS
 
     # «Получить билет» только из напоминания; в карточке — «Билет по брони», если уже выдан
     if status == "booked":
@@ -240,7 +243,7 @@ def _booking_command_kb(row, page: int = 0, total: int = 1):
             kb.button(text="Что, если я хочу прийти не один?", callback_data="rz_not_alone")
             kb.button(text="Отменить бронь", callback_data=f"rz_cancel_{booking_id}")
             action_count += 2
-        else:
+        elif can_change_guests:
             kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
             kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
             kb.button(text="Изменить количество гостей", callback_data=f"change_guests_confirm_{booking_id}")
@@ -255,7 +258,14 @@ def _booking_command_kb(row, page: int = 0, total: int = 1):
         else:
             kb.button(text="Отменить бронь", callback_data=f"cancel_confirm_{booking_id}")
             kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
-            action_count += 2
+            if can_change_guests:
+                kb.button(
+                    text="Изменить количество гостей",
+                    callback_data=f"change_guests_confirm_{booking_id}",
+                )
+                action_count += 3
+            else:
+                action_count += 2
 
     nav_count = 0
     if total > 1:

@@ -94,9 +94,12 @@ def ticket_bytes(row) -> bytes:
 def bookings_keyboard(row, *, page: int = 0, total: int = 1) -> str:
     """Клавиатура карточки — как в Telegram (карусель + билет при confirmed)."""
     booking_id, format_name, status, *_ = row
+    from bot.utils.show_formats import FREE_BOOKING_FORMATS
+
     kb = VKKeyboardBuilder(inline=True)
     action_count = 0
     is_raffle = format_name == "rozygrysh"
+    can_change_guests = format_name in FREE_BOOKING_FORMATS
 
     # «Получить билет» только из напоминания; в карточке — «Билет по брони», если confirmed
     if status == "confirmed":
@@ -104,13 +107,17 @@ def bookings_keyboard(row, *, page: int = 0, total: int = 1) -> str:
         action_count += 1
         kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
         action_count += 1
-        if not is_raffle:
+        if can_change_guests:
             kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
-            action_count += 1
+            kb.button(
+                "Изменить количество гостей",
+                _payload("mb_change_guests_confirm", booking_id=booking_id),
+            )
+            action_count += 2
     else:
         kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))
         action_count += 1
-        if not is_raffle:
+        if can_change_guests:
             kb.button("Изменить дату", _payload("mb_change_date_confirm", booking_id=booking_id))
             kb.button(
                 "Изменить количество гостей",

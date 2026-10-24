@@ -514,7 +514,13 @@ async def _issue_ticket_vk(row: dict, *, already_confirmed: bool) -> dict:
     if _is_raffle_booking(row):
         keyboard = raffle_ticket_manage_keyboard(booking_id, manager_link=settings.manager_link)
     else:
-        keyboard = manage_ticket_keyboard(booking_id, settings.manager_link)
+        from bot.utils.show_formats import FREE_BOOKING_FORMATS
+
+        keyboard = manage_ticket_keyboard(
+            booking_id,
+            settings.manager_link,
+            can_change_guests=(row.get("booking_format") or "") in FREE_BOOKING_FORMATS,
+        )
 
     client = VKClient(settings)
     peer_id = int(vk_id)

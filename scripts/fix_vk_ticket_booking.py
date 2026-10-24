@@ -77,7 +77,13 @@ async def _send_ticket(booking_id: int) -> None:
         f"<b>Количество гостей:</b> {guests_word(int(row.get('guests') or 1))}\n\n"
         "Ждем вас на мероприятии ❤️"
     )
-    keyboard = manage_ticket_keyboard(booking_id, settings.manager_link)
+    from bot.utils.show_formats import FREE_BOOKING_FORMATS
+
+    keyboard = manage_ticket_keyboard(
+        booking_id,
+        settings.manager_link,
+        can_change_guests=(row.get("booking_format") or "") in FREE_BOOKING_FORMATS,
+    )
 
     try:
         result = await _resend_ticket_vk(
