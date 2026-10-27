@@ -6,7 +6,7 @@ from bot.config import DATABASE_URL, EVENTS_SOURCE
 from bot.db.analytics import ensure_analytics_tables
 from bot.db.crud import ensure_help_tables, ensure_raffle_tables
 from bot.db.mailing import ensure_mailing_tables
-from bot.utils.tech_alerts import format_alert, notify_tech_sync
+from bot.utils.tech_alerts import MEANING_VK_CRASH, format_alert, notify_tech_sync
 from bot.vk.app import VKBotApp
 from bot.vk.client import VKClient
 from bot.vk.config import load_vk_settings
@@ -59,7 +59,12 @@ if __name__ == "__main__":
         logger.exception("VK bot crashed")
         tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         notify_tech_sync(
-            format_alert("VK bot: процесс упал", tb, source="standup-vk-bot"),
+            format_alert(
+                "VK bot: процесс упал",
+                tb,
+                source="standup-vk-bot",
+                meaning=MEANING_VK_CRASH,
+            ),
             key="vk_crash",
             throttle_sec=60,
         )

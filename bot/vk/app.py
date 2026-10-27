@@ -5412,13 +5412,18 @@ class VKBotApp:
             except Exception as exc:
                 logger.exception("Failed to handle VK update")
                 try:
-                    from bot.utils.tech_alerts import format_alert, notify_tech_sync
+                    from bot.utils.tech_alerts import (
+                        MEANING_VK_UPDATE,
+                        format_alert,
+                        notify_tech_sync,
+                    )
 
                     notify_tech_sync(
                         format_alert(
                             "VK bot: ошибка обработки обновления",
                             f"{type(exc).__name__}: {exc}",
                             source="standup-vk-bot",
+                            meaning=MEANING_VK_UPDATE,
                         ),
                         key="vk_update_error",
                         throttle_sec=300,

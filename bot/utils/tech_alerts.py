@@ -105,10 +105,77 @@ def _clip_body(body: str, limit: int = 3500) -> str:
     return "…\n" + text[-(limit - 2) :]
 
 
-def format_alert(title: str, body: str = "", *, source: str = "") -> str:
+STALE_CALLBACK_MARKERS = (
+    "query is too old",
+    "query id is invalid",
+    "response timeout expired",
+)
+
+MEANING_TG_CRASH = (
+    "Процесс Telegram-бота на сервере аварийно остановился. "
+    "Гости в Telegram сейчас не получают ответы. "
+    "systemd обычно поднимает его сам; если через минуту снова тишина — /tech_restart bot"
+)
+MEANING_VK_CRASH = (
+    "Процесс VK-бота аварийно остановился. Гости ВКонтакте сейчас не получают ответы. "
+    "systemd обычно поднимает его сам; если через минуту снова тишина — /tech_restart vk"
+)
+MEANING_TG_UNHANDLED = (
+    "Бот жив, но одно нажатие или сообщение упало с ошибкой. "
+    "Это не обязательно «бот лёг»: проверь, повторяется ли сценарий. "
+    "Сетевые отказы Telegram и протухшие кнопки сюда не пишем."
+)
+MEANING_VK_UPDATE = (
+    "VK-бот жив, но одно входящее событие не обработалось. "
+    "Гости в целом могут получать ответы; сломался конкретный шаг."
+)
+MEANING_TICKET_UNRECORDED = (
+    "Картинка билета уже у гостя в чате, а статус/id в базе не записались. "
+    "Гость билет видит, в админке бронь может остаться «не подтвердил». "
+    "Нужно проверить бронь в базе; гостю ничего заново слать не обязательно, если картинка на месте."
+)
+MEANING_TICKET_FAILURE = (
+    "Картинка билета не ушла. Гостю уже написали, что не получилось. "
+    "Бронь в базе скорее всего ещё без билета — можно переотправить из админки."
+)
+
+TECH_ALERT_CATALOG_HTML = (
+    "<b>Какие алерты бывают в этом чате</b>\n"
+    "Пишем только сюда, тем же Telegram-ботом. Если Telegram совсем недоступен — сообщение не дойдёт.\n\n"
+    "<b>Сервер: проблема</b>\n"
+    "Раз в 3 минуты: процесс TG/VK/админки не запущен, диск ≥90%, "
+    "нет ответа Telegram API, VK API или базы. "
+    "Гости могут не получать сообщения. Кнопка Restart — только если упал сервис. "
+    "API/база алертятся со второй подряд неудачи (~6 мин), чтобы не шуметь.\n\n"
+    "<b>Сервер: проблема устранена</b>\n"
+    "Проверка снова зелёная. Это не значит, что гости уже всё получили.\n\n"
+    "<b>TG bot: процесс упал</b> / <b>VK bot: процесс упал</b>\n"
+    "Процесс сам упал с ошибкой. systemd должен поднять. Если повторяется — логи.\n\n"
+    "<b>TG bot: необработанная ошибка</b> / <b>VK bot: ошибка обработки</b>\n"
+    "Баг на одном нажатии. Бот жив, этот сценарий сломался.\n\n"
+    "<b>Сбой выдачи билета</b>\n"
+    "Картинка билета не ушла. Гостю написали, что не получилось.\n\n"
+    "<b>Билет ушёл, база не обновлена</b>\n"
+    "Картинка в чате есть, а статус в базе не записался. "
+    "Гость билет видит; в админке может быть «не подтвердил».\n\n"
+    "<b>Не пишем</b>\n"
+    "Протухшая кнопка после успешной выдачи; VK «нет разрешения» у конкретного человека; "
+    "пользователь заблокировал бота; обычный сетевой шум Telegram."
+)
+
+
+def is_stale_callback_error(exc: BaseException | str) -> bool:
+    """Telegram callback query expired — not a DB/ticket failure."""
+    msg = str(exc).lower()
+    return any(marker in msg for marker in STALE_CALLBACK_MARKERS)
+
+
+def format_alert(title: str, body: str = "", *, source: str = "", meaning: str = "") -> str:
     parts = [f"<b>{escape(title)}</b>"]
     if source:
         parts.append(f"<i>{escape(source)}</i>")
+    if meaning:
+        parts.append(escape(meaning))
     if body:
         parts.append(f"<pre>{escape(_clip_body(body))}</pre>")
     return "\n".join(parts)
@@ -208,7 +275,7 @@ async def notify_exception(
     throttle_sec: int = _DEFAULT_THROTTLE_SEC,
 ) -> bool:
     body = f"{type(exc).__name__}: {exc}"
-    text = format_alert(title, body, source=source)
+    text = format_alert(title, body, source=source, meaning=MEANING_TG_UNHANDLED)
     return await notify_tech(text, key=key, throttle_sec=throttle_sec, bot=bot)
 
 
@@ -239,6 +306,7 @@ def alert_ticket_unrecorded(
             "Билет ушёл, база не обновлена",
             "\n".join(lines),
             source="ticket",
+            meaning=MEANING_TICKET_UNRECORDED,
         ),
         key=f"ticket_unrecorded:{channel}:{booking_id}",
         throttle_sec=60,
@@ -269,6 +337,7 @@ def alert_ticket_failure(
             "Сбой выдачи билета",
             "\n".join(lines),
             source="ticket",
+            meaning=MEANING_TICKET_FAILURE,
         ),
         key=f"ticket_fail:{channel}:{booking_id}",
         throttle_sec=60,

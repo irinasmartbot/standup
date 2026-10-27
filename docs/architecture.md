@@ -254,7 +254,7 @@ sudo journalctl -u standup-bot -n 100 --no-pager
 
 ### Шаг 7 — Надёжность и мониторинг
 
-- [ ] Сделать watchdog для Telegram-бота на VPS: раз в 1–5 минут проверять `standup-bot` + доступ к `api.telegram.org` (и при необходимости `getMe`)
-- [ ] При падении сервиса или серии `Bad Gateway` / timeout слать алерт владельцу в Telegram/чат
-- [ ] Не ронять старт бота из‑за служебных вызовов Telegram (`set_my_commands`, начальный `getMe`): retry вместо exit
-- [ ] Зафиксировать короткий runbook: как понять, что бот молчит из‑за Telegram API, а не из‑за бага логики
+- [x] Watchdog на VPS каждые 3 минуты: systemd `standup-bot` / `standup-vk-bot` / `standup-admin`, диск, `getMe`, VK `groups.getById`, Postgres `SELECT 1`. Алерт в техчат с пояснением. API/база — со второй подряд неудачи.
+- [x] При падении сервиса или недоступности API слать алерт в `TECH_CHAT_ID`; при восстановлении — «проблема устранена».
+- [x] Не ронять старт бота из‑за служебных вызовов Telegram (`set_my_commands`, начальный `getMe`): retry вместо exit
+- [x] Справка в техчате: `/tech_help` — какие алерты бывают и что значат. Если Telegram совсем недоступен, алерт в этот чат не дойдёт.

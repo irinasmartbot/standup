@@ -1021,9 +1021,6 @@ async def get_ticket(call: CallbackQuery):
             remember_issued_ticket_message(call.from_user.id, booking_id, ticket_msg.message_id)
             if not already_confirmed:
                 update_booking_status(booking_id, "confirmed")
-            await _remove_ticket_button(booking_id, call.from_user.id)
-            await refresh_user_commands(call.message.bot, call.from_user.id)
-            await call.answer()
         except Exception as exc:
             logger.exception(
                 "TG ticket in chat but DB incomplete booking_id=%s msg_id=%s",
@@ -1052,6 +1049,28 @@ async def get_ticket(call: CallbackQuery):
             except Exception:
                 logger.exception("TG ticket confirm retry failed booking_id=%s", booking_id)
             raise
+        try:
+            await _remove_ticket_button(booking_id, call.from_user.id)
+            await refresh_user_commands(call.message.bot, call.from_user.id)
+        except Exception:
+            logger.exception("TG ticket post-send UI cleanup failed booking_id=%s", booking_id)
+        try:
+            await call.answer()
+        except Exception as exc:
+            from bot.utils.tech_alerts import is_stale_callback_error
+
+            if is_stale_callback_error(exc):
+                logger.warning(
+                    "TG ticket callback stale after send booking_id=%s: %s",
+                    booking_id,
+                    exc,
+                )
+            else:
+                logger.warning(
+                    "TG ticket call.answer failed booking_id=%s: %s",
+                    booking_id,
+                    exc,
+                )
     finally:
         _TICKET_IN_PROGRESS.discard(booking_id)
 

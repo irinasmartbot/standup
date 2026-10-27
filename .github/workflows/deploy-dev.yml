@@ -84,4 +84,12 @@ jobs:
           else
             echo "standup-events-sync.service not found; skipping"
           fi
+          # Health-watch: каждые 3 минуты (cron пользователя standup, без root).
+          mkdir -p /home/standup/backups
+          HEALTH_CRON='*/3 * * * * cd /home/standup/app && /home/standup/app/venv/bin/python /home/standup/app/scripts/standup_health_watch.py >> /home/standup/backups/health-watch.log 2>&1'
+          (
+            crontab -l 2>/dev/null | grep -v 'standup_health_watch.py' || true
+            echo "$HEALTH_CRON"
+          ) | crontab -
+          echo "health-watch cron installed"
           EOF

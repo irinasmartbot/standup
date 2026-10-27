@@ -743,7 +743,7 @@ async def issue_ticket(
             msg_id,
         )
     # Картинка уже в чате. Сначала пишем отметки в базу, потом кнопки.
-    # Если упадём после send, в техчат уйдёт «билет ушёл, база не обновлена».
+    # Если упадём на записи в базу, в техчат уйдёт «билет ушёл, база не обновлена».
     try:
         if msg_id:
             save_ticket_message_id(booking_id, msg_id)
@@ -774,12 +774,6 @@ async def issue_ticket(
                 booking_id,
                 peer_id,
             )
-        await clear_inline_keyboard(
-            client,
-            peer_id,
-            confirm_message_id,
-            conversation_message_id=conversation_message_id,
-        )
     except Exception as exc:
         logger.exception(
             "VK ticket in chat but DB incomplete booking_id=%s msg_id=%s",
@@ -809,6 +803,19 @@ async def issue_ticket(
         except Exception:
             logger.exception("VK ticket confirm retry failed booking_id=%s", booking_id)
         raise
+    try:
+        await clear_inline_keyboard(
+            client,
+            peer_id,
+            confirm_message_id,
+            conversation_message_id=conversation_message_id,
+        )
+    except Exception:
+        logger.exception(
+            "VK ticket keyboard clear failed booking_id=%s msg_id=%s",
+            booking_id,
+            msg_id,
+        )
 
 
 def saved_phone_for(vk_id: int) -> str | None:

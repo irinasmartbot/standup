@@ -987,6 +987,67 @@ def test_vk_dispatch_ensures_user_name():
     print("vk dispatch ensures user name: OK")
 
 
+def test_tech_alerts_and_health_watch():
+    from pathlib import Path
+
+    from bot.utils.health_checks import HealthIssue, apply_strikes, empty_state, load_watch_state
+    from bot.utils.tech_alerts import (
+        TECH_ALERT_CATALOG_HTML,
+        format_alert,
+        is_stale_callback_error,
+    )
+
+    assert "Какие алерты бывают" in TECH_ALERT_CATALOG_HTML
+    assert "Билет ушёл, база не обновлена" in TECH_ALERT_CATALOG_HTML
+    html = format_alert("Заголовок", "details", source="health-watch", meaning="Пояснение для людей")
+    assert "Пояснение для людей" in html
+    assert "<pre>details</pre>" in html
+    assert is_stale_callback_error(
+        "Telegram server says - Bad Request: query is too old and response timeout expired or query ID is invalid"
+    )
+    assert not is_stale_callback_error("connection reset")
+
+    api_issue = HealthIssue(
+        "telegram_api",
+        "telegram getMe: timeout",
+        "API молчит",
+        strikes_needed=2,
+    )
+    unit_issue = HealthIssue(
+        "unit:standup-bot.service",
+        "standup-bot.service: inactive",
+        "Бот не запущен",
+        strikes_needed=1,
+    )
+    state, new, resolved = apply_strikes(empty_state(), [api_issue])
+    assert new == []
+    assert resolved == []
+    assert state["strikes"]["telegram_api"] == 1
+    state, new, resolved = apply_strikes(state, [api_issue])
+    assert [issue.key for issue in new] == ["telegram_api"]
+    assert resolved == []
+
+    state, new, resolved = apply_strikes(empty_state(), [unit_issue])
+    assert [issue.key for issue in new] == ["unit:standup-bot.service"]
+    state, new, resolved = apply_strikes(state, [])
+    assert resolved == ["unit:standup-bot.service"]
+    assert state["problems"] == {}
+
+    old = load_watch_state(["standup-bot.service: failed"])
+    assert "unit:standup-bot.service" in old["problems"] or "standup-bot.service" in old["problems"]
+
+    tg_src = Path("bot/handlers/booking.py").read_text(encoding="utf-8")
+    assert "is_stale_callback_error" in tg_src
+    assert "TG ticket post-send UI cleanup failed" in tg_src
+    vk_src = Path("bot/vk/booking.py").read_text(encoding="utf-8")
+    assert "VK ticket keyboard clear failed" in vk_src
+    deploy_src = Path(".github/workflows/deploy-dev.yml").read_text(encoding="utf-8")
+    assert "standup_health_watch.py" in deploy_src
+    help_src = Path("bot/handlers/tech_ops.py").read_text(encoding="utf-8")
+    assert "TECH_ALERT_CATALOG_HTML" in help_src
+    print("tech alerts and health watch: OK")
+
+
 async def main():
     test_callback_parsing()
     test_mailing_booking_button_fields()
@@ -1014,6 +1075,7 @@ async def main():
     test_random_show_covers()
     test_stata_phone_format()
     test_vk_dispatch_ensures_user_name()
+    test_tech_alerts_and_health_watch()
     events = await load_events()
     print(f"events loaded: {len(events)}")
     if not events:

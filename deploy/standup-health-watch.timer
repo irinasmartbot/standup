@@ -1,5 +1,7 @@
 [Unit]
 Description=Run StandUp health check every 3 minutes
+# На VPS фактически стоит cron пользователя standup (см. deploy-dev.yml).
+# Этот timer — запасной вариант, если ставить system unit от root.
 
 [Timer]
 OnBootSec=2min

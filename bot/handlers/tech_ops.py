@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.config import TECH_CHAT_ID, TEST_ADMIN_IDS
 from bot.utils.systemd_ops import UNITS, restart_unit, status_report
+from bot.utils.tech_alerts import TECH_ALERT_CATALOG_HTML
 
 logger = logging.getLogger(__name__)
 router = Router(name="tech_ops")
@@ -91,7 +92,8 @@ async def cmd_tech_help(message: Message):
         "• <code>/tech_restart vk</code> — перезапуск (bot | vk | admin)\n"
         "• <code>/tech_help</code> — эта справка\n"
         "• <code>/techid</code> — chat_id текущего чата\n\n"
-        "На алертах «проблема» можно жать кнопку Restart.",
+        "На алертах «проблема» можно жать кнопку Restart.\n\n"
+        f"{TECH_ALERT_CATALOG_HTML}",
         parse_mode="HTML",
     )
 

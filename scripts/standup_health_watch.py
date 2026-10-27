@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""Check systemd units + disk; alert TECH_CHAT_ID on problems and recoveries.
+"""Check systemd units, disk, Telegram/VK API and Postgres; alert TECH_CHAT_ID.
 
-Intended to run every few minutes via systemd timer on the VPS.
+Intended to run every few minutes via cron on the VPS.
 Reads BOT_TOKEN / TECH_CHAT_ID from /home/standup/app/.env (or cwd .env).
+
+  --announce  send the alert catalog once (throttle 24h)
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-# Load app .env before importing tech_alerts helpers that read os.environ.
 APP_ENV = Path("/home/standup/app/.env")
 LOCAL_ENV = ROOT / ".env"
 PROBLEMS_STATE = Path(
@@ -39,137 +38,116 @@ def _load_env(path: Path) -> None:
 _load_env(APP_ENV)
 _load_env(LOCAL_ENV)
 
-from bot.utils.systemd_ops import aliases_from_problem_lines, restart_keyboard_json  # noqa: E402
-from bot.utils.tech_alerts import format_alert, notify_tech_sync  # noqa: E402
-
-UNITS = (
-    "standup-bot.service",
-    "standup-vk-bot.service",
-    "standup-admin.service",
+from bot.utils.health_checks import (  # noqa: E402
+    collect_raw_issues,
+    empty_state,
+    load_watch_state,
+    apply_strikes,
 )
+from bot.utils.systemd_ops import aliases_from_problem_lines, restart_keyboard_json  # noqa: E402
+from bot.utils.tech_alerts import (  # noqa: E402
+    TECH_ALERT_CATALOG_HTML,
+    format_alert,
+    notify_tech_sync,
+)
+
 DISK_WARN_PERCENT = int(os.getenv("TECH_DISK_WARN_PERCENT", "90"))
 
 
-def _run(cmd: list[str]) -> str:
-    try:
-        proc = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        return (proc.stdout or "").strip()
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"check-failed:{exc}"
-
-
-def _unit_load_state(unit: str) -> str:
-    return _run(["systemctl", "show", unit, "-p", "LoadState", "--value"]) or "unknown"
-
-
-def _systemctl_is_active(unit: str) -> str:
-    return _run(["systemctl", "is-active", unit]) or "unknown"
-
-
-def _disk_usage_percent(path: str = "/") -> int | None:
-    try:
-        usage = shutil.disk_usage(path)
-        if usage.total <= 0:
-            return None
-        return int(round(100.0 * (usage.total - usage.free) / usage.total))
-    except OSError:
-        return None
-
-
-def _load_prev_problems() -> list[str]:
+def _load_prev_state() -> dict:
     try:
         data = json.loads(PROBLEMS_STATE.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            return [str(x) for x in data]
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        pass
-    return []
+        return empty_state()
+    return load_watch_state(data)
 
 
-def _save_problems(problems: list[str]) -> None:
+def _save_state(state: dict) -> None:
     try:
         PROBLEMS_STATE.write_text(
-            json.dumps(problems, ensure_ascii=False, indent=2),
+            json.dumps(state, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     except OSError as exc:
         print(f"warn: cannot save state: {exc}", flush=True)
 
 
-def _collect_problems() -> tuple[list[str], list[str]]:
-    problems: list[str] = []
-    notes: list[str] = []
-    for unit in UNITS:
-        load_state = _unit_load_state(unit)
-        if load_state == "not-found":
-            notes.append(f"{unit}: not-found (skip)")
-            continue
-        status = _systemctl_is_active(unit)
-        notes.append(f"{unit}: load={load_state} active={status}")
-        if status != "active":
-            problems.append(f"{unit}: {status}")
-
-    disk_pct = _disk_usage_percent("/")
-    if disk_pct is not None:
-        notes.append(f"disk / used {disk_pct}%")
-        if disk_pct >= DISK_WARN_PERCENT:
-            problems.append(f"disk / used {disk_pct}% (limit {DISK_WARN_PERCENT}%)")
-    return problems, notes
+def _announce() -> int:
+    sent = notify_tech_sync(
+        TECH_ALERT_CATALOG_HTML,
+        key="health_announce",
+        throttle_sec=86400,
+    )
+    print(f"announce_sent={sent}", flush=True)
+    return 0 if sent else 1
 
 
-def main() -> int:
-    problems, notes = _collect_problems()
-    prev = _load_prev_problems()
-    prev_set = set(prev)
-    now_set = set(problems)
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--announce" in args:
+        return _announce()
 
-    new_problems = sorted(now_set - prev_set)
-    resolved = sorted(prev_set - now_set)
+    raw_issues, notes = collect_raw_issues(disk_warn_percent=DISK_WARN_PERCENT)
+    prev = _load_prev_state()
+    new_state, new_issues, resolved_keys = apply_strikes(prev, raw_issues)
 
     print("status:", flush=True)
     for line in notes:
         print(f"  {line}", flush=True)
-    print(f"prev={prev}", flush=True)
-    print(f"now={problems}", flush=True)
-    print(f"new={new_problems}", flush=True)
-    print(f"resolved={resolved}", flush=True)
+    print(f"prev={prev.get('problems')}", flush=True)
+    print(f"now={new_state.get('problems')}", flush=True)
+    print(f"new={[issue.key for issue in new_issues]}", flush=True)
+    print(f"resolved={resolved_keys}", flush=True)
 
-    if new_problems:
-        body = "\n".join(new_problems)
-        body += (
-            "\n\nМожно нажать Restart ниже или в чате:\n"
-            "/tech_status\n/tech_restart vk|bot|admin"
+    if new_issues:
+        meaning_lines = []
+        for issue in new_issues:
+            meaning_lines.append(f"{issue.detail}\n{issue.meaning}")
+        meaning = "\n\n".join(meaning_lines)
+        meaning += (
+            "\n\nМожно нажать Restart ниже (только если упал сервис) или в чате:\n"
+            "/tech_status\n/tech_restart vk|bot|admin\n/tech_help"
         )
-        kb = restart_keyboard_json(aliases_from_problem_lines(new_problems))
+        body = "\n".join(issue.detail for issue in new_issues)
+        kb = restart_keyboard_json(aliases_from_problem_lines(issue.detail for issue in new_issues))
         sent = notify_tech_sync(
-            format_alert("Сервер: проблема", body, source="health-watch"),
-            key="health_new:" + "|".join(new_problems),
+            format_alert("Сервер: проблема", body, source="health-watch", meaning=meaning),
+            key="health_new:" + "|".join(issue.key for issue in new_issues),
             throttle_sec=120,
             reply_markup=kb,
         )
         print(f"alert_problem_sent={sent}", flush=True)
 
-    if resolved:
-        # Body = what recovered (previous problem lines), not the current status.
-        body = "Снова в норме:\n" + "\n".join(f"• {item}" for item in resolved)
+    if resolved_keys:
+        labels = []
+        now_problems = new_state.get("problems") or {}
+        prev_problems = prev.get("problems") or {}
+        for key in resolved_keys:
+            labels.append(prev_problems.get(key, key))
+        body = "Снова в норме:\n" + "\n".join(f"• {item}" for item in labels)
+        extra = ""
+        if now_problems:
+            extra = "Ещё не ок:\n" + "\n".join(f"• {v}" for v in now_problems.values())
         sent = notify_tech_sync(
-            format_alert("Сервер: проблема устранена", body, source="health-watch"),
-            key="health_ok:" + "|".join(resolved),
+            format_alert(
+                "Сервер: проблема устранена",
+                extra,
+                source="health-watch",
+                meaning=(
+                    "Проверка снова зелёная. Это не значит, что гости уже всё получили — "
+                    "только что сервис/API/база снова отвечают.\n\n" + body
+                ),
+            ),
+            key="health_ok:" + "|".join(resolved_keys),
             throttle_sec=60,
         )
         print(f"alert_resolved_sent={sent}", flush=True)
 
-    if not new_problems and not resolved:
+    if not new_issues and not resolved_keys:
         print("no state change", flush=True)
 
-    _save_problems(problems)
-    return 1 if problems else 0
+    _save_state(new_state)
+    return 0
 
 
 if __name__ == "__main__":

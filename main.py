@@ -20,7 +20,13 @@ from bot.db.mailing import ensure_mailing_tables
 from bot.handlers.reminders import reminder_loop
 from bot.handlers.rozygrysh_reminders import raffle_reminder_loop
 from bot.middlewares import ModerationChatSilenceMiddleware, TouchUserProfileMiddleware
-from bot.utils.tech_alerts import format_alert, notify_tech, notify_tech_sync
+from bot.utils.tech_alerts import (
+    MEANING_TG_CRASH,
+    MEANING_TG_UNHANDLED,
+    format_alert,
+    notify_tech,
+    notify_tech_sync,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,6 +77,7 @@ async def on_unhandled_error(event: ErrorEvent):
         "TG bot: необработанная ошибка",
         body,
         source="standup-bot",
+        meaning=MEANING_TG_UNHANDLED,
     )
     await notify_tech(text, key="tg_unhandled", throttle_sec=180, bot=bot)
     return True
@@ -140,7 +147,12 @@ if __name__ == "__main__":
     except Exception as exc:
         logger.exception("TG bot crashed")
         notify_tech_sync(
-            format_alert("TG bot: процесс упал", f"{type(exc).__name__}: {exc}", source="standup-bot"),
+            format_alert(
+                "TG bot: процесс упал",
+                f"{type(exc).__name__}: {exc}",
+                source="standup-bot",
+                meaning=MEANING_TG_CRASH,
+            ),
             key="tg_crash",
             throttle_sec=60,
         )
