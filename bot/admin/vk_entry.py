@@ -534,13 +534,11 @@ async def _offline_gift_repeat_action(client: VKClient, vk_id: int) -> None:
             color="primary",
         )
         kb.adjust(1)
+        from bot.vk.app import _offline_gift_pending_text
+
         await client.send_message(
             vk_id,
-            (
-                "🎁 <b>Ты пока не в списке участников.</b>\n\n"
-                "Выполни задание ведущего — и будешь в списке.\n\n"
-                f"<b>Шоу:</b> {_gift_event_label(event)}"
-            ),
+            _offline_gift_pending_text(event, still_waiting=False),
             keyboard=kb.as_json(),
         )
         return

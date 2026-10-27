@@ -807,6 +807,60 @@ def test_vk_platka_flow():
     print("vk platka flow: OK")
 
 
+def test_offline_gift_stale_event_recovery():
+    from unittest.mock import patch
+
+    from bot.db.crud import resolve_offline_gift_join_target
+
+    today = {
+        "id": 15904,
+        "format": "best",
+        "time": "20:00",
+        "location": "Escobar",
+    }
+    with patch("bot.db.crud.get_offline_gift_event", return_value=today), patch(
+        "bot.db.crud.get_offline_gift_today_events", return_value=[today]
+    ):
+        event, extra, how = resolve_offline_gift_join_target(15904)
+        assert how == "ok"
+        assert event["id"] == 15904
+        assert extra == []
+
+    with patch("bot.db.crud.get_offline_gift_event", return_value=None), patch(
+        "bot.db.crud.get_offline_gift_today_events", return_value=[today]
+    ):
+        event, extra, how = resolve_offline_gift_join_target(111)
+        assert how == "fallback_today"
+        assert event["id"] == 15904
+        assert extra == []
+
+    with patch("bot.db.crud.get_offline_gift_event", return_value=None), patch(
+        "bot.db.crud.get_offline_gift_today_events",
+        return_value=[today, {**today, "id": 15905, "location": "Temple Bar"}],
+    ):
+        event, extra, how = resolve_offline_gift_join_target(111)
+        assert how == "pick"
+        assert event is None
+        assert len(extra) == 2
+
+    with patch("bot.db.crud.get_offline_gift_event", return_value=None), patch(
+        "bot.db.crud.get_offline_gift_today_events", return_value=[]
+    ):
+        event, extra, how = resolve_offline_gift_join_target(111)
+        assert how == "none"
+        assert event is None
+        assert extra == []
+
+    from pathlib import Path
+
+    app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert "Шоу не найдено или уже недоступно" not in app_src
+    assert "VK не видит подписку на сообщество" in app_src
+    assert "_recover_offline_gift_event" in app_src
+    assert "_offline_gift_subscribed" in app_src
+    print("offline gift stale event recovery: OK")
+
+
 def test_vk_raffle_vs_show_gift_routing():
     from datetime import datetime
     from pathlib import Path
@@ -1067,6 +1121,7 @@ async def main():
     test_tg_check_dates_back_uses_random_photo()
     test_vk_dates_card_back_uses_random_photo()
     test_vk_platka_flow()
+    test_offline_gift_stale_event_recovery()
     test_vk_raffle_vs_show_gift_routing()
     test_vk_chek_list_flow()
     test_vk_new_stata_all_flow()

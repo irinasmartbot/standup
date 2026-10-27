@@ -296,6 +296,22 @@ def _gift_event_label(event: dict[str, Any]) -> str:
     )
 
 
+def _offline_gift_pending_text(event: dict[str, Any], *, still_waiting: bool) -> str:
+    show = html.escape(_gift_event_label(event))
+    if still_waiting:
+        return (
+            "🎁 <b>Пока тебя нет в списке.</b>\n\n"
+            "VK не видит подписку на сообщество.\n"
+            "Нажми «Перейти в сообщество», подпишись, вернись сюда и нажми «Готово».\n\n"
+            f"<b>Шоу:</b> {show}"
+        )
+    return (
+        "🎁 <b>Ты пока не в списке участников.</b>\n\n"
+        "Подпишись на сообщество и нажми «Готово» — тогда попадёшь в список.\n\n"
+        f"<b>Шоу:</b> {show}"
+    )
+
+
 def _offline_gift_success_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("В главное меню", _payload("main_menu"))
@@ -3552,12 +3568,15 @@ class VKBotApp:
             event_id = int(payload.get("event_id") or 0)
         except (TypeError, ValueError):
             event_id = 0
-        if not event_id:
-            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
-            return True
 
         self._cancel_offline_gift_timers(vk_id)
         self._offline_gift_await_choice.discard(int(vk_id))
+        logger.info(
+            "Offline gift cmd=%s vk_id=%s event_id=%s",
+            cmd,
+            vk_id,
+            event_id,
+        )
         await self._join_offline_gift_event(
             peer_id,
             vk_id,
@@ -3874,18 +3893,7 @@ class VKBotApp:
             color="primary",
         )
         kb.adjust(1)
-        if still_waiting:
-            text = (
-                "🎁 <b>Пока тебя нет в списке.</b>\n\n"
-                "Выполни задание ведущего — и нажми «Готово» ещё раз.\n\n"
-                f"<b>Шоу:</b> {html.escape(_gift_event_label(event))}"
-            )
-        else:
-            text = (
-                "🎁 <b>Ты пока не в списке участников.</b>\n\n"
-                "Выполни задание ведущего — и будешь в списке.\n\n"
-                f"<b>Шоу:</b> {html.escape(_gift_event_label(event))}"
-            )
+        text = _offline_gift_pending_text(event, still_waiting=still_waiting)
         await self._delete_offline_gift_card(peer_id)
         mid = await self._send_text(
             peer_id,
@@ -3896,25 +3904,78 @@ class VKBotApp:
         if mid:
             self.peer_offline_gift_message_ids[int(peer_id)] = int(mid)
 
+    async def _offline_gift_subscribed(self, vk_id: int) -> bool | None:
+        """True/False if VK answered; None if API failed both attempts."""
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                return await self.client.is_group_member(vk_id)
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "Offline gift isMember attempt %s failed vk_id=%s: %s",
+                    attempt + 1,
+                    vk_id,
+                    exc,
+                )
+                await asyncio.sleep(0.4)
+        logger.exception(
+            "Offline gift subscription check failed vk_id=%s",
+            vk_id,
+            exc_info=last_exc,
+        )
+        return None
+
+    async def _recover_offline_gift_event(
+        self, peer_id: int, vk_id: int, event_id: int
+    ) -> dict | None:
+        from bot.db.crud import resolve_offline_gift_join_target
+
+        event, today, how = resolve_offline_gift_join_target(event_id)
+        if event:
+            if how == "fallback_today":
+                logger.info(
+                    "Offline gift recovered stale event_id=%s → %s vk_id=%s",
+                    event_id,
+                    event.get("id"),
+                    vk_id,
+                )
+            return event
+        if today:
+            self._offline_gift_await_choice.add(int(vk_id))
+            await self._send_text(
+                peer_id,
+                (
+                    "🎁 Это шоу уже прошло. Выбери шоу, на котором ты сейчас находишься 👇"
+                ),
+                keyboard=self._offline_gift_events_keyboard(today),
+                replace_nav=False,
+            )
+            self._schedule_offline_gift_choose_remind(peer_id, vk_id)
+            return None
+        await self._send_text(
+            peer_id,
+            (
+                "🎁 <b>Розыгрыш подарка</b>\n\n"
+                "На сегодня активных шоу не найдено. "
+                "Покажи это сообщение администратору или попробуй позже."
+            ),
+            replace_nav=False,
+        )
+        return None
+
     async def _complete_offline_gift_entry(
         self, peer_id: int, vk_id: int, event_id: int
     ) -> None:
         from bot.db.crud import (
             clear_offline_gift_pending,
-            get_offline_gift_event,
             record_offline_gift_entry,
         )
 
-        event = get_offline_gift_event(int(event_id))
+        event = await self._recover_offline_gift_event(peer_id, vk_id, event_id)
         if not event:
-            await self._delete_offline_gift_card(peer_id)
-            await self._send_text(
-                peer_id,
-                "Шоу не найдено или уже недоступно. Выбери актуальное шоу 👇",
-                replace_nav=False,
-            )
-            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
             return
+        event_id = int(event["id"])
 
         try:
             full_name = await self.client.get_user_display_name(vk_id)
@@ -3962,23 +4023,21 @@ class VKBotApp:
         *,
         still_waiting: bool = False,
     ) -> None:
-        from bot.db.crud import get_offline_gift_event
-
-        event = get_offline_gift_event(int(event_id))
+        event = await self._recover_offline_gift_event(peer_id, vk_id, event_id)
         if not event:
-            await self._send_text(
-                peer_id,
-                "Шоу не найдено или уже недоступно. Выбери актуальное шоу 👇",
-                replace_nav=False,
-            )
-            await self._send_offline_gift_events(peer_id, vk_id=vk_id)
             return
+        event_id = int(event["id"])
 
-        try:
-            subscribed = await self.client.is_group_member(vk_id)
-        except Exception:
-            logger.exception("Offline gift subscription check failed vk_id=%s", vk_id)
-            subscribed = False
+        subscribed = await self._offline_gift_subscribed(vk_id)
+        if subscribed is None:
+            logger.warning("Offline gift isMember unknown vk_id=%s event_id=%s", vk_id, event_id)
+            await self._send_offline_gift_pending_hint(
+                peer_id,
+                event,
+                event_id,
+                still_waiting=True,
+            )
+            return
         if not subscribed:
             await self._send_offline_gift_pending_hint(
                 peer_id,

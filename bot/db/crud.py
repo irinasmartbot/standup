@@ -2127,6 +2127,30 @@ def get_offline_gift_event(event_id: int) -> dict | None:
             return _offline_event_row(row) if row else None
 
 
+def resolve_offline_gift_join_target(
+    event_id: int | None,
+) -> tuple[dict | None, list[dict], str]:
+    """Pick a live show for guest join.
+
+    Returns (event, today_shows, how):
+    - ``ok`` — requested event is still active
+    - ``fallback_today`` — requested is gone/missing, exactly one show today
+    - ``pick`` — guest must choose (2+ today)
+    - ``none`` — no live show today
+    """
+    requested = int(event_id or 0)
+    if requested:
+        event = get_offline_gift_event(requested)
+        if event:
+            return event, [], "ok"
+    today = get_offline_gift_today_events()
+    if len(today) == 1:
+        return today[0], [], "fallback_today"
+    if today:
+        return None, today, "pick"
+    return None, [], "none"
+
+
 def has_offline_gift_entry(*, vk_id: int, event_id: int | None = None) -> bool:
     """True if VK user already in offline-gift list (optionally for one event)."""
     if not _use_postgres() or not vk_id:
