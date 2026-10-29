@@ -1069,10 +1069,21 @@ def test_vk_new_stata_all_flow():
 def test_vk_raffle_screenshot_avoids_tg_handler_import():
     from pathlib import Path
 
+    from bot.vk.raffle import SCREEN_OK_TEXT, SCREEN_WAIT_TEXT
+
     app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
     assert "from bot.handlers.rozygrysh import" not in app_src
     assert "from bot.services.raffle_moderation import send_to_moderation" in app_src
     assert "Не удалось отправить скрин. Пришли фото ещё раз одним фото" in app_src
+    assert "async def _send_raffle_screen_wait" in app_src
+    assert "async def _finish_raffle_screen_wait" in app_src
+    wait_at = app_src.find("wait_id = await self._send_raffle_screen_wait")
+    download_at = app_src.find("await vk_raffle.download_screenshot_bytes")
+    ok_at = app_src.find("vk_raffle.SCREEN_OK_TEXT")
+    assert wait_at != -1 and download_at != -1 and wait_at < download_at
+    assert ok_at != -1 and download_at < ok_at
+    assert SCREEN_WAIT_TEXT == "Скрин на месте — сейчас отправлю на проверку 👌"
+    assert "в течение часа" in SCREEN_OK_TEXT
 
     mod_src = Path("bot/services/raffle_moderation.py").read_text(encoding="utf-8")
     assert "from bot.utils.nav_messages" not in mod_src

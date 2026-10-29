@@ -4551,6 +4551,32 @@ class VKBotApp:
             replace_nav=False,
         )
 
+    async def _send_raffle_screen_wait(self, peer_id: int) -> int | None:
+        try:
+            return await self._send_text(
+                peer_id,
+                vk_raffle.SCREEN_WAIT_TEXT,
+                replace_nav=False,
+            )
+        except Exception:
+            logger.exception("Failed to send VK raffle screen wait peer_id=%s", peer_id)
+            return None
+
+    async def _finish_raffle_screen_wait(
+        self,
+        peer_id: int,
+        wait_id: int | None,
+        text: str,
+    ) -> None:
+        if wait_id:
+            try:
+                await self._safe_delete_messages(peer_id, [int(wait_id)])
+            except Exception:
+                logger.exception(
+                    "Failed to delete VK raffle screen wait peer_id=%s", peer_id
+                )
+        await self._send_text(peer_id, text, replace_nav=False)
+
     async def _handle_raffle_screenshot(
         self,
         peer_id: int,
@@ -4632,70 +4658,89 @@ class VKBotApp:
         # Сразу снимаем ожидание — повтор/гонка не отправят второй скрин.
         self._clear_raffle_screenshot_wait(vk_id)
 
+        wait_id = await self._send_raffle_screen_wait(peer_id)
         try:
-            image_bytes = await vk_raffle.download_screenshot_bytes(url)
-        except Exception:
-            logger.exception("Failed to download VK raffle screenshot vk_id=%s", vk_id)
-            self._arm_raffle_screenshot(vk_id, kind)
-            await self._send_text(
-                peer_id,
-                "Не удалось скачать скрин. Пришли фото ещё раз 👇",
+            try:
+                image_bytes = await vk_raffle.download_screenshot_bytes(url)
+            except Exception:
+                logger.exception("Failed to download VK raffle screenshot vk_id=%s", vk_id)
+                self._arm_raffle_screenshot(vk_id, kind)
+                await self._finish_raffle_screen_wait(
+                    peer_id,
+                    wait_id,
+                    "Не удалось скачать скрин. Пришли фото ещё раз 👇",
+                )
+                wait_id = None
+                return
+
+            try:
+                full_name = await self.client.get_user_display_name(vk_id) or "Гость"
+            except Exception:
+                logger.exception("Failed to load VK name for raffle vk_id=%s", vk_id)
+                full_name = "Гость"
+
+            photo_ref = ref or f"vk_bytes:{vk_id}"
+            try:
+                submission_id = create_raffle_submission(
+                    None,
+                    None,
+                    full_name,
+                    kind,
+                    photo_ref,
+                    vk_id=vk_id,
+                    source_chat_id=peer_id,
+                    source_message_id=message.get("id"),
+                )
+            except Exception:
+                logger.exception("Failed to create VK raffle submission vk_id=%s", vk_id)
+                self._arm_raffle_screenshot(vk_id, kind)
+                await self._finish_raffle_screen_wait(
+                    peer_id,
+                    wait_id,
+                    "Не удалось отправить скрин на проверку. Попробуй позже или напиши менеджеру.",
+                )
+                wait_id = None
+                return
+
+            self._track(
+                vk_id,
+                EVENT_RAFFLE_SCREENSHOT,
+                props={"kind": kind, "submission_id": submission_id},
             )
-            return
 
-        try:
-            full_name = await self.client.get_user_display_name(vk_id) or "Гость"
-        except Exception:
-            logger.exception("Failed to load VK name for raffle vk_id=%s", vk_id)
-            full_name = "Гость"
-
-        photo_ref = ref or f"vk_bytes:{vk_id}"
-        try:
-            submission_id = create_raffle_submission(
+            photo = BufferedInputFile(image_bytes, filename=f"raffle_{submission_id}.jpg")
+            sent_ok = await send_to_moderation(
+                submission_id,
                 None,
                 None,
                 full_name,
                 kind,
-                photo_ref,
+                photo,
                 vk_id=vk_id,
-                source_chat_id=peer_id,
-                source_message_id=message.get("id"),
             )
-        except Exception:
-            logger.exception("Failed to create VK raffle submission vk_id=%s", vk_id)
+            if sent_ok:
+                await self._finish_raffle_screen_wait(
+                    peer_id, wait_id, vk_raffle.SCREEN_OK_TEXT
+                )
+                wait_id = None
+                return
+
+            cancel_raffle_submission(submission_id, reason="moderation_send_failed")
             self._arm_raffle_screenshot(vk_id, kind)
-            await self._send_text(
+            await self._finish_raffle_screen_wait(
                 peer_id,
-                "Не удалось отправить скрин на проверку. Попробуй позже или напиши менеджеру.",
+                wait_id,
+                "Не удалось отправить скрин менеджеру 😔\nПришли скрин ещё раз одним фото.",
             )
-            return
-
-        self._track(
-            vk_id,
-            EVENT_RAFFLE_SCREENSHOT,
-            props={"kind": kind, "submission_id": submission_id},
-        )
-
-        photo = BufferedInputFile(image_bytes, filename=f"raffle_{submission_id}.jpg")
-        sent_ok = await send_to_moderation(
-            submission_id,
-            None,
-            None,
-            full_name,
-            kind,
-            photo,
-            vk_id=vk_id,
-        )
-        if sent_ok:
-            await self._send_text(peer_id, vk_raffle.SCREEN_OK_TEXT)
-            return
-
-        cancel_raffle_submission(submission_id, reason="moderation_send_failed")
-        self._arm_raffle_screenshot(vk_id, kind)
-        await self._send_text(
-            peer_id,
-            "Не удалось отправить скрин менеджеру 😔\nПришли скрин ещё раз одним фото.",
-        )
+            wait_id = None
+        finally:
+            if wait_id:
+                try:
+                    await self._safe_delete_messages(peer_id, [int(wait_id)])
+                except Exception:
+                    logger.exception(
+                        "Failed to delete VK raffle screen wait peer_id=%s", peer_id
+                    )
 
     async def _handle_unknown_free_text(self, peer_id: int, vk_id: int, text: str) -> None:
         # Как в TG: ≥10 символов → в HELP_CHAT без отбивки клиенту.
