@@ -334,6 +334,34 @@ def test_mailing_vk_denied_and_defaults():
     print("mailing vk denied and defaults: OK")
 
 
+def test_mailing_send_timeout_does_not_hang():
+    import asyncio
+
+    from bot.admin import mailing_worker as mw
+
+    async def _hang(*_args, **_kwargs):
+        await asyncio.sleep(30)
+
+    async def _run():
+        original = mw.send_one
+        old_timeout = mw.MAILING_SEND_TIMEOUT_SEC
+        mw.send_one = _hang
+        mw.MAILING_SEND_TIMEOUT_SEC = 0.05
+        try:
+            try:
+                await mw._send_with_flood_retry({"id": 1}, {"id": 2, "channel": "telegram"})
+            except RuntimeError as exc:
+                assert "timeout" in str(exc).lower()
+            else:
+                raise AssertionError("expected send timeout")
+        finally:
+            mw.send_one = original
+            mw.MAILING_SEND_TIMEOUT_SEC = old_timeout
+
+    asyncio.run(_run())
+    print("mailing send timeout: OK")
+
+
 def test_mailing_photo_paths():
     from pathlib import Path
 
@@ -1108,6 +1136,7 @@ async def main():
     test_mailing_schedule_and_templates()
     test_mailing_best_show_fill()
     test_mailing_vk_denied_and_defaults()
+    test_mailing_send_timeout_does_not_hang()
     test_mailing_photo_paths()
     test_mailing_followup_expires_after_show_start()
     test_db_schema()

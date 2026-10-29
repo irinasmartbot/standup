@@ -22,6 +22,9 @@ from bot.db.mailing import (
 
 logger = logging.getLogger(__name__)
 
+# One hung Telegram/VK request must not freeze the whole mailing loop.
+MAILING_SEND_TIMEOUT_SEC = 60.0
+
 _worker_started = False
 
 # Переиспользуем HTTP-сессию бота на всю жизнь воркера — иначе TLS на каждое сообщение.
@@ -306,8 +309,21 @@ async def _send_with_flood_retry(campaign: dict, recipient: dict, *, bot=None) -
     attempts = 0
     while True:
         try:
-            await send_one(campaign, recipient, bot=bot)
+            await asyncio.wait_for(
+                send_one(campaign, recipient, bot=bot),
+                timeout=MAILING_SEND_TIMEOUT_SEC,
+            )
             return
+        except asyncio.TimeoutError as exc:
+            logger.warning(
+                "mailing send timeout %.0fs campaign=%s recipient=%s",
+                MAILING_SEND_TIMEOUT_SEC,
+                campaign.get("id"),
+                recipient.get("id"),
+            )
+            raise RuntimeError(
+                f"send timeout after {MAILING_SEND_TIMEOUT_SEC:.0f}s"
+            ) from exc
         except Exception as exc:
             wait = _is_flood_wait(exc)
             attempts += 1

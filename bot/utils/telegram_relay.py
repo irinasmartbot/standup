@@ -34,6 +34,9 @@ TELEGRAM_API_PORT = 443
 DEFAULT_RELAY_LIMIT = 4
 DEFAULT_DIRECT_LIMIT = 100
 DEFAULT_DIRECT_CONNECT_TIMEOUT = 5.0
+# aiogram default. Must stay set: ClientTimeout(total=None) waits forever
+# after TCP connect, so fallback never switches to the tunnel.
+DEFAULT_REQUEST_TOTAL_TIMEOUT = 60.0
 DEFAULT_FAILS_BEFORE_SKIP = 3
 DEFAULT_DIRECT_COOLDOWN_SEC = 60.0
 _QUIET_OK_METHODS = {"getUpdates"}
@@ -522,14 +525,29 @@ def _new_fallback_session():
 
 
 def _direct_timeout(timeout: int | float | None):
+    """Connect fast, but never wait forever for a response body.
+
+    Passing ClientTimeout(total=None) into aiogram replaces its 60s default
+    and can hang sendMessage after a half-open TCP connect.
+    """
     from aiohttp import ClientTimeout
 
-    total = timeout
     connect = telegram_direct_connect_timeout()
+    if timeout is None:
+        total = DEFAULT_REQUEST_TOTAL_TIMEOUT
+    else:
+        try:
+            total = float(timeout)
+        except (TypeError, ValueError):
+            total = DEFAULT_REQUEST_TOTAL_TIMEOUT
+        if total <= 0:
+            total = DEFAULT_REQUEST_TOTAL_TIMEOUT
+    connect = min(connect, total)
     return ClientTimeout(
-        total=float(total) if total is not None else None,
+        total=total,
         connect=connect,
         sock_connect=connect,
+        sock_read=total,
     )
 
 

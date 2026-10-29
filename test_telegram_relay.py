@@ -53,6 +53,20 @@ def test_summary_is_readable(tmp_path: Path):
     assert "ABC-SECRET" not in text
 
 
+def test_direct_timeout_never_unlimited():
+    os.environ.pop("TELEGRAM_DIRECT_CONNECT_TIMEOUT", None)
+    none_to = tr._direct_timeout(None)
+    assert none_to.total == tr.DEFAULT_REQUEST_TOTAL_TIMEOUT
+    assert none_to.connect == tr.DEFAULT_DIRECT_CONNECT_TIMEOUT
+    assert none_to.sock_read == tr.DEFAULT_REQUEST_TOTAL_TIMEOUT
+    given = tr._direct_timeout(12)
+    assert given.total == 12.0
+    assert given.connect == tr.DEFAULT_DIRECT_CONNECT_TIMEOUT
+    assert given.sock_read == 12.0
+    assert tr._direct_timeout(0).total == tr.DEFAULT_REQUEST_TOTAL_TIMEOUT
+    assert tr._direct_timeout(-1).total == tr.DEFAULT_REQUEST_TOTAL_TIMEOUT
+
+
 def test_circuit_opens_after_fails():
     os.environ["TELEGRAM_DIRECT_FAILS_BEFORE_SKIP"] = "3"
     os.environ["TELEGRAM_DIRECT_COOLDOWN_SEC"] = "60"
@@ -73,5 +87,6 @@ if __name__ == "__main__":
         test_mode_fallback_default_with_host()
         test_sanitize_and_journal(tmp)
         test_summary_is_readable(tmp)
+        test_direct_timeout_never_unlimited()
         test_circuit_opens_after_fails()
         print("ok")
