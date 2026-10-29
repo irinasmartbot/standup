@@ -13,6 +13,7 @@ from bot.db.mailing import (
     FOLLOWUP_EXPIRED_TEXT,
     claim_mail_followup_send,
     followup_is_booking_flow,
+    followup_is_raffle_flow,
     followup_is_residents_dates_flow,
     get_campaign_followup,
     parse_mailing_residents_event_id,
@@ -45,6 +46,16 @@ async def mailing_followup(call: CallbackQuery, state: FSMContext) -> None:
     # Сольник 15.09 уже прошёл: старые кнопки не открывают бронь.
     if followup_is_booking_flow(text):
         text = FOLLOWUP_EXPIRED_TEXT
+
+    if followup_is_raffle_flow(text):
+        try:
+            await call.answer(
+                "Розыгрыш за отзыв открывается в диалоге VK.",
+                show_alert=True,
+            )
+        except Exception:
+            pass
+        return
 
     if followup_is_residents_dates_flow(text):
         user_id = int(call.from_user.id) if call.from_user else 0

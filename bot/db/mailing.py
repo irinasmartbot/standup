@@ -438,6 +438,7 @@ MAIL_FLOW_BOOKING_RESIDENT = "__flow:booking_resident__"
 MAIL_FLOW_RESIDENTS_PREFIX = "__flow:residents:"
 MAIL_FLOW_RESIDENTS_SUFFIX = "__"
 MAIL_FLOW_RESIDENTS_DATES = "__flow:residents_dates__"
+MAIL_FLOW_RAFFLE = "__flow:raffle__"
 
 
 def mailing_residents_flow_marker(event_id: str | int) -> str:
@@ -466,10 +467,16 @@ def followup_is_booking_flow(text: str | None) -> bool:
     return (text or "").strip() == MAIL_FLOW_BOOKING_RESIDENT
 
 
+def followup_is_raffle_flow(text: str | None) -> bool:
+    return (text or "").strip() == MAIL_FLOW_RAFFLE
+
+
 def followup_preview_label(text: str | None) -> str:
     raw = (text or "").strip()
     if followup_is_booking_flow(raw):
         return "Сценарий брони (шоу уже прошло)"
+    if followup_is_raffle_flow(raw):
+        return "Розыгрыш за отзыв"
     if followup_is_residents_dates_flow(raw):
         return "Выбор даты сольника"
     event_id = parse_mailing_residents_event_id(raw)
@@ -499,6 +506,10 @@ def form_opens_residents_dates(value: str | None) -> bool:
     return (value or "").strip().casefold() in {"1", "on", "true", "yes"}
 
 
+def form_starts_raffle(value: str | None) -> bool:
+    return (value or "").strip().casefold() in {"1", "on", "true", "yes"}
+
+
 def resolve_mailing_button_fields(
     *,
     starts_booking: bool,
@@ -507,6 +518,7 @@ def resolve_mailing_button_fields(
     followup_until: str | None = None,
     residents_event_id: str | None = None,
     residents_dates: bool = False,
+    starts_raffle: bool = False,
 ) -> tuple[str, str, str | None]:
     """URL / follow-up / дата кнопки. Для брони URL очищаем, follow-up — служебный маркер."""
     until = (followup_until or "").strip() or None
@@ -517,6 +529,8 @@ def resolve_mailing_button_fields(
         if not until:
             until = mailing_residents_event_date_iso(event_id)
         return "", mailing_residents_flow_marker(event_id), until
+    if starts_raffle:
+        return "", MAIL_FLOW_RAFFLE, None
     if not starts_booking:
         return (button_url or "").strip(), (followup_html or "").strip(), until
     if not until:
@@ -904,6 +918,8 @@ def campaign_followup_expired(
     Список дат сольника из рассылки живой: не смотрим followup_until, а афишу.
     """
     follow_text = (campaign or {}).get("followup_html") or ""
+    if followup_is_raffle_flow(follow_text):
+        return False
     if followup_is_residents_dates_flow(follow_text):
         shows = (
             list_mailing_residents_shows()

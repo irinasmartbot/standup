@@ -6217,6 +6217,7 @@ async def mailing_test_page(request: web.Request) -> web.Response:
     from bot.db.mailing import (
         create_followup_stub,
         form_opens_residents_dates,
+        form_starts_raffle,
         form_starts_residents_booking,
         get_user_for_mailing,
         resolve_mailing_button_fields,
@@ -6268,6 +6269,22 @@ async def mailing_test_page(request: web.Request) -> web.Response:
         button_url, followup_html, until_resolved = resolve_mailing_button_fields(
             starts_booking=False,
             residents_dates=True,
+            button_url=button_url,
+            followup_html=followup_html,
+            followup_until=followup_until,
+        )
+        followup_until = until_resolved or followup_until
+    elif form_starts_raffle(form.get("starts_raffle")):
+        if send_channel != "vkontakte":
+            return web.json_response(
+                {"error": "Розыгрыш за отзыв открывается только в VK — выберите канал ВК"},
+                status=400,
+            )
+        if not button_text:
+            button_text = "Подробнее"
+        button_url, followup_html, until_resolved = resolve_mailing_button_fields(
+            starts_booking=False,
+            starts_raffle=True,
             button_url=button_url,
             followup_html=followup_html,
             followup_until=followup_until,
@@ -6439,6 +6456,7 @@ async def mailing_create_page(request: web.Request) -> web.Response:
     from bot.db.mailing import (
         create_campaign,
         form_opens_residents_dates,
+        form_starts_raffle,
         form_starts_residents_booking,
         parse_admin_datetime,
         resolve_mailing_button_fields,
@@ -6452,6 +6470,21 @@ async def mailing_create_page(request: web.Request) -> web.Response:
             button_url, followup_html, until_resolved = resolve_mailing_button_fields(
                 starts_booking=False,
                 residents_dates=True,
+                button_url=button_url,
+                followup_html=followup_html,
+                followup_until=followup_until,
+            )
+            followup_until = until_resolved or followup_until
+        elif form_starts_raffle(form.get("starts_raffle")):
+            if channel == "telegram":
+                raise ValueError(
+                    "Розыгрыш за отзыв открывается только в VK — выберите канал ВК или Оба"
+                )
+            if not button_text:
+                button_text = "Подробнее"
+            button_url, followup_html, until_resolved = resolve_mailing_button_fields(
+                starts_booking=False,
+                starts_raffle=True,
                 button_url=button_url,
                 followup_html=followup_html,
                 followup_until=followup_until,

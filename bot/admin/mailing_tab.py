@@ -270,7 +270,9 @@ def render_mailing_tab(
         follow = (detail.get("followup_html") or "").strip()
         from bot.db.mailing import (
             followup_is_booking_flow,
+            followup_is_raffle_flow,
             followup_is_residents_booking_flow,
+            followup_is_residents_dates_flow,
             followup_preview_label,
         )
         body = detail.get("body_html") or ""
@@ -289,7 +291,12 @@ def render_mailing_tab(
         )
         follow_block = ""
         if follow:
-            if followup_is_booking_flow(follow) or followup_is_residents_booking_flow(follow):
+            if (
+                followup_is_booking_flow(follow)
+                or followup_is_residents_booking_flow(follow)
+                or followup_is_residents_dates_flow(follow)
+                or followup_is_raffle_flow(follow)
+            ):
                 follow_block = (
                     f"<p><b>После кнопки:</b> {_h(followup_preview_label(follow))}</p>"
                 )
@@ -478,6 +485,10 @@ def render_mailing_tab(
         <select name="residents_event_id" id="mail-residents-event-id">{''.join(residents_opts)}</select>
       </label>
       <p class="muted" style="margin:6px 0 0">Список дат живой: при каждом нажатии из текущей афиши (прошедшие пропадают, новые вроде 11 ноября появляются). Либо выберите одну дату для прямой брони. Ссылку и текст «после кнопки» заполнять не нужно.</p>
+    </fieldset>
+    <fieldset class="mailing-row">
+      <legend>Кнопка розыгрыша</legend>
+      <label><input type="checkbox" name="starts_raffle" value="1" id="mail-starts-raffle"> После кнопки сразу открыть розыгрыш за отзыв в личке VK (как #flow=raffle). Ссылку и «после кнопки» заполнять не нужно. Только ВК.</label>
     </fieldset>
     <label>Кнопка актуальна до (дата шоу)
       <input type="date" name="followup_until">
@@ -903,6 +914,7 @@ var MAIL_RESIDENTS_LAST_DATE = """
   var resBooking = document.getElementById('mail-residents-booking');
   var resDates = document.getElementById('mail-residents-dates');
   var resShow = document.getElementById('mail-residents-event-id');
+  var raffleBtn = document.getElementById('mail-starts-raffle');
   var residentsLastDate = MAIL_RESIDENTS_LAST_DATE || '';
   function residentsDateIso(){
     if (!resShow) return '';
@@ -912,12 +924,20 @@ var MAIL_RESIDENTS_LAST_DATE = """
   function syncResidentsBooking(){
     var datesOn = !!(resDates && resDates.checked);
     var bookOn = !!(resBooking && resBooking.checked);
+    var raffleOn = !!(raffleBtn && raffleBtn.checked);
     if (datesOn && bookOn && resBooking) resBooking.checked = false;
+    if (raffleOn && (datesOn || bookOn) && raffleBtn) raffleBtn.checked = false;
+    raffleOn = !!(raffleBtn && raffleBtn.checked);
     bookOn = !!(resBooking && resBooking.checked);
     var wrap = document.getElementById('mail-residents-show-wrap');
     if (wrap) wrap.hidden = !bookOn;
     var btnEl = form.querySelector('[name=button_text]');
     var untilEl = form.querySelector('[name=followup_until]');
+    if (raffleOn) {
+      if (btnEl && !btnEl.value.trim()) btnEl.value = 'Подробнее';
+      if (untilEl) untilEl.value = '';
+      return;
+    }
     if (datesOn) {
       if (btnEl && (!btnEl.value.trim() || btnEl.value.trim() === 'Забронировать')) btnEl.value = 'Выбрать дату';
       if (untilEl) untilEl.value = '';
@@ -930,11 +950,21 @@ var MAIL_RESIDENTS_LAST_DATE = """
   }
   if (resDates) resDates.addEventListener('change', function(){
     if (resDates.checked && resBooking) resBooking.checked = false;
+    if (resDates.checked && raffleBtn) raffleBtn.checked = false;
     syncResidentsBooking();
     saveDraft();
   });
   if (resBooking) resBooking.addEventListener('change', function(){
     if (resBooking.checked && resDates) resDates.checked = false;
+    if (resBooking.checked && raffleBtn) raffleBtn.checked = false;
+    syncResidentsBooking();
+    saveDraft();
+  });
+  if (raffleBtn) raffleBtn.addEventListener('change', function(){
+    if (raffleBtn.checked) {
+      if (resDates) resDates.checked = false;
+      if (resBooking) resBooking.checked = false;
+    }
     syncResidentsBooking();
     saveDraft();
   });

@@ -2744,6 +2744,7 @@ class VKBotApp:
                 FOLLOWUP_EXPIRED_TEXT,
                 claim_mail_followup_send,
                 followup_is_booking_flow,
+                followup_is_raffle_flow,
                 followup_is_residents_dates_flow,
                 get_campaign_followup,
                 parse_mailing_residents_event_id,
@@ -2772,6 +2773,17 @@ class VKBotApp:
                     vk_id=vk_id,
                     from_mailing=True,
                 )
+                return
+            if followup_is_raffle_flow(follow):
+                if not claim_mail_followup_send(user_id=int(vk_id), text=follow or ""):
+                    logger.info(
+                        "Skip duplicate mailing raffle peer_id=%s vk_id=%s cid=%s",
+                        peer_id,
+                        vk_id,
+                        cid,
+                    )
+                    return
+                await self._send_raffle_start(peer_id, vk_id)
                 return
             residents_event_id = parse_mailing_residents_event_id(follow)
             if residents_event_id:
