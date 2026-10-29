@@ -195,6 +195,54 @@ def test_mailing_schedule_and_templates():
     print("mailing schedule and templates: OK")
 
 
+def test_mailing_real_remaining_time():
+    from datetime import timedelta
+
+    from bot.db.mailing import (
+        campaign_run_sec,
+        estimate_duration_sec,
+        estimate_remaining_sec,
+        format_duration,
+    )
+    from bot.utils.ticket import now_msk
+
+    now = now_msk()
+    started = now - timedelta(seconds=120)
+    running = {
+        "status": "running",
+        "started_at": started,
+        "sent_count": 80,
+        "failed_count": 0,
+        "skipped_count": 0,
+        "total_count": 160,
+        "interval_sec": 0.1,
+    }
+    assert campaign_run_sec(running, now=now) == 120
+    remain = estimate_remaining_sec(running, now=now)
+    assert 119 <= remain <= 121
+    interval_only = estimate_duration_sec(80, 0.1)
+    assert interval_only < 10
+    assert remain > interval_only * 10
+
+    done = {
+        "status": "done",
+        "started_at": started,
+        "finished_at": now,
+        "sent_count": 80,
+        "failed_count": 0,
+        "total_count": 80,
+        "interval_sec": 0.1,
+    }
+    assert campaign_run_sec(done, now=now) == 120
+    assert estimate_remaining_sec(done, now=now) == 0
+    assert format_duration(120) == "2 мин"
+    paused = dict(running)
+    paused["status"] = "paused"
+    assert campaign_run_sec(paused, now=now) is None
+    assert estimate_remaining_sec(paused, now=now) == 0
+    print("mailing real remaining time: OK")
+
+
 def test_mailing_best_show_fill():
     from datetime import date
 
@@ -1134,6 +1182,7 @@ async def main():
     test_callback_parsing()
     test_mailing_booking_button_fields()
     test_mailing_schedule_and_templates()
+    test_mailing_real_remaining_time()
     test_mailing_best_show_fill()
     test_mailing_vk_denied_and_defaults()
     test_mailing_send_timeout_does_not_hang()

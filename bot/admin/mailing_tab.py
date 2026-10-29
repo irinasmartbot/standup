@@ -6,7 +6,8 @@ import json
 
 from bot.db.mailing import (
     campaign_photo_paths,
-    estimate_duration_sec,
+    campaign_run_sec,
+    estimate_remaining_sec,
     format_admin_datetime,
     format_duration,
     get_mailing_test_defaults,
@@ -100,11 +101,20 @@ def render_mailing_tab(
         sent = int(c.get("sent_count") or 0)
         failed = int(c.get("failed_count") or 0)
         status = c.get("status") or ""
-        interval = float(c.get("interval_sec") or 0)
-        left = max(0, total - sent - failed - int(c.get("skipped_count") or 0))
-        eta = format_duration(estimate_duration_sec(left, interval)) if status == "running" else "—"
+        eta = "—"
+        if status == "running":
+            remain = estimate_remaining_sec(c)
+            eta = f"~{format_duration(remain)}" if remain > 0 else "—"
         status_label = STATUS_LABELS.get(status, status)
         when_label = format_admin_datetime(c.get("scheduled_at")) or "—"
+        run_sec = campaign_run_sec(c)
+        run_label = ""
+        if run_sec is not None:
+            run_label = (
+                f"уже {format_duration(run_sec)}"
+                if status == "running"
+                else f"шла {format_duration(run_sec)}"
+            )
         if is_campaign_scheduled(c):
             status_label = "запланирована"
         actions = []
@@ -155,7 +165,8 @@ def render_mailing_tab(
             f"{_rename_form(cid, c.get('title') or '')}"
             f"<span class='muted'>{_h(_channel_label(c.get('channel')))}</span></td>"
             f"<td data-label=\"Статус / время\">{_h(status_label)}"
-            f"<br><span class='muted'>{_h(when_label)}</span></td>"
+            f"<br><span class='muted'>{_h(when_label)}</span>"
+            f"{('<br><span class=\"muted\">' + _h(run_label) + '</span>') if run_label else ''}</td>"
             f"<td data-label=\"Прогресс\">{sent}/{total}"
             f"<br><span class='muted'>ошибки {failed}</span></td>"
             f"<td data-label=\"Осталось ≈\">{_h(eta)}</td>"
@@ -224,6 +235,14 @@ def render_mailing_tab(
         sent = int(detail.get("sent_count") or 0)
         failed = int(detail.get("failed_count") or 0)
         total_c = int(detail.get("total_count") or 0)
+        detail_run = campaign_run_sec(detail)
+        detail_remain = estimate_remaining_sec(detail) if (detail.get("status") or "") == "running" else 0.0
+        detail_timing = ""
+        if detail_run is not None:
+            verb = "уже" if (detail.get("status") or "") == "running" else "шла"
+            detail_timing += f" · {verb} {format_duration(detail_run)}"
+        if detail_remain > 0:
+            detail_timing += f" · осталось ~{format_duration(detail_remain)}"
         rem = {"count": 0}
         try:
             rem = remainder_after_limit(int(cid))
@@ -300,7 +319,8 @@ def render_mailing_tab(
             f"{title_form}"
             f"<p class='muted'>Статус: {_h(STATUS_LABELS.get(detail.get('status'), detail.get('status')))} · "
             f"канал {_h(_channel_label(detail.get('channel')))} · интервал {_h(detail.get('interval_sec'))} сек"
-            f"{(' · план ' + format_admin_datetime(detail.get('scheduled_at'))) if detail.get('scheduled_at') else ''}</p>"
+            f"{(' · план ' + format_admin_datetime(detail.get('scheduled_at'))) if detail.get('scheduled_at') else ''}"
+            f"{_h(detail_timing)}</p>"
             f"<p><b>Статистика:</b> отправлено {sent} / {total_c} · ошибки {failed}</p>"
             f"{rem_form}"
             "<p><b>Текст сообщения:</b></p>"
@@ -1092,8 +1112,8 @@ var MAIL_RESIDENTS_LAST_DATE = """
           ' <span class="muted">(по фильтрам телеграм ' + (d.telegram||0) + ' · вк ' + (d.vkontakte||0) +
           (d.batch_limit ? (', лимит ' + d.batch_limit) : '') +
           '; в базе всего телеграм ' + (db.telegram||0) + ' · вк ' + (db.vkontakte||0) +
-          ')</span><br>Примерное время: <b>' + eta + '</b> при интервале ' + interval + ' сек' +
-          '<br><span class="muted">Время ≈ только паузы между сообщениями. Если телеграм попросит подождать — растянется. Картинки грузятся один раз на всю рассылку.</span>' +
+          ')</span><br>Пауза между письмами: <b>' + eta + '</b> при интервале ' + interval + ' сек' +
+          '<br><span class="muted">Это не фактическое время: Telegram/VK могут отвечать по секунде на письмо. В истории будет реальная скорость.</span>' +
           '<br><span class="muted">Считаем по: ' + statuses + ' · ' + dateLabel +
           ' · exclude ' + (f.exclude_sent_days || 0) + ' дн.' +
           (f.exclude_today_bookings ? ' · без сегодняшних шоу' : '') +

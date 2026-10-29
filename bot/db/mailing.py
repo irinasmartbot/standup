@@ -1143,6 +1143,53 @@ def estimate_duration_sec(count: int, interval_sec: float) -> float:
     return max(0.0, (n - 1) * delay)
 
 
+def campaign_processed_count(campaign: dict | None) -> int:
+    campaign = campaign or {}
+    return (
+        int(campaign.get("sent_count") or 0)
+        + int(campaign.get("failed_count") or 0)
+        + int(campaign.get("skipped_count") or 0)
+    )
+
+
+def campaign_pending_count(campaign: dict | None) -> int:
+    campaign = campaign or {}
+    total = int(campaign.get("total_count") or 0)
+    return max(0, total - campaign_processed_count(campaign))
+
+
+def campaign_run_sec(campaign: dict | None, *, now: datetime | None = None) -> float | None:
+    """How long the campaign actually sent, not the planned interval."""
+    campaign = campaign or {}
+    started = parse_admin_datetime(campaign.get("started_at"))
+    if not started:
+        return None
+    status = str(campaign.get("status") or "")
+    now = now or now_msk()
+    if status in ("done", "cancelled"):
+        ended = parse_admin_datetime(campaign.get("finished_at")) or now
+    elif status == "running":
+        ended = now
+    else:
+        return None
+    return max(0.0, (ended - started).total_seconds())
+
+
+def estimate_remaining_sec(campaign: dict | None, *, now: datetime | None = None) -> float:
+    """Remaining time from observed send speed. Interval is only a fallback."""
+    campaign = campaign or {}
+    if str(campaign.get("status") or "") != "running":
+        return 0.0
+    left = campaign_pending_count(campaign)
+    if left <= 0:
+        return 0.0
+    processed = campaign_processed_count(campaign)
+    elapsed = campaign_run_sec(campaign, now=now) or 0.0
+    if processed >= 8 and elapsed >= 15:
+        return left * (elapsed / processed)
+    return estimate_duration_sec(left, float(campaign.get("interval_sec") or 0))
+
+
 def format_duration(seconds: float) -> str:
     sec = int(round(seconds))
     if sec < 60:
