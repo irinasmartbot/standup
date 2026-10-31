@@ -97,6 +97,7 @@ _EXPIRED_SHOW_REF_VALUES = frozenset({
 _OFFLINE_GIFT_REF_VALUES = frozenset({"offline_gift", "gift"})
 _CHECK_LIST_REF_VALUES = frozenset({"chek_list", "check_list", "checklist"})
 _STATA_ALL_REF_VALUES = frozenset({"new_stata_all", "newstataall", "stata_all"})
+_START_MENU_REF_VALUES = frozenset({"standup_start", "start", "menu", "main_menu"})
 _STATA_ALL_CMDS = frozenset({
     "new_stata_all",
     "nsta_date",
@@ -241,6 +242,18 @@ def residents_entry_link(settings: VKSettings) -> str:
     return "напиши «резиденты»"
 
 
+def start_menu_entry_link(settings: VKSettings) -> str:
+    """Мобильный вход в главное меню: сразу диалог, не mini app в браузере."""
+    if settings.group_id:
+        return f"https://vk.com/write-{int(settings.group_id)}?ref=standup_start"
+    link = (settings.community_link or "").strip().rstrip("/")
+    if link:
+        name = link.rsplit("/", 1)[-1]
+        if name and not name.startswith("club") and name not in {"vk.com", "vk.ru"}:
+            return f"https://vk.me/{name}?ref=standup_start"
+    return "напиши «начать»"
+
+
 def platka_entry_link(settings: VKSettings) -> str:
     """Мобильный вход в платные билеты: сразу диалог, не mini app в браузере."""
     if settings.group_id:
@@ -273,6 +286,10 @@ def _is_check_list_ref(ref: str) -> bool:
 
 def _is_stata_all_ref(ref: str) -> bool:
     return (ref or "").strip().casefold() in _STATA_ALL_REF_VALUES
+
+
+def _is_start_menu_ref(ref: str) -> bool:
+    return (ref or "").strip().casefold() in _START_MENU_REF_VALUES
 
 
 def _gift_format_label(value: str) -> str:
@@ -388,6 +405,20 @@ def _check_list_event_keyboard(
     kb.button("⬅️ К датам", _payload("og_dates"))
     kb.adjust(1)
     return kb.as_json()
+
+
+async def send_start_menu_message(client: VKClient, vk_id: int, settings: VKSettings) -> None:
+    """Главное меню как Telegram ?start=start — без вечернего офлайн-розыгрыша."""
+    show_my_bookings = False
+    try:
+        show_my_bookings = bool(vk_mb.list_rows(int(vk_id)))
+    except Exception:
+        logger.exception("Failed to check VK bookings for start menu vk_id=%s", vk_id)
+    await client.send_message(
+        vk_id,
+        WELCOME_TEXT,
+        keyboard=main_menu_keyboard(settings, show_my_bookings=show_my_bookings),
+    )
 
 
 async def send_check_list_start_message(client: VKClient, vk_id: int) -> None:
@@ -1464,6 +1495,7 @@ class VKBotApp:
         vk_id: int | None = None,
         is_start: bool = False,
         replace_nav: bool = False,
+        include_evening_hint: bool = True,
     ) -> None:
         user_id = vk_id or peer_id
         await self._ensure_user(user_id)
@@ -1484,7 +1516,7 @@ class VKBotApp:
         else:
             self._track(user_id, EVENT_CMD_MAIN_MENU)
         text = WELCOME_TEXT
-        if is_start and in_evening_offline_gift_window():
+        if is_start and include_evening_hint and in_evening_offline_gift_window():
             text = f"{WELCOME_TEXT}\n\n{EVENING_GIFT_HINT_TEXT}"
         del replace_nav  # главное меню никогда не удаляет предыдущие сообщения
         await self._send_text(
@@ -2986,6 +3018,27 @@ class VKBotApp:
                 _metrika_cid_from_ref(raw_ref) or "",
                 source,
             )
+        is_start_menu_deeplink = _is_start_menu_ref(ref) and is_start_entry and not cmd
+        if cmd == "start_menu" or is_start_menu_deeplink:
+            from bot.vk.entry_dedupe import claim_flow_send
+
+            self._track(
+                vk_id,
+                EVENT_BOT_START,
+                props=_entry_props(raw_ref, fallback_payload="start", source=source),
+            )
+            self._offline_gift_launch_at.pop(int(vk_id), None)
+            self._offline_gift_await_choice.discard(int(vk_id))
+            self._cancel_offline_gift_timers(vk_id)
+            # Чтобы следом идущее голое «Начать» в 19–22 не перебило меню подарком.
+            claim_flow_send(int(vk_id), "start")
+            await self.send_menu(
+                peer_id,
+                vk_id=vk_id,
+                is_start=True,
+                include_evening_hint=False,
+            )
+            return
         is_gift_deeplink = _is_offline_gift_ref(ref) and is_start_entry and not cmd
         # Ссылка offline_gift работает всегда, и днём тоже.
         # Обычное «Начать» без этой ссылки: 19–22 → подарок на шоу, иначе меню.
@@ -3127,7 +3180,17 @@ class VKBotApp:
                 or payload_command == "start"
             )
             # В вечернее окно «Начать» = офлайн-подарок. После 22:00 — обычное меню.
+            # Ссылка #flow=start / ref=standup_start меню уже отправила: не перебивать.
             if cmd != "main_menu" and is_start_text and in_evening_offline_gift_window():
+                from bot.vk.entry_dedupe import recent_flow_send
+
+                if recent_flow_send(int(vk_id), "start", within_sec=45.0):
+                    logger.info(
+                        "VK skip evening gift after start-menu link peer_id=%s vk_id=%s",
+                        peer_id,
+                        vk_id,
+                    )
+                    return
                 await self._send_offline_gift_events(peer_id, vk_id=vk_id)
                 return
             if cmd != "main_menu" and is_start_text:

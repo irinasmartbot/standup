@@ -1066,6 +1066,46 @@ def test_vk_new_stata_all_flow():
     print("vk new_stata_all flow: OK")
 
 
+def test_vk_start_menu_flow():
+    from pathlib import Path
+
+    from bot.admin.vk_entry import (
+        FLOWS,
+        MINI_APP_DIRECT_FLOWS,
+        MINI_APP_VISIBLE_FLOWS,
+        parse_mini_app_flow,
+        remap_raffle_button_in_gift_session,
+    )
+
+    assert parse_mini_app_flow("start") == "start"
+    assert parse_mini_app_flow("#flow=start") == "start"
+    assert parse_mini_app_flow("flow=start") == "start"
+    assert parse_mini_app_flow("standup_start") == "start"
+    assert parse_mini_app_flow("menu") == "start"
+    assert "start" in FLOWS
+    assert "start" in MINI_APP_DIRECT_FLOWS
+    assert "start" not in MINI_APP_VISIBLE_FLOWS
+    assert remap_raffle_button_in_gift_session("raffle", "#flow=start") == "raffle"
+
+    entry_src = Path("bot/admin/vk_entry.py").read_text(encoding="utf-8")
+    body = entry_src[entry_src.find("async def _send_flow_chain_body") :]
+    start_at = body.find('if flow_key == "start"')
+    gift_at = body.find("get_offline_gift_today_events")
+    assert start_at != -1 and gift_at != -1 and start_at < gift_at
+    assert "async def landing_start" in entry_src
+    assert '"/vk/start"' in entry_src
+
+    app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
+    assert "async def send_start_menu_message" in app_src
+    assert "def _is_start_menu_ref" in app_src
+    assert "is_start_menu_deeplink" in app_src
+    assert "include_evening_hint=False" in app_src
+    assert 'claim_flow_send(int(vk_id), "start")' in app_src
+    assert 'recent_flow_send(int(vk_id), "start", within_sec=45.0)' in app_src
+    assert "VK skip evening gift after start-menu link" in app_src
+    print("vk start menu flow: OK")
+
+
 def test_vk_raffle_screenshot_avoids_tg_handler_import():
     from pathlib import Path
 
@@ -1238,6 +1278,7 @@ async def main():
     test_vk_raffle_vs_show_gift_routing()
     test_vk_chek_list_flow()
     test_vk_new_stata_all_flow()
+    test_vk_start_menu_flow()
     test_vk_raffle_screenshot_avoids_tg_handler_import()
     test_vk_same_day_warning_import()
     test_random_show_covers()

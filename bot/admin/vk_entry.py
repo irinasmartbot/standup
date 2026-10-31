@@ -83,12 +83,25 @@ FLOWS: dict[str, dict[str, Any]] = {
         "lead": "Разрешите сообщения — пришлём стату броней по датам в личку VK.",
         "ref": "new_stata_all",
     },
+    "start": {
+        "title": "Меню",
+        "headline": "Главное меню",
+        "button": "Открыть меню",
+        "lead": "Разрешите сообщения — пришлём главное меню в личку VK.",
+        "ref": "standup_start",
+    },
 }
 
 # После модерации снова показываем все входные сценарии mini app.
 MINI_APP_VISIBLE_FLOWS: tuple[str, ...] = ("booking", "raffle", "offline_gift")
 # Прямые ссылки с сайта, без кнопки в общем меню mini app.
-MINI_APP_DIRECT_FLOWS: tuple[str, ...] = ("residents", "platka", "chek_list", "new_stata_all")
+MINI_APP_DIRECT_FLOWS: tuple[str, ...] = (
+    "residents",
+    "platka",
+    "chek_list",
+    "new_stata_all",
+    "start",
+)
 EXPIRED_DIRECT_FLOWS: frozenset[str] = frozenset(
     {
         "booking_resident",
@@ -126,6 +139,11 @@ _FLOW_ALIASES: dict[str, str] = {
     "new_stata_all": "new_stata_all",
     "newstataall": "new_stata_all",
     "stata_all": "new_stata_all",
+    "start": "start",
+    "menu": "start",
+    "main": "start",
+    "main_menu": "start",
+    "standup_start": "start",
 }
 
 
@@ -704,6 +722,12 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
         await send_manager_stata_all_start_message(client, vk_id)
         return
 
+    if flow_key == "start":
+        from bot.vk.app import send_start_menu_message
+
+        await send_start_menu_message(client, vk_id, settings)
+        return
+
     from bot.db.crud import get_offline_gift_today_events
 
     events = get_offline_gift_today_events()
@@ -969,6 +993,21 @@ async def landing_raffle(request: web.Request) -> web.Response:
     settings = load_vk_settings()
     target = _mini_app_vk_url(settings, "raffle", short=True, cid=cid, source=source)
     return _html_response(_mobile_vk_jump_html("raffle", target))
+
+
+async def landing_start(request: web.Request) -> web.Response:
+    """Как Telegram ?start=start: в личку уходит главное меню."""
+    from bot.vk.app import start_menu_entry_link
+
+    cid = _request_cid(request)
+    source = _request_source(request)
+    settings = load_vk_settings()
+    if _is_mobile_request(request):
+        target = start_menu_entry_link(settings)
+        return _html_response(_mobile_vk_jump_html("start", target))
+    _remember_mini_flow(request, "start")
+    target = _mini_app_vk_url(settings, "start", short=True, cid=cid, source=source)
+    return _html_response(_mobile_vk_jump_html("start", target))
 
 
 async def landing_offline_gift(request: web.Request) -> web.Response:
@@ -1301,7 +1340,12 @@ def _mini_app_html(default_flow: str = "") -> str:
     checklist: "chek_list",
     new_stata_all: "new_stata_all",
     newstataall: "new_stata_all",
-    stata_all: "new_stata_all"
+    stata_all: "new_stata_all",
+    start: "start",
+    menu: "start",
+    main: "start",
+    main_menu: "start",
+    standup_start: "start"
   }};
   var EXPIRED_FLOWS = {{
     booking_resident: true,
@@ -2287,6 +2331,7 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/vk/platka", landing_platka)
     app.router.add_get("/vk/residents", landing_residents)
     app.router.add_get("/vk/raffle", landing_raffle)
+    app.router.add_get("/vk/start", landing_start)
     app.router.add_get("/vk/offline-gift", landing_offline_gift)
     app.router.add_get("/vk/booking_resident", landing_booking_resident)
     app.router.add_get("/vk/pushkin", landing_booking_resident)

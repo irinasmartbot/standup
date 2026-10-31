@@ -5,6 +5,7 @@
 ## Ссылки
 
 ```text
+https://go.moscowstandupshow.ru/vk/start
 https://go.moscowstandupshow.ru/vk/booking
 https://go.moscowstandupshow.ru/vk/residents
 https://go.moscowstandupshow.ru/vk/platka
@@ -27,6 +28,8 @@ https://go.moscowstandupshow.ru/vk/posters/residents_egor_konstantinov.jpg
 Mini App (канонические ссылки — внутри VK):
 
 ```text
+https://vk.ru/app54704296_-225298932#flow=start
+https://vk.ru/app54704296#flow=start
 https://vk.com/app54704296_-225298932#flow=booking
 https://vk.ru/app54704296#flow=residents
 https://vk.ru/app54704296#flow=platka
@@ -70,6 +73,7 @@ https://go.moscowstandupshow.ru/vk-mini
 Служебные URL на `go…` (редиректят в VK с `#flow=`):
 
 ```text
+https://go.moscowstandupshow.ru/vk-mini/start/start
 https://go.moscowstandupshow.ru/vk-mini/start/booking
 https://go.moscowstandupshow.ru/vk-mini/start/residents
 https://go.moscowstandupshow.ru/vk-mini/start/platka
@@ -87,6 +91,17 @@ https://go.moscowstandupshow.ru/vk-mini/start/new_stata_all
 4. VK-бот обрабатывает `cmd` (`book` / `platka` / `raffle` / `offline_gift`).
 
 Писать «начать» не нужно.
+
+Главное меню как Telegram `https://t.me/StandUp_Show_bot?start=start`. С 19:00 до 22:00 обычное «Начать» и `#flow=offline_gift` открывают подарок на шоу; эта ссылка в то же окно всё равно шлёт меню:
+
+```text
+https://vk.ru/app54704296_-225298932#flow=start
+https://vk.ru/app54704296#flow=start
+https://go.moscowstandupshow.ru/vk/start
+https://vk.com/write-225298932?ref=standup_start
+```
+
+На ПК ссылка с `_-225298932` иногда теряет hash — тогда короткая без группы. Кнопки в общем меню mini app нет.
 
 Кнопка рассылки с галочкой «розыгрыш за отзыв» не ставит URL mini app: клик в личке сразу запускает ту же цепочку, что `#flow=raffle`.
 
