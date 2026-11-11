@@ -40,6 +40,7 @@ EVENTS_SOURCE = os.getenv("EVENTS_SOURCE", "postgres" if DATABASE_URL else "shee
 BOOKINGS_SOURCE = os.getenv("BOOKINGS_SOURCE", "postgres" if DATABASE_URL else "sqlite")
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DEFAULT_TICKET = os.path.join(_PROJECT_ROOT, "фото", "ticket_template.jpg")
+TICKET_TEMPLATES_DIR = os.path.join(_PROJECT_ROOT, "фото", "tickets")
 _LEGACY_TICKET = os.path.join(_PROJECT_ROOT, "photo_2023-06-26_15-06-46.jpg")
 
 

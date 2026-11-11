@@ -1,9 +1,13 @@
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import glob
+import json
+import os
+import time
 
 from PIL import Image, ImageDraw, ImageFont
 
-from bot.config import TICKET_TEMPLATE
+from bot.config import TICKET_TEMPLATE, TICKET_TEMPLATES_DIR
 
 # Москва / GMT+3 (без DST)
 MSK = timezone(timedelta(hours=3))
@@ -136,75 +140,245 @@ def _wrap_text(draw, text: str, font, max_width: int, max_lines: int = 2) -> lis
     return lines[:max_lines]
 
 
-def generate_ticket(name, date_str, time_str, location, guests):
+# Эталон: макет «Лилия Васильевна». «БИЛЕТ» уже на PNG, бот слово не пишет.
+_GOLD = (248, 200, 90)
+_WHITE = (255, 255, 255)
+_ADDR = (220, 217, 231)
+_LAYOUT_W = 730
+_LAYOUT_H = 380
+_CX = 190
+_NAME_CY = 131
+_DATE_CY = 175
+_ADDR_CY = (222, 246, 268)
+_GUESTS_CY = 310
+_MAX_NAME_W = 300
+_MAX_W = 318
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_FONT_DIR = os.path.join(_PROJECT_ROOT, "fonts")
+_BOLD_FONTS = (
+    os.path.join(_FONT_DIR, "segoeprb.ttf"),
+    "C:/Windows/Fonts/segoeprb.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+)
+_REGULAR_FONTS = (
+    os.path.join(_FONT_DIR, "segoepr.ttf"),
+    "C:/Windows/Fonts/segoepr.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+)
+_FEMALE_MARKERS = ("Lilac_Pearls", "Lavender_Velvet", "Turquoise_Diva")
+# Имена на «а»/«я», которые мужские.
+_MALE_A_NAMES = {
+    "никита", "илья", "кузьма", "лука", "фома", "данила", "савва", "лева",
+}
+
+
+def _load_font(paths, size):
+    for path in paths:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _line_metrics(draw, text, font):
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1], bbox
+
+
+def _wrap_address(draw, text, font, max_w, max_lines=3):
+    text = (text or "").strip()
+    if not text:
+        return []
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    pieces = [f"{p}," for p in parts[:-1]] + ([parts[-1]] if parts else [])
+    if not pieces:
+        return [line for line in _wrap_text(draw, text, font, max_w, max_lines) if line]
+    lines, current = [], ""
+    i = 0
+    while i < len(pieces):
+        piece = pieces[i]
+        candidate = f"{current} {piece}".strip() if current else piece
+        if _line_metrics(draw, candidate, font)[0] <= max_w:
+            current = candidate
+            i += 1
+            continue
+        if current and len(lines) < max_lines - 1:
+            lines.append(current)
+            current = ""
+            continue
+        rest = " ".join(([current] if current else []) + pieces[i:])
+        lines.append(rest.strip())
+        return lines[:max_lines]
+    if current:
+        lines.append(current)
+    return lines[:max_lines]
+
+
+def _draw_centered(draw, text, font, fill, cx, cy, tracking=0):
+    if tracking and text and len(text) > 1:
+        widths = [_line_metrics(draw, ch, font)[0] for ch in text]
+        total = sum(widths) + tracking * (len(text) - 1)
+        height = _line_metrics(draw, text, font)[1]
+        x = cx - total / 2
+        y = cy - height / 2 - draw.textbbox((0, 0), text, font=font)[1]
+        for ch, width in zip(text, widths):
+            draw.text(
+                (x - draw.textbbox((0, 0), ch, font=font)[0], y),
+                ch,
+                font=font,
+                fill=fill,
+            )
+            x += width + tracking
+        return
+    width, height, bbox = _line_metrics(draw, text, font)
+    draw.text((cx - width / 2 - bbox[0], cy - height / 2 - bbox[1]), text, font=font, fill=fill)
+
+
+def _address_centers(count, sy):
+    top, mid, bottom = (_ADDR_CY[0] * sy, _ADDR_CY[1] * sy, _ADDR_CY[2] * sy)
+    if count <= 1:
+        return [mid]
+    if count == 2:
+        return [top, bottom]
+    if count == 3:
+        return [top, mid, bottom]
+    span = bottom - top
+    return [top + span * i / (count - 1) for i in range(count)]
+
+
+def list_ticket_templates(directory: str | None = None) -> list[str]:
+    root = directory or TICKET_TEMPLATES_DIR
+    if not root or not os.path.isdir(root):
+        return []
+    files = sorted(glob.glob(os.path.join(root, "*.png")))
+    files += [path for path in sorted(glob.glob(os.path.join(root, "*.jpg"))) if path not in files]
+    return files
+
+
+def ticket_gender(name: str) -> str:
+    """f — кошка, m — кот. Берём первое слово имени."""
+    parts = (name or "").strip().split()
+    token = parts[0].lower().replace("ё", "е") if parts else ""
+    token = "".join(ch for ch in token if ch.isalpha())
+    if token in _MALE_A_NAMES:
+        return "m"
+    if token.endswith(("а", "я")):
+        return "f"
+    return "m"
+
+
+def _pool_for_gender(templates: list[str], gender: str) -> list[str]:
+    females = [path for path in templates if any(marker in os.path.basename(path) for marker in _FEMALE_MARKERS)]
+    males = [path for path in templates if path not in females]
+    pool = females if gender == "f" else males
+    return pool or templates
+
+
+def _next_template(gender: str, templates: list[str]) -> str:
+    pool = _pool_for_gender(templates, gender)
+    state_path = os.path.join(_PROJECT_ROOT, "data", "ticket_cat_index.json")
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+    lock_path = state_path + ".lock"
+    for _ in range(50):
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    else:
+        fd = None
     try:
-        img = Image.open(TICKET_TEMPLATE).convert("RGB").copy()
+        state = {"f": 0, "m": 0}
+        if os.path.isfile(state_path):
+            try:
+                loaded = json.loads(open(state_path, encoding="utf-8").read())
+                if isinstance(loaded, dict):
+                    state.update({k: int(loaded.get(k, 0)) for k in ("f", "m")})
+            except (OSError, ValueError, TypeError):
+                pass
+        index = state.get(gender, 0) % len(pool)
+        chosen = pool[index]
+        state[gender] = index + 1
+        with open(state_path, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+        return chosen
+    finally:
+        if fd is not None:
+            os.close(fd)
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
+
+
+def _pick_ticket_template(name: str, template_path: str | None = None) -> str:
+    if template_path and os.path.isfile(template_path):
+        return template_path
+    templates = list_ticket_templates()
+    if not templates:
+        return TICKET_TEMPLATE
+    return _next_template(ticket_gender(name), templates)
+
+
+def generate_ticket(name, date_str, time_str, location, guests, template_path=None):
+    chosen = _pick_ticket_template(name or "", template_path)
+    try:
+        img = Image.open(chosen).convert("RGB").copy()
     except Exception:
-        img = Image.new("RGB", (730, 350), color=(30, 30, 30))
+        img = Image.new("RGB", (_LAYOUT_W, _LAYOUT_H), color=(18, 8, 28))
 
     W, H = img.size
-
-    # Чёрный прямоугольник занимает левые ~46% ширины и примерно с 30% по 90% высоты
-    rect_x1 = int(W * 0.02)
-    rect_y1 = int(H * 0.30)
-    rect_y2 = int(H * 0.90)
-    rect_h = rect_y2 - rect_y1
-    # Правый край текстового поля (чуть внутри тёмного блока шаблона).
-    max_text_w = int(W * 0.42)
-
+    sx = W / _LAYOUT_W
+    sy = H / _LAYOUT_H
+    cx = _CX * sx
+    max_name_w = int(_MAX_NAME_W * sx)
+    max_w = int(_MAX_W * sx)
     draw = ImageDraw.Draw(img)
 
-    font_paths = [
-        "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "arial.ttf",
-    ]
+    def load_bold(size):
+        return _load_font(_BOLD_FONTS, size)
 
-    def load_font(size):
-        for path in font_paths:
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
+    def load_regular(size):
+        return _load_font(_REGULAR_FONTS, size)
 
-    font_big = _fit_font(draw, name or "", load_font, max_text_w, max(10, int(H * 0.070)))
-    date_line = f"{date_str}  {time_str}"
-    font_med = _fit_font(draw, date_line, load_font, max_text_w, max(9, int(H * 0.060)))
+    name_text = (name or "").strip()
+    date_line = f"{date_str}  {time_str}".strip()
     guests_line = guests_word(guests)
-    font_guests = _fit_font(draw, guests_line, load_font, max_text_w, max(9, int(H * 0.060)))
-
-    # Адрес: для полного (розыгрыш) до 4 строк, кегль чуть ближе к дате.
     loc = (location or "").strip()
-    loc_max_lines = 4 if len(loc) > 40 else 3
-    loc_size = max(11, int(H * 0.055))
-    min_loc = max(9, int(H * 0.038))
-    font_small = load_font(loc_size)
-    loc_lines = _wrap_text(draw, loc, font_small, max_text_w, max_lines=loc_max_lines)
+
+    font_name = _fit_font(draw, name_text or "Имя", load_bold, max_name_w, max(16, int(32 * sy)), 14)
+    font_date = _fit_font(draw, date_line, load_bold, max_w, max(14, int(26 * sy)), 12)
+    font_guests = _fit_font(draw, guests_line, load_bold, max_w, max(16, int(30 * sy)), 14)
+
+    loc_max_lines = 3
+    loc_size = max(13, int(20 * sy))
+    min_loc = max(11, int(13 * sy))
+    font_addr = load_regular(loc_size)
+    loc_lines = _wrap_address(draw, loc, font_addr, max_w, loc_max_lines)
     while loc_size > min_loc and any(
-        _text_width(draw, line, font_small) > max_text_w for line in loc_lines
+        _line_metrics(draw, line, font_addr)[0] > max_w for line in loc_lines
     ):
         loc_size -= 1
-        font_small = load_font(loc_size)
-        loc_lines = _wrap_text(draw, loc, font_small, max_text_w, max_lines=loc_max_lines)
+        font_addr = load_regular(loc_size)
+        loc_lines = _wrap_address(draw, loc, font_addr, max_w, loc_max_lines)
 
-    x = rect_x1 + int(W * 0.02)
-    # 4–6 строк с равными промежутками внутри тёмного блока
-    line_count = 3 + len(loc_lines)  # name, date, address lines, guests
-    step = max(1, rect_h // (line_count + 1))
-    y = rect_y1 + int(step * 0.45)
+    if name_text:
+        _draw_centered(draw, name_text, font_name, _WHITE, cx, _NAME_CY * sy)
+    else:
+        _, height, _bbox = _line_metrics(draw, "А", font_name)
+        y = _NAME_CY * sy + height / 2 - 2
+        x1 = cx - max_name_w / 2
+        draw.line((x1, y, x1 + max_name_w * 0.88, y), fill=(230, 230, 230), width=2)
 
-    draw.text((x, y), name or "", font=font_big, fill="white")
-    y += step
-    draw.text((x, y), date_line, font=font_med, fill="white")
-    y += step
-    for line in loc_lines:
-        draw.text((x, y), line, font=font_small, fill="white")
-        y += step
-    draw.text((x, y), guests_line, font=font_guests, fill="white")
+    _draw_centered(draw, date_line, font_date, _WHITE, cx, _DATE_CY * sy, tracking=0.6)
+    for line, line_cy in zip(loc_lines, _address_centers(len(loc_lines), sy)):
+        _draw_centered(draw, line, font_addr, _ADDR, cx, line_cy)
+    _draw_centered(draw, guests_line, font_guests, _GOLD, cx, _GUESTS_CY * sy)
 
     buf = BytesIO()
-    img.save(buf, format="JPEG", quality=90)
+    img.save(buf, format="JPEG", quality=92)
     buf.seek(0)
     return buf

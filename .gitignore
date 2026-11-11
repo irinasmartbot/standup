@@ -26,6 +26,10 @@ data/telegram_transport_summary.txt
 !фото/afisha/*.jpg
 !фото/afisha/*.jpeg
 !фото/afisha/*.png
+!фото/tickets/
+!фото/tickets/*.png
+!фото/tickets/*.jpg
+data/ticket_cat_index.json
 
 # рабочие документы — не часть кода
 *.docx
