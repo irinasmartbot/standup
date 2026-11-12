@@ -31,6 +31,9 @@ data/telegram_transport_summary.txt
 !фото/tickets/*.jpg
 data/ticket_cat_index.json
 
+# Шрифты билета лежат на сервере и в git не входят. git clean их не удаляет.
+fonts/
+
 # рабочие документы — не часть кода
 *.docx
 *.doc
