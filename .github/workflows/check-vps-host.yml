@@ -9,15 +9,35 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Open the deploy host and print its name
+      - name: Compare the deploy host without printing it
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
           set -euo pipefail
+          if [ "$VPS_HOST" = "82.146.53.156" ]; then
+            echo "::notice::HOST_IS_NEW"
+          elif [ "$VPS_HOST" = "31.128.47.4" ]; then
+            echo "::notice::HOST_IS_OLD"
+          elif [ -z "$VPS_HOST" ]; then
+            echo "::notice::HOST_EMPTY"
+          else
+            echo "::notice::HOST_IS_OTHER"
+          fi
+          if [ "$VPS_USER" = "standup" ]; then
+            echo "::notice::USER_OK"
+          else
+            echo "::notice::USER_OTHER"
+          fi
+          if printf '%s\n' "$VPS_SSH_KEY" | grep -q "OPENSSH PRIVATE KEY"; then
+            echo "::notice::KEY_PRESENT"
+          else
+            echo "::notice::KEY_MISSING"
+          fi
           mkdir -p ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/vps_key
           chmod 600 ~/.ssh/vps_key
-          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/vps_key -o IdentitiesOnly=yes -o ConnectTimeout=20 "$VPS_USER@$VPS_HOST" "hostname; hostname -I; systemctl is-active standup-bot || true; systemctl is-active standup-vk-bot || true; systemctl is-active standup-admin || true"
+          ssh-keyscan -T 8 -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/vps_key -o IdentitiesOnly=yes -o ConnectTimeout=15 "$VPS_USER@$VPS_HOST" "hostname"
+          echo "::notice::SSH_OK"
