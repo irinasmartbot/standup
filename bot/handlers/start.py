@@ -497,7 +497,7 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
         await send_all_formats(message, from_deep_link=True)
         return
 
-    if payload == "afisha_besplat":
+    if payload in {"afisha_besplat", "booking_proverka"}:
         # бесплатная бронь «Проверка материала» (дата / площадка)
         from bot.handlers.booking import check_format_entry
         await check_format_entry(message)
