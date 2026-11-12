@@ -1,4 +1,5 @@
 name: Check VPS host
+# Re-run after the GitHub Actions public key was installed.
 
 on:
   push:
