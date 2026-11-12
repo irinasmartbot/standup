@@ -38,6 +38,16 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/vps_key
           chmod 600 ~/.ssh/vps_key
-          ssh-keyscan -T 8 -H "$VPS_HOST" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/vps_key -o IdentitiesOnly=yes -o ConnectTimeout=15 "$VPS_USER@$VPS_HOST" "hostname"
-          echo "::notice::SSH_OK"
+          set +e
+          ssh-keyscan -T 8 -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/tmp/scan.err
+          if ! grep -q . ~/.ssh/known_hosts; then
+            echo "::notice::KEYSCAN_EMPTY"
+          fi
+          ssh -i ~/.ssh/vps_key -o IdentitiesOnly=yes -o ConnectTimeout=15 "$VPS_USER@$VPS_HOST" "hostname" >/tmp/ssh.out 2>/tmp/ssh.err
+          rc=$?
+          if grep -q "Permission denied" /tmp/ssh.err; then echo "::notice::SSH_PERMISSION_DENIED"; fi
+          if grep -Eqi "timed out|Connection timed out" /tmp/ssh.err; then echo "::notice::SSH_TIMEOUT"; fi
+          if grep -q "Connection refused" /tmp/ssh.err; then echo "::notice::SSH_REFUSED"; fi
+          if grep -q "Host key verification failed" /tmp/ssh.err; then echo "::notice::SSH_HOSTKEY"; fi
+          if [ "$rc" -eq 0 ]; then echo "::notice::SSH_OK"; else echo "::notice::SSH_EXIT_${rc}"; fi
+          exit "$rc"
