@@ -1,0 +1,115 @@
+<script>
+(function () {
+  // Только подстановка cid в ссылки ТГ/ВК.
+  // Клики booking_tg_click / booking_vk_click уже шлёт основной скрипт сайта.
+  // Бот при реальном запуске шлёт: bot_open + bot_open_tg/bot_open_vk.
+  // При создании брони шлёт: booking_created + booking_created_tg/booking_created_vk.
+  var METRIKA_COUNTER_ID = 88707048;
+  var SOURCE = 'site';
+  var TG_HOSTS = { 't.me': 1, 'telegram.me': 1 };
+  var TG_PATH = /^\/standup_show_bot\/?$/i;
+  var KNOWN_START = {
+    booking_proverka: 1,
+    quick_booking: 1,
+    afisha_besplat: 1,
+    residents: 1,
+    start: 1,
+    standup_rozygr: 1,
+    chek_list: 1
+  };
+
+  function getStartBase(value) {
+    var raw = String(value || '').trim();
+    if (!raw) return '';
+    return raw.replace(/(?:_src_[A-Za-z0-9-]+)?_c\d+$/i, '');
+  }
+
+  function buildStartPayload(base, clientId) {
+    var cleanBase = getStartBase(base);
+    if (!cleanBase || !KNOWN_START[cleanBase]) return cleanBase || '';
+    var cid = String(clientId || '').replace(/\D/g, '');
+    if (!cid) return cleanBase;
+    var candidate = cleanBase + '_c' + cid;
+    return candidate.length <= 64 ? candidate : cleanBase;
+  }
+
+  function isTgBotLink(link) {
+    try {
+      var url = new URL(link.href, window.location.href);
+      var host = url.hostname.toLowerCase().replace(/^www\./, '');
+      return !!TG_HOSTS[host] && TG_PATH.test(url.pathname);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function isOurVkAppLink(link) {
+    try {
+      var url = new URL(link.href, window.location.href);
+      var host = url.hostname.toLowerCase().replace(/^www\./, '');
+      if (host !== 'vk.ru' && host !== 'vk.com') return false;
+      return /^\/app54704296\/?$/.test(url.pathname);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function buildVkUrl(originalHref, clientId) {
+    var parts = String(originalHref || '').split('#');
+    var baseUrl = parts[0] || 'https://vk.ru/app54704296';
+    var hash = parts[1] || 'flow=booking';
+    var params = new URLSearchParams(hash);
+    if (!params.get('flow')) {
+      params.set('flow', 'booking');
+    }
+    var cid = String(clientId || '').replace(/\D/g, '');
+    if (cid) {
+      params.set('cid', cid);
+    }
+    params.set('source', SOURCE);
+    return baseUrl + '#' + params.toString();
+  }
+
+  function updateLinks(clientId) {
+    document.querySelectorAll('a[href*="t.me/StandUp_Show_bot"], a[href*="telegram.me/StandUp_Show_bot"]').forEach(function (link) {
+      if (!isTgBotLink(link)) return;
+      try {
+        var url = new URL(link.href, window.location.href);
+        var base = getStartBase(url.searchParams.get('start') || 'start');
+        url.searchParams.set('start', buildStartPayload(base, clientId));
+        link.href = url.toString();
+      } catch (_) {}
+    });
+
+    document.querySelectorAll('a[href*="vk.ru/app54704296"], a[href*="vk.com/app54704296"]').forEach(function (link) {
+      if (!isOurVkAppLink(link)) return;
+      link.href = buildVkUrl(link.href, clientId);
+    });
+  }
+
+  function waitForMetrika(attempt) {
+    attempt = attempt || 0;
+    if (window.ym) {
+      window.ym(METRIKA_COUNTER_ID, 'getClientID', function (clientId) {
+        updateLinks(clientId);
+      });
+      return;
+    }
+    if (attempt < 25) {
+      setTimeout(function () {
+        waitForMetrika(attempt + 1);
+      }, 300);
+      return;
+    }
+    updateLinks('');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+      waitForMetrika();
+    });
+  } else {
+    waitForMetrika();
+  }
+})();
+</script>

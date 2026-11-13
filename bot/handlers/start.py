@@ -39,6 +39,7 @@ from bot.db.crud import (
 from bot.handlers.formats import delete_linked_venue_album
 from bot.utils.bot_commands import refresh_user_commands, setup_bot_commands
 from bot.utils.free_text import is_meaningful_free_text as _is_meaningful_free_text
+from bot.utils.metrika_deeplink import parse_start_payload
 from bot.utils.nav_messages import (
     delete_my_bookings_messages,
     forget_my_bookings_message,
@@ -454,50 +455,76 @@ async def tech_chat_id_command(message: Message):
 async def start(message: Message, state: FSMContext, command: CommandObject):
     await state.clear()
     await refresh_user_commands(message.bot, message.from_user.id)
-    payload = (command.args or "").strip()
-    if not payload:
+    raw_payload = (command.args or "").strip()
+    if not raw_payload:
         text = (message.text or "").strip()
         parts = text.split(maxsplit=1)
         if len(parts) > 1:
-            payload = parts[1].strip()
+            raw_payload = parts[1].strip()
+    payload, metrika_cid, metrika_source = parse_start_payload(raw_payload)
     payload_key = payload.casefold()
+    start_props: dict = {"payload": payload or None}
+    if raw_payload and raw_payload != payload:
+        start_props["payload_raw"] = raw_payload
+    if metrika_cid:
+        start_props["cid"] = metrika_cid
+    if metrika_source:
+        start_props["source"] = metrika_source
     track_event(
         EVENT_BOT_START,
         telegram_id=message.from_user.id,
-        props={"payload": payload or None},
+        props=start_props,
     )
+    if metrika_cid:
+        try:
+            from bot.services.metrika import queue_bot_open_goal
+
+            queue_bot_open_goal(
+                client_id=metrika_cid,
+                channel="telegram",
+                context={
+                    "telegram_id": message.from_user.id,
+                    "payload": payload or "",
+                    "source": metrika_source or "",
+                },
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "queue bot_open_goal failed telegram_id=%s",
+                message.from_user.id,
+            )
 
     if payload_key == "standup_rozygr":
         from bot.handlers.rozygrysh import send_raffle_start
         await send_raffle_start(message, state)
         return
 
-    if payload == "chek_list":
+    if payload_key == "chek_list":
         from bot.handlers.offline_gift import send_check_list_start
         await send_check_list_start(message)
         return
 
-    if payload == "new_stata":
+    if payload_key == "new_stata":
         from bot.handlers.manager_stata import send_manager_stata_start
         await send_manager_stata_start(message, state)
         return
 
-    if payload == "new_stata_all":
+    if payload_key == "new_stata_all":
         from bot.handlers.manager_stata import send_manager_stata_all_start
         await send_manager_stata_all_start(message, state)
         return
 
-    if payload == "new_stata_rozygr":
+    if payload_key == "new_stata_rozygr":
         from bot.handlers.manager_stata import send_manager_stata_rozygr_start
         await send_manager_stata_rozygr_start(message, state)
         return
 
-    if payload == "quick_booking":
+    if payload_key == "quick_booking":
         from bot.handlers.formats import send_all_formats
         await send_all_formats(message, from_deep_link=True)
         return
 
-    if payload in {"afisha_besplat", "booking_proverka"}:
+    if payload_key in {"afisha_besplat", "booking_proverka"}:
         # бесплатная бронь «Проверка материала» (дата / площадка)
         from bot.handlers.booking import check_format_entry
         await check_format_entry(message)
@@ -520,7 +547,7 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
         await message.answer(FOLLOWUP_EXPIRED_TEXT)
         return
 
-    if payload == PAID_BEST_START:
+    if payload == PAID_BEST_START or payload_key == str(PAID_BEST_START).casefold():
         # платная ветка BEST для друга (из розыгрыша)
         from bot.handlers.formats import best_format_entry
         await best_format_entry(message)

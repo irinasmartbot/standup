@@ -981,6 +981,27 @@ class VKBotApp:
 
     def _track(self, vk_id: int, name: str, **kwargs) -> None:
         track_event(name, vk_id=vk_id, channel=VK_CHANNEL, **kwargs)
+        if name != EVENT_BOT_START:
+            return
+        props = kwargs.get("props") or {}
+        cid = str((props or {}).get("cid") or "").strip()
+        if not cid:
+            return
+        try:
+            from bot.services.metrika import queue_bot_open_goal
+
+            queue_bot_open_goal(
+                client_id=cid,
+                channel="vkontakte",
+                context={
+                    "vk_id": int(vk_id),
+                    "payload": (props or {}).get("payload") or "",
+                    "source": (props or {}).get("source") or "",
+                    "via": (props or {}).get("via") or "",
+                },
+            )
+        except Exception:
+            logger.exception("queue bot_open_goal failed vk_id=%s", vk_id)
 
     async def _ensure_user(self, vk_id: int) -> None:
         """Создаёт/обновляет users и подтягивает имя из VK (с кэшем на процесс)."""

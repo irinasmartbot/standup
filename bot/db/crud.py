@@ -327,18 +327,24 @@ def create_booking(
                 if attribution.get("source"):
                     event_props["source"] = attribution["source"]
 
+                channel = (
+                    booking_source
+                    if booking_source in {"telegram", "vkontakte"}
+                    else "unknown"
+                )
                 track_event(
                     EVENT_BOOKING_CREATED,
                     telegram_id=telegram_id,
                     vk_id=vk_id,
                     user_id=user_id,
-                    channel=booking_source if booking_source in {"telegram", "vkontakte"} else "unknown",
+                    channel=channel,
                     event_id=found_event_id,
                     booking_id=booking_id,
                     props=event_props,
                 )
                 queue_booking_created_goal(
                     client_id=str(attribution.get("cid") or ""),
+                    channel=channel,
                     created_at=datetime.now(),
                     context={
                         "booking_id": booking_id,
@@ -346,6 +352,7 @@ def create_booking(
                         "telegram_id": telegram_id,
                         "vk_id": vk_id,
                         "source": attribution.get("source") or "",
+                        "channel": channel,
                     },
                 )
             except Exception:

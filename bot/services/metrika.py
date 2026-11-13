@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_COUNTER_ID = "88707048"
 DEFAULT_BOOKING_CREATED_TARGET = "booking_created"
+DEFAULT_BOOKING_CREATED_TG_TARGET = "booking_created_tg"
+DEFAULT_BOOKING_CREATED_VK_TARGET = "booking_created_vk"
+DEFAULT_BOT_OPEN_TARGET = "bot_open"
+DEFAULT_BOT_OPEN_TG_TARGET = "bot_open_tg"
+DEFAULT_BOT_OPEN_VK_TARGET = "bot_open_vk"
 
 
 def _counter_id() -> str:
@@ -47,6 +52,43 @@ def _booking_created_target() -> str:
         os.getenv("YANDEX_METRIKA_BOOKING_CREATED_TARGET")
         or DEFAULT_BOOKING_CREATED_TARGET
     ).strip()
+
+
+def _booking_created_channel_target(channel: str) -> str:
+    value = (channel or "").strip().casefold()
+    if value in {"telegram", "tg"}:
+        return (
+            os.getenv("YANDEX_METRIKA_BOOKING_CREATED_TG_TARGET")
+            or DEFAULT_BOOKING_CREATED_TG_TARGET
+        ).strip()
+    if value in {"vkontakte", "vk", "vkontakte_bot"}:
+        return (
+            os.getenv("YANDEX_METRIKA_BOOKING_CREATED_VK_TARGET")
+            or DEFAULT_BOOKING_CREATED_VK_TARGET
+        ).strip()
+    return ""
+
+
+def _bot_open_target() -> str:
+    return (
+        os.getenv("YANDEX_METRIKA_BOT_OPEN_TARGET")
+        or DEFAULT_BOT_OPEN_TARGET
+    ).strip()
+
+
+def _bot_open_channel_target(channel: str) -> str:
+    value = (channel or "").strip().casefold()
+    if value in {"telegram", "tg"}:
+        return (
+            os.getenv("YANDEX_METRIKA_BOT_OPEN_TG_TARGET")
+            or DEFAULT_BOT_OPEN_TG_TARGET
+        ).strip()
+    if value in {"vkontakte", "vk", "vkontakte_bot"}:
+        return (
+            os.getenv("YANDEX_METRIKA_BOT_OPEN_VK_TARGET")
+            or DEFAULT_BOT_OPEN_VK_TARGET
+        ).strip()
+    return ""
 
 
 def _conversion_timestamp(value: datetime | None = None) -> int:
@@ -174,24 +216,87 @@ def upload_offline_conversion(
     return False
 
 
-def queue_booking_created_goal(
+def _queue_goal(
     *,
+    target: str,
     client_id: str,
     created_at: datetime | None = None,
+    comment: str = "",
     context: dict[str, Any] | None = None,
+    thread_name: str = "metrika-goal",
 ) -> None:
-    """Send booking_created in a daemon thread so users do not wait for Metrica."""
-    target = _booking_created_target()
     thread = threading.Thread(
         target=upload_offline_conversion,
         kwargs={
             "target": target,
             "client_id": client_id,
             "created_at": created_at,
-            "comment": "booking_created",
+            "comment": comment or target,
             "context": context or {},
         },
-        name="metrika-booking-created",
+        name=thread_name,
         daemon=True,
     )
     thread.start()
+
+
+def queue_bot_open_goal(
+    *,
+    client_id: str,
+    channel: str = "",
+    created_at: datetime | None = None,
+    context: dict[str, Any] | None = None,
+) -> None:
+    """Send shared bot_open plus channel goal bot_open_tg / bot_open_vk."""
+    payload = dict(context or {})
+    if channel:
+        payload.setdefault("channel", channel)
+    _queue_goal(
+        target=_bot_open_target(),
+        client_id=client_id,
+        created_at=created_at,
+        comment="bot_open",
+        context=payload,
+        thread_name="metrika-bot-open",
+    )
+    channel_target = _bot_open_channel_target(channel)
+    if channel_target:
+        _queue_goal(
+            target=channel_target,
+            client_id=client_id,
+            created_at=created_at,
+            comment=channel_target,
+            context=payload,
+            thread_name=f"metrika-{channel_target}",
+        )
+
+
+def queue_booking_created_goal(
+    *,
+    client_id: str,
+    channel: str = "",
+    created_at: datetime | None = None,
+    context: dict[str, Any] | None = None,
+) -> None:
+    """Send shared booking_created plus channel goal booking_created_tg / booking_created_vk."""
+    payload = dict(context or {})
+    if channel:
+        payload.setdefault("channel", channel)
+    _queue_goal(
+        target=_booking_created_target(),
+        client_id=client_id,
+        created_at=created_at,
+        comment="booking_created",
+        context=payload,
+        thread_name="metrika-booking-created",
+    )
+    channel_target = _booking_created_channel_target(channel)
+    if channel_target:
+        _queue_goal(
+            target=channel_target,
+            client_id=client_id,
+            created_at=created_at,
+            comment=channel_target,
+            context=payload,
+            thread_name=f"metrika-{channel_target}",
+        )

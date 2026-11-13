@@ -487,6 +487,23 @@ async def _send_flow_chain(
         channel="vkontakte",
         props=props,
     )
+    if cid:
+        try:
+            from bot.services.metrika import queue_bot_open_goal
+
+            queue_bot_open_goal(
+                client_id=str(cid),
+                channel="vkontakte",
+                context={
+                    "vk_id": int(vk_id),
+                    "flow": flow_key,
+                    "payload": props.get("payload") or "",
+                    "source": source or "",
+                    "via": "mini_app_flow",
+                },
+            )
+        except Exception:
+            logger.exception("queue bot_open_goal failed vk_id=%s flow=%s", vk_id, flow_key)
 
     try:
         await _send_flow_chain_body(client, settings, flow_key, vk_id, vk_raffle)
