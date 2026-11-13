@@ -521,6 +521,11 @@ def render_mailing_tab(
       </div>
       <p class="muted" style="margin:6px 0 0">Аудитория считается сейчас, письма уйдут в выбранное время. Можно отменить или перенести в истории.</p>
     </fieldset>
+    <fieldset class="mailing-row">
+      <legend>Другие рассылки</legend>
+      <label><input type="checkbox" name="exclude_queued" value="1"> Не брать тех, кто уже в очереди другой рассылки</label>
+      <p class="muted" style="margin:6px 0 0">Чтобы заранее поставить два письма в один день: сначала первую с лимитом (половина), затем эту с галочкой и без лимита. На первую галочку не ставьте. Смотрит очередь, которая ещё не ушла, а не только уже отправленные.</p>
+    </fieldset>
     <details class="mailing-cut" data-persist-key="mailing:audience-filters">
       <summary><strong>Фильтры аудитории</strong>
         <span class="details-action"><span class="closed-label">Развернуть</span>
@@ -1082,6 +1087,7 @@ var MAIL_RESIDENTS_LAST_DATE = """
       });
       var ex = form.querySelector('[name="exclude_sent_days"]');
       if (ex) ex.value = '0';
+      form.querySelectorAll('input[name="exclude_queued"]').forEach(function(el){ el.checked = false; });
       var both = form.querySelector('input[name="channel"][value="both"]');
       if (both) both.checked = true;
       box.innerHTML = '<span class="muted">Фильтры сброшены. Нажмите «Посчитать аудиторию».</span>';
@@ -1146,6 +1152,7 @@ var MAIL_RESIDENTS_LAST_DATE = """
           '<br><span class="muted">Это не фактическое время: Telegram/VK могут отвечать по секунде на письмо. В истории будет реальная скорость.</span>' +
           '<br><span class="muted">Считаем по: ' + statuses + ' · ' + dateLabel +
           ' · exclude ' + (f.exclude_sent_days || 0) + ' дн.' +
+          (f.exclude_queued ? ' · без очереди других рассылок' : '') +
           (f.exclude_today_bookings ? ' · без сегодняшних шоу' : '') +
           '</span>' + hint;
         box.innerHTML = html;

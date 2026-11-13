@@ -986,6 +986,7 @@ def normalize_filters(raw: dict | None) -> dict[str, Any]:
         "has_phone": bool(data.get("has_phone")),
         "exclude_blocked": bool(data.get("exclude_blocked", True)),
         "exclude_today_bookings": bool(data.get("exclude_today_bookings")),
+        "exclude_queued": bool(data.get("exclude_queued")),
         "exclude_sent_days": exclude_days,
         "batch_limit": batch_limit,
     }
@@ -1069,6 +1070,20 @@ def _audience_sql(channel: str, filters: dict) -> tuple[str, dict]:
                   AND mr.channel = %(msg_channel)s
                   AND mr.status = 'sent'
                   AND mr.sent_at >= NOW() - (%(exclude_days)s || ' days')::interval
+            )
+            """
+        )
+
+    if filters.get("exclude_queued"):
+        where.append(
+            """
+            NOT EXISTS (
+                SELECT 1
+                FROM mailing_recipients mr
+                JOIN mailing_campaigns mc ON mc.id = mr.campaign_id
+                WHERE mr.user_id = u.id
+                  AND mr.channel = %(msg_channel)s
+                  AND mc.status IN ('queued', 'running', 'paused')
             )
             """
         )

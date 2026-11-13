@@ -6068,6 +6068,7 @@ def _mailing_filters_from_form(form) -> dict:
         "exclude_blocked": _form_text(form, "exclude_blocked") in {"1", "on", "true", "yes"},
         "exclude_today_bookings": _form_text(form, "exclude_today_bookings")
         in {"1", "on", "true", "yes"},
+        "exclude_queued": _form_text(form, "exclude_queued") in {"1", "on", "true", "yes"},
         "exclude_sent_days": _form_text(form, "exclude_sent_days", "0") or "0",
         "batch_limit": _form_text(form, "batch_limit"),
     }

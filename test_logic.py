@@ -209,6 +209,26 @@ def test_mailing_schedule_and_templates():
     print("mailing schedule and templates: OK")
 
 
+def test_mailing_exclude_queued():
+    from bot.db.mailing import _audience_sql, normalize_filters
+
+    off = normalize_filters({})
+    assert off["exclude_queued"] is False
+    on = normalize_filters({"exclude_queued": "1"})
+    assert on["exclude_queued"] is True
+    sql_off, _ = _audience_sql("telegram", off)
+    sql_on, _ = _audience_sql("telegram", on)
+    assert "mc.status IN ('queued', 'running', 'paused')" not in sql_off
+    assert "mc.status IN ('queued', 'running', 'paused')" in sql_on
+    from pathlib import Path
+
+    tab_src = Path("bot/admin/mailing_tab.py").read_text(encoding="utf-8")
+    app_src = Path("bot/admin/app.py").read_text(encoding="utf-8")
+    assert 'name="exclude_queued"' in tab_src
+    assert '"exclude_queued"' in app_src
+    print("mailing exclude queued: OK")
+
+
 def test_mailing_real_remaining_time():
     from datetime import timedelta
 
@@ -1257,6 +1277,7 @@ async def main():
     test_callback_parsing()
     test_mailing_booking_button_fields()
     test_mailing_schedule_and_templates()
+    test_mailing_exclude_queued()
     test_mailing_real_remaining_time()
     test_mailing_best_show_fill()
     test_mailing_vk_denied_and_defaults()
