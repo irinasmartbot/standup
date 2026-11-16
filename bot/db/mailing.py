@@ -846,6 +846,16 @@ def is_campaign_scheduled(row: dict | None) -> bool:
     return bool(at and at > now_msk())
 
 
+def campaign_content_editable(row: dict | None) -> bool:
+    """Текст/картинку можно править у плана на будущее или на паузе."""
+    if not row:
+        return False
+    status = str(row.get("status") or "")
+    if status == "paused":
+        return True
+    return is_campaign_scheduled(row)
+
+
 def campaign_followup_until(campaign: dict | None) -> date | None:
     """Дата, до которой (включительно) кнопка follow-up актуальна."""
     if not campaign:
@@ -1592,6 +1602,80 @@ def get_campaign_followup(campaign_id: int) -> str | None:
     if campaign_followup_expired(row):
         return FOLLOWUP_EXPIRED_TEXT
     return text
+
+
+def set_campaign_content(
+    campaign_id: int,
+    *,
+    body_html: str,
+    button_text: str = "",
+    button_url: str = "",
+    followup_html: str = "",
+    followup_until: date | str | None = None,
+    disable_link_preview: bool = False,
+    photo_paths: list[str] | None = None,
+    replace_photos: bool = False,
+) -> dict:
+    """Обновить письмо запланированной или стоящей на паузе кампании. Очередь не трогаем."""
+    ensure_mailing_tables()
+    row = get_campaign(campaign_id)
+    if not row:
+        raise ValueError("Кампания не найдена")
+    if not campaign_content_editable(row):
+        raise ValueError(
+            "Письмо можно править только у запланированной рассылки или на паузе"
+        )
+    body = (body_html or "").strip()
+    paths = campaign_photo_paths(row)
+    if replace_photos:
+        paths = campaign_photo_paths({"photo_paths": photo_paths or []})
+    if not body and not paths:
+        raise ValueError("Нужен текст или картинка")
+    until = _parse_iso_date(followup_until) if followup_until not in (None, "") else None
+    first = paths[0] if paths else None
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE mailing_campaigns
+                SET body_html = %(body)s,
+                    button_text = %(button_text)s,
+                    button_url = %(button_url)s,
+                    followup_html = %(followup_html)s,
+                    followup_until = %(until)s,
+                    disable_link_preview = %(preview_off)s,
+                    photo_path = %(photo_path)s,
+                    photo_paths = %(photo_paths)s
+                WHERE id = %(id)s
+                  AND (
+                    status = 'paused'
+                    OR (
+                      status = 'queued'
+                      AND scheduled_at IS NOT NULL
+                      AND scheduled_at > NOW()
+                    )
+                  )
+                RETURNING *
+                """,
+                {
+                    "id": int(campaign_id),
+                    "body": body,
+                    "button_text": (button_text or "").strip()[:40],
+                    "button_url": (button_url or "").strip(),
+                    "followup_html": (followup_html or "").strip(),
+                    "until": until,
+                    "preview_off": bool(disable_link_preview),
+                    "photo_path": first,
+                    "photo_paths": Json(paths),
+                },
+            )
+            updated = cur.fetchone()
+        conn.commit()
+    if not updated:
+        raise ValueError(
+            "Письмо можно править только у запланированной рассылки или на паузе"
+        )
+    return dict(updated)
 
 
 def set_campaign_title(campaign_id: int, title: str) -> dict | None:

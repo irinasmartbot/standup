@@ -36,6 +36,15 @@ _vk_client = None
 _vk_photo_attachments: dict[int, str] = {}
 
 
+def drop_campaign_media_cache(campaign_id: int | None) -> None:
+    """Сбросить file_id/attachment, если в кампании сменили картинки."""
+    if not campaign_id:
+        return
+    cid = int(campaign_id)
+    _tg_photo_file_ids.pop(cid, None)
+    _vk_photo_attachments.pop(cid, None)
+
+
 def _bot_token() -> str:
     return (os.getenv("BOT_TOKEN") or "").strip()
 

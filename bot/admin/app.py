@@ -6618,6 +6618,164 @@ async def mailing_title_page(request: web.Request) -> web.Response:
     raise web.HTTPFound(f"/admin?tab=mailing&m_flash={flash}")
 
 
+async def mailing_content_page(request: web.Request) -> web.Response:
+    config = request.app["config"]
+    if not _check_auth(request, config) or not _can_resend_tickets(request, config):
+        raise web.HTTPFound("/admin/login")
+    form = await request.post()
+    from pathlib import Path
+    from urllib.parse import quote
+
+    from bot.admin.mailing_worker import drop_campaign_media_cache
+    from bot.db.admin_audit import log_admin_action
+    from bot.db.mailing import (
+        campaign_photo_paths,
+        form_opens_residents_dates,
+        form_starts_raffle,
+        form_starts_residents_booking,
+        get_campaign,
+        resolve_mailing_button_fields,
+        set_campaign_content,
+        set_campaign_photos,
+    )
+
+    cid_raw = _form_text(form, "campaign_id")
+    if not cid_raw.isdigit():
+        raise web.HTTPFound("/admin?tab=mailing")
+    cid = int(cid_raw)
+    row = await asyncio.get_running_loop().run_in_executor(None, get_campaign, cid)
+    if not row:
+        raise web.HTTPFound(f"/admin?tab=mailing&m_err={quote('Кампания не найдена')}")
+
+    body_html = _form_text(form, "body_html")
+    button_text = _form_text(form, "button_text")
+    button_url = _form_text(form, "button_url")
+    followup_html = _form_text(form, "followup_html")
+    followup_until = _date_to_input(_form_text(form, "followup_until")) or _form_text(
+        form, "followup_until"
+    )
+    disable_link_preview = _form_text(form, "disable_link_preview") in {
+        "1",
+        "on",
+        "true",
+        "yes",
+    }
+    clear_photos = _form_text(form, "clear_photos") in {"1", "on", "true", "yes"}
+    uploads = _read_mailing_photo_uploads(form)
+    new_photo_paths: list[str] = []
+    replace_photos = False
+    old_photos = campaign_photo_paths(row)
+    if uploads:
+        new_photo_paths = _write_mailing_photos(
+            uploads,
+            f"{cid}_edit_{int(asyncio.get_running_loop().time() * 1000)}",
+        )
+        replace_photos = True
+    elif clear_photos:
+        replace_photos = True
+
+    try:
+        channel = (row.get("channel") or "").strip()
+        if form_opens_residents_dates(form.get("opens_residents_dates")):
+            if not button_text:
+                button_text = "Выбрать дату"
+            button_url, followup_html, until_resolved = resolve_mailing_button_fields(
+                starts_booking=False,
+                residents_dates=True,
+                button_url=button_url,
+                followup_html=followup_html,
+                followup_until=followup_until,
+            )
+            followup_until = until_resolved or followup_until
+        elif form_starts_raffle(form.get("starts_raffle")):
+            if channel == "telegram":
+                raise ValueError(
+                    "Розыгрыш за отзыв открывается только в VK — выберите канал ВК или Оба"
+                )
+            if not button_text:
+                button_text = "Подробнее"
+            button_url, followup_html, until_resolved = resolve_mailing_button_fields(
+                starts_booking=False,
+                starts_raffle=True,
+                button_url=button_url,
+                followup_html=followup_html,
+                followup_until=followup_until,
+            )
+            followup_until = until_resolved or followup_until
+        elif form_starts_residents_booking(form.get("starts_residents_booking")):
+            residents_event_id = _form_text(form, "residents_event_id")
+            if not residents_event_id:
+                raise ValueError("Выберите дату сольника для кнопки брони")
+            if not button_text:
+                button_text = "Забронировать"
+            button_url, followup_html, until_resolved = resolve_mailing_button_fields(
+                starts_booking=False,
+                residents_event_id=residents_event_id,
+                button_url=button_url,
+                followup_html=followup_html,
+                followup_until=followup_until,
+            )
+            followup_until = until_resolved or followup_until
+        if button_text and not button_url and not followup_html:
+            raise ValueError("Для кнопки без URL нужен текст «после нажатия»")
+        updated = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: set_campaign_content(
+                cid,
+                body_html=body_html,
+                button_text=button_text,
+                button_url=button_url,
+                followup_html=followup_html,
+                followup_until=followup_until or None,
+                disable_link_preview=disable_link_preview,
+                photo_paths=new_photo_paths,
+                replace_photos=replace_photos,
+            ),
+        )
+    except Exception as exc:
+        _unlink_mailing_photos(new_photo_paths)
+        raise web.HTTPFound(
+            f"/admin?tab=mailing&campaign={cid}&m_err={quote(f'{type(exc).__name__}: {exc}'[:200])}"
+        )
+
+    if replace_photos and new_photo_paths:
+        root = Path(__file__).resolve().parents[2]
+        media_dir = root / "data" / "mailing"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        finals: list[str] = []
+        try:
+            for i, tmp in enumerate(new_photo_paths, 1):
+                src = Path(tmp)
+                final = media_dir / f"{cid}_{i}{src.suffix.lower() or '.jpg'}"
+                if src.resolve() != final.resolve():
+                    src.replace(final)
+                finals.append(str(final))
+            await asyncio.get_running_loop().run_in_executor(
+                None, set_campaign_photos, cid, finals
+            )
+            new_photo_paths = finals
+        except Exception:
+            logger.exception("mailing photo rename failed campaign=%s", cid)
+    if replace_photos:
+        keep = set(new_photo_paths)
+        _unlink_mailing_photos([path for path in old_photos if path not in keep])
+    drop_campaign_media_cache(cid)
+    log_admin_action(
+        actor_role=_admin_role(request, config) or "owner",
+        action="mailing_content",
+        entity_type="mailing_campaign",
+        entity_id=str(cid),
+        details={
+            "photos": len(campaign_photo_paths(updated)),
+            "has_button": bool((updated.get("button_text") or "").strip()),
+            "preview_off": bool(updated.get("disable_link_preview")),
+            "replaced_photos": replace_photos,
+        },
+    )
+    flash = quote(f"Письмо #{cid} сохранено")
+    raise web.HTTPFound(f"/admin?tab=mailing&campaign={cid}&m_flash={flash}")
+
+
 async def mailing_followup_until_page(request: web.Request) -> web.Response:
     config = request.app["config"]
     if not _check_auth(request, config) or not _can_resend_tickets(request, config):
@@ -6834,6 +6992,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_post("/admin/mailing/retry-remainder", mailing_retry_remainder_page)
     app.router.add_post("/admin/mailing/followup-until", mailing_followup_until_page)
     app.router.add_post("/admin/mailing/title", mailing_title_page)
+    app.router.add_post("/admin/mailing/content", mailing_content_page)
     app.router.add_get("/admin/mailing/users-search", mailing_users_search_page)
     app.router.add_post("/admin/mailing/test", mailing_test_page)
     app.router.add_post("/admin/mailing/raffle-cancel-notify", mailing_raffle_cancel_notify_page)

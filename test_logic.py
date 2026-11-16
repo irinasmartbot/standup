@@ -229,6 +229,41 @@ def test_mailing_exclude_queued():
     print("mailing exclude queued: OK")
 
 
+def test_mailing_edit_scheduled_content():
+    from datetime import timedelta
+    from pathlib import Path
+
+    from bot.db.mailing import campaign_content_editable
+    from bot.utils.ticket import now_msk
+
+    future = now_msk() + timedelta(hours=2)
+    past = now_msk() - timedelta(hours=2)
+    assert campaign_content_editable({"status": "queued", "scheduled_at": future})
+    assert campaign_content_editable({"status": "paused"})
+    assert campaign_content_editable({"status": "paused", "scheduled_at": past})
+    assert not campaign_content_editable({"status": "queued", "scheduled_at": past})
+    assert not campaign_content_editable({"status": "queued", "scheduled_at": None})
+    assert not campaign_content_editable({"status": "running", "scheduled_at": future})
+    assert not campaign_content_editable({"status": "done"})
+    assert not campaign_content_editable(None)
+
+    mailing_src = Path("bot/db/mailing.py").read_text(encoding="utf-8")
+    tab_src = Path("bot/admin/mailing_tab.py").read_text(encoding="utf-8")
+    app_src = Path("bot/admin/app.py").read_text(encoding="utf-8")
+    worker_src = Path("bot/admin/mailing_worker.py").read_text(encoding="utf-8")
+    assert "def set_campaign_content" in mailing_src
+    assert "def campaign_content_editable" in mailing_src
+    assert "scheduled_at > NOW()" in mailing_src
+    assert 'action="/admin/mailing/content"' in tab_src
+    assert "mailing-content-edit" in tab_src
+    assert "Сохранить письмо" in tab_src
+    assert 'app.router.add_post("/admin/mailing/content"' in app_src
+    assert "async def mailing_content_page" in app_src
+    assert "def drop_campaign_media_cache" in worker_src
+    assert "drop_campaign_media_cache" in app_src
+    print("mailing edit scheduled content: OK")
+
+
 def test_mailing_real_remaining_time():
     from datetime import timedelta
 
@@ -1278,6 +1313,7 @@ async def main():
     test_mailing_booking_button_fields()
     test_mailing_schedule_and_templates()
     test_mailing_exclude_queued()
+    test_mailing_edit_scheduled_content()
     test_mailing_real_remaining_time()
     test_mailing_best_show_fill()
     test_mailing_vk_denied_and_defaults()

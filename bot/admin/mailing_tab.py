@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from bot.db.mailing import (
+    campaign_content_editable,
     campaign_photo_paths,
     campaign_run_sec,
     estimate_remaining_sec,
@@ -51,6 +52,180 @@ def _rename_form(cid, title: str, *, from_detail: bool = False) -> str:
         f'<button type="button" class="mailing-rename-cancel">Отмена</button>'
         f"</span></form>"
     )
+
+
+def _content_edit_form(detail: dict) -> str:
+    from bot.db.mailing import (
+        followup_is_raffle_flow,
+        followup_is_residents_booking_flow,
+        followup_is_residents_dates_flow,
+        parse_mailing_residents_event_id,
+    )
+
+    if not campaign_content_editable(detail):
+        return ""
+    cid = int(detail.get("id") or 0)
+    body = detail.get("body_html") or ""
+    btn = (detail.get("button_text") or "").strip()
+    btn_url = (detail.get("button_url") or "").strip()
+    follow = (detail.get("followup_html") or "").strip()
+    preview_off = bool(detail.get("disable_link_preview"))
+    until_raw = detail.get("followup_until")
+    until_val = str(until_raw)[:10] if until_raw else ""
+    n_photos = len(campaign_photo_paths(detail))
+    dates_on = followup_is_residents_dates_flow(follow)
+    raffle_on = followup_is_raffle_flow(follow)
+    booking_on = followup_is_residents_booking_flow(follow)
+    event_id = parse_mailing_residents_event_id(follow) or ""
+    follow_display = "" if (dates_on or raffle_on or booking_on) else follow
+    try:
+        residents_shows = list_mailing_residents_shows()
+    except Exception:
+        residents_shows = []
+    residents_opts = ['<option value="">Выберите дату сольника</option>']
+    known_ids = {str(item.get("id") or "") for item in residents_shows}
+    if event_id and event_id not in known_ids:
+        residents_opts.append(
+            f'<option value="{_h(event_id)}" selected>id {_h(event_id)} (нет в афише)</option>'
+        )
+    for item in residents_shows:
+        sid = str(item.get("id") or "")
+        selected = " selected" if sid and sid == str(event_id) else ""
+        residents_opts.append(
+            f'<option value="{_h(sid)}"{selected} data-date="{_h(item.get("date_iso"))}">'
+            f"{_h(item.get('label'))}</option>"
+        )
+    photos_note = (
+        f"Сейчас картинок: {n_photos}." if n_photos else "Картинок нет."
+    )
+    dates_checked = " checked" if dates_on else ""
+    booking_checked = " checked" if booking_on else ""
+    raffle_checked = " checked" if raffle_on else ""
+    preview_checked = " checked" if preview_off else ""
+    show_wrap_hidden = "" if booking_on else " hidden"
+    return f"""
+<form method="post" action="/admin/mailing/content" enctype="multipart/form-data"
+      class="mailing-form mailing-content-edit" id="mailing-content-form">
+  <input type="hidden" name="campaign_id" value="{cid}">
+  <p><b>Письмо</b></p>
+  <p class="muted">Можно поменять текст, картинки и кнопку, пока рассылка запланирована или на паузе.
+    Список людей и канал не трогаем.</p>
+  <label>Текст сообщения
+    <textarea name="body_html" rows="8">{_h(body)}</textarea>
+  </label>
+  <fieldset class="mailing-row">
+    <legend>Картинки (до 3)</legend>
+    <p class="muted" style="margin:0 0 8px">{photos_note}
+      Новые файлы заменят текущие. Если ничего не выбрать — картинки останутся.</p>
+    <label>1
+      <input type="file" name="photo" accept="image/jpeg,image/png,image/webp">
+    </label>
+    <label>2
+      <input type="file" name="photo2" accept="image/jpeg,image/png,image/webp">
+    </label>
+    <label>3
+      <input type="file" name="photo3" accept="image/jpeg,image/png,image/webp">
+    </label>
+    <label><input type="checkbox" name="clear_photos" value="1"> Убрать все картинки</label>
+  </fieldset>
+  <div class="mailing-grid mailing-grid-2">
+    <label>Текст кнопки
+      <input type="text" name="button_text" maxlength="40" value="{_h(btn)}">
+    </label>
+    <label>Ссылка кнопки
+      <input type="url" name="button_url" value="{_h(btn_url)}" placeholder="https://…">
+    </label>
+  </div>
+  <label>После нажатия кнопки (если нет ссылки) — доп. текст
+    <textarea name="followup_html" rows="3">{_h(follow_display)}</textarea>
+  </label>
+  <fieldset class="mailing-row">
+    <legend>Кнопка сольника</legend>
+    <label><input type="checkbox" name="opens_residents_dates" value="1"
+      id="mail-edit-residents-dates"{dates_checked}> После «Выбрать дату» показать список дат сольника</label>
+    <label><input type="checkbox" name="starts_residents_booking" value="1"
+      id="mail-edit-residents-booking"{booking_checked}> После «Забронировать» сразу начать бронь выбранной даты</label>
+    <label id="mail-edit-residents-show-wrap"{show_wrap_hidden}>Дата сольника
+      <select name="residents_event_id" id="mail-edit-residents-event-id">{''.join(residents_opts)}</select>
+    </label>
+  </fieldset>
+  <fieldset class="mailing-row">
+    <legend>Кнопка розыгрыша</legend>
+    <label><input type="checkbox" name="starts_raffle" value="1"
+      id="mail-edit-starts-raffle"{raffle_checked}> Розыгрыш за отзыв в личке VK. Только ВК.</label>
+  </fieldset>
+  <label>Кнопка актуальна до (дата шоу)
+    <input type="date" name="followup_until" value="{_h(until_val)}">
+  </label>
+  <fieldset class="mailing-row">
+    <legend>Превью ссылок в Телеграме</legend>
+    <label><input type="checkbox" name="disable_link_preview" value="1"{preview_checked}>
+      Отключить превью ссылки в письме</label>
+  </fieldset>
+  <div class="mailing-actions">
+    <button type="submit">Сохранить письмо</button>
+  </div>
+</form>
+<script>
+(function(){{
+  var form = document.getElementById('mailing-content-form');
+  if (!form) return;
+  var resBooking = document.getElementById('mail-edit-residents-booking');
+  var resDates = document.getElementById('mail-edit-residents-dates');
+  var resShow = document.getElementById('mail-edit-residents-event-id');
+  var raffleBtn = document.getElementById('mail-edit-starts-raffle');
+  function residentsDateIso(){{
+    if (!resShow) return '';
+    var opt = resShow.options[resShow.selectedIndex];
+    return (opt && opt.getAttribute('data-date')) || '';
+  }}
+  function sync(){{
+    var datesOn = !!(resDates && resDates.checked);
+    var bookOn = !!(resBooking && resBooking.checked);
+    var raffleOn = !!(raffleBtn && raffleBtn.checked);
+    var wrap = document.getElementById('mail-edit-residents-show-wrap');
+    if (wrap) wrap.hidden = !bookOn;
+    var btnEl = form.querySelector('[name=button_text]');
+    var untilEl = form.querySelector('[name=followup_until]');
+    if (raffleOn) {{
+      if (btnEl && !btnEl.value.trim()) btnEl.value = 'Подробнее';
+      return;
+    }}
+    if (datesOn) {{
+      if (btnEl && (!btnEl.value.trim() || btnEl.value.trim() === 'Забронировать')) btnEl.value = 'Выбрать дату';
+      return;
+    }}
+    if (!bookOn) return;
+    if (btnEl && (!btnEl.value.trim() || btnEl.value.trim() === 'Выбрать дату')) btnEl.value = 'Забронировать';
+    var iso = residentsDateIso();
+    if (untilEl && iso && !untilEl.value) untilEl.value = iso;
+  }}
+  if (resDates) resDates.addEventListener('change', function(){{
+    if (resDates.checked && resBooking) resBooking.checked = false;
+    if (resDates.checked && raffleBtn) raffleBtn.checked = false;
+    sync();
+  }});
+  if (resBooking) resBooking.addEventListener('change', function(){{
+    if (resBooking.checked && resDates) resDates.checked = false;
+    if (resBooking.checked && raffleBtn) raffleBtn.checked = false;
+    sync();
+  }});
+  if (raffleBtn) raffleBtn.addEventListener('change', function(){{
+    if (raffleBtn.checked) {{
+      if (resDates) resDates.checked = false;
+      if (resBooking) resBooking.checked = false;
+    }}
+    sync();
+  }});
+  if (resShow) resShow.addEventListener('change', function(){{
+    var untilEl = form.querySelector('[name=followup_until]');
+    var iso = residentsDateIso();
+    if (untilEl && iso) untilEl.value = iso;
+  }});
+  sync();
+}})();
+</script>
+"""
 
 
 STATUS_LABELS = {
@@ -320,6 +495,15 @@ def render_mailing_tab(
                 "</form>"
             )
         title_form = _rename_form(int(cid), detail.get("title") or "", from_detail=True)
+        edit_form = _content_edit_form(detail)
+        if edit_form:
+            letter_block = edit_form
+        else:
+            letter_block = (
+                "<p><b>Текст сообщения:</b></p>"
+                f"<div class='mailing-msg-preview'>{body or '<span class=\"muted\">(пусто)</span>'}</div>"
+                f"{msg_meta}{follow_block}{until_form}"
+            )
         detail_html = (
             '<section class="card mailing-detail">'
             f'<h2 class="mailing-detail-head">Кампания #{_h(cid)}</h2>'
@@ -330,9 +514,7 @@ def render_mailing_tab(
             f"{_h(detail_timing)}</p>"
             f"<p><b>Статистика:</b> отправлено {sent} / {total_c} · ошибки {failed}</p>"
             f"{rem_form}"
-            "<p><b>Текст сообщения:</b></p>"
-            f"<div class='mailing-msg-preview'>{body or '<span class=\"muted\">(пусто)</span>'}</div>"
-            f"{msg_meta}{follow_block}{until_form}"
+            f"{letter_block}"
             f'<div class="counters">{"".join(status_pills)}</div>'
             f'<div class="users-pager">{prev}'
             f'<span class="muted">стр. {page}/{pages} · {total}</span>{next_}</div>'
@@ -1293,9 +1475,10 @@ var MAIL_RESIDENTS_LAST_DATE = """
   .mailing-compose > .muted, .mailing-test > .muted, .mailing-raffle-cancel .muted, .mailing-detail .muted {
     color:var(--mail-muted);
   }
-  .mailing-compose label, .mailing-test label { display:block; margin:12px 0; font-size:14px; font-weight:700; color:var(--mail-ink); }
+  .mailing-compose label, .mailing-test label, .mailing-detail label { display:block; margin:12px 0; font-size:14px; font-weight:700; color:var(--mail-ink); }
   .mailing-compose label[hidden], .mailing-compose #mail-show-hint[hidden],
-  .mailing-compose #mail-residents-show-wrap[hidden] { display:none !important; }
+  .mailing-compose #mail-residents-show-wrap[hidden],
+  .mailing-detail #mail-edit-residents-show-wrap[hidden] { display:none !important; }
   .mailing-compose input[type=text],
   .mailing-compose input[type=url],
   .mailing-compose input[type=number],
@@ -1307,15 +1490,20 @@ var MAIL_RESIDENTS_LAST_DATE = """
   .mailing-test input[type=search],
   .mailing-raffle-cancel textarea,
   .mailing-raffle-cancel input[type=search],
-  .mailing-detail input[type=date] {
+  .mailing-detail input[type=text],
+  .mailing-detail input[type=url],
+  .mailing-detail input[type=date],
+  .mailing-detail select,
+  .mailing-detail textarea,
+  .mailing-detail input[type=file] {
     display:block; width:100%; margin-top:6px; padding:11px 13px;
     border:1px solid var(--mail-line); border-radius:14px; font:inherit; font-weight:500;
     background:#fff; color:var(--mail-ink);
   }
-  .mailing-compose textarea { min-height:88px; line-height:1.45; }
+  .mailing-compose textarea, .mailing-detail textarea { min-height:88px; line-height:1.45; }
   .mailing-compose input:focus, .mailing-compose select:focus, .mailing-compose textarea:focus,
   .mailing-test input:focus, .mailing-raffle-cancel textarea:focus, .mailing-raffle-cancel input:focus,
-  .mailing-detail input:focus {
+  .mailing-detail input:focus, .mailing-detail select:focus, .mailing-detail textarea:focus {
     outline:0; border-color:#8ec896; box-shadow:0 0 0 4px rgba(59,154,76,.16);
   }
   .mailing-compose details { margin:12px 0; }
@@ -1463,12 +1651,14 @@ var MAIL_RESIDENTS_LAST_DATE = """
     }
     .mailing-grid, .mailing-grid-2, .mailing-tpl-bar,
     .mailing-tpl-bar:has(#mail-show-wrap[hidden]) { grid-template-columns:1fr; }
-    .mailing-compose .mailing-actions, .mailing-test .mailing-actions, .mailing-raffle-cancel .mailing-actions {
+    .mailing-compose .mailing-actions, .mailing-test .mailing-actions,
+    .mailing-raffle-cancel .mailing-actions, .mailing-detail .mailing-actions {
       align-items:stretch;
     }
     .mailing-compose .mailing-actions button,
     .mailing-test .mailing-actions button,
     .mailing-raffle-cancel .mailing-actions button,
+    .mailing-detail .mailing-actions button,
     .mailing-raffle-cancel .mailing-actions .mail-secondary-btn,
     .mailing-tpl-bar > button {
       width:100%; text-align:center;
