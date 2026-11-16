@@ -6208,21 +6208,32 @@ async def mailing_test_page(request: web.Request) -> web.Response:
         _read_mailing_photo_uploads(form),
         f"test_{user_id_raw}",
     )
-    photo_path = photo_paths[0] if photo_paths else None
-
-    if not body_html and not photo_paths:
-        return web.json_response({"error": "Нужен текст или картинка"}, status=400)
+    clear_photos = _form_text(form, "clear_photos") in {"1", "on", "true", "yes"}
+    source_cid = _form_text(form, "campaign_id")
 
     from bot.admin.mailing_worker import send_one
     from bot.db.admin_audit import log_admin_action
     from bot.db.mailing import (
+        campaign_photo_paths,
         create_followup_stub,
         form_opens_residents_dates,
         form_starts_raffle,
         form_starts_residents_booking,
+        get_campaign,
         get_user_for_mailing,
         resolve_mailing_button_fields,
     )
+
+    if not photo_paths and not clear_photos and source_cid.isdigit():
+        source = await asyncio.get_running_loop().run_in_executor(
+            None, get_campaign, int(source_cid)
+        )
+        if source:
+            photo_paths = campaign_photo_paths(source)
+    photo_path = photo_paths[0] if photo_paths else None
+
+    if not body_html and not photo_paths:
+        return web.json_response({"error": "Нужен текст или картинка"}, status=400)
 
     user = await asyncio.get_running_loop().run_in_executor(
         None, get_user_for_mailing, int(user_id_raw)

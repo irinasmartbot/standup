@@ -257,6 +257,11 @@ def test_mailing_edit_scheduled_content():
     assert 'action="/admin/mailing/content"' in tab_src
     assert "mailing-content-edit" in tab_src
     assert "Сохранить письмо" in tab_src
+    assert 'id="mail-edit-test-send-btn"' in tab_src
+    assert "Отправить тест" in tab_src
+    assert "mail-edit-test-q" in tab_src
+    assert "source_cid" in app_src
+    assert "clear_photos" in app_src
     assert 'app.router.add_post("/admin/mailing/content"' in app_src
     assert "async def mailing_content_page" in app_src
     assert "def drop_campaign_media_cache" in worker_src

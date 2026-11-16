@@ -103,10 +103,19 @@ def _content_edit_form(detail: dict) -> str:
     raffle_checked = " checked" if raffle_on else ""
     preview_checked = " checked" if preview_off else ""
     show_wrap_hidden = "" if booking_on else " hidden"
+    channel = str(detail.get("channel") or "telegram").strip() or "telegram"
+    try:
+        test_defaults = get_mailing_test_defaults()
+    except Exception:
+        test_defaults = {}
+    test_defaults_json = json.dumps(test_defaults, ensure_ascii=False).replace(
+        "<", "\\u003c"
+    )
     return f"""
 <form method="post" action="/admin/mailing/content" enctype="multipart/form-data"
       class="mailing-form mailing-content-edit" id="mailing-content-form">
   <input type="hidden" name="campaign_id" value="{cid}">
+  <input type="hidden" name="channel" value="{_h(channel)}">
   <p><b>Письмо</b></p>
   <p class="muted">Можно поменять текст, картинки и кнопку, пока рассылка запланирована или на паузе.
     Список людей и канал не трогаем.</p>
@@ -164,12 +173,23 @@ def _content_edit_form(detail: dict) -> str:
   </fieldset>
   <div class="mailing-actions">
     <button type="submit">Сохранить письмо</button>
+    <button type="button" id="mail-edit-test-send-btn" class="mail-secondary-btn">Отправить тест</button>
   </div>
+  <label>Кому отправить тест (имя, @username или телефон)
+    <input type="search" id="mail-edit-test-q" placeholder="Например: Ира или @username" autocomplete="off">
+  </label>
+  <div class="mailing-actions" style="margin-top:0">
+    <button type="button" id="mail-edit-test-search-btn" class="mail-secondary-btn">Найти</button>
+  </div>
+  <div id="mail-edit-test-results" class="mail-test-results muted">Сначала выберите человека.</div>
+  <input type="hidden" id="mail-edit-test-user-id" value="">
+  <div id="mail-edit-test-status" class="mailing-preview" style="margin-top:12px"></div>
 </form>
 <script>
 (function(){{
   var form = document.getElementById('mailing-content-form');
   if (!form) return;
+  var MAIL_EDIT_TEST_DEFAULTS = {test_defaults_json};
   var resBooking = document.getElementById('mail-edit-residents-booking');
   var resDates = document.getElementById('mail-edit-residents-dates');
   var resShow = document.getElementById('mail-edit-residents-event-id');
@@ -223,6 +243,114 @@ def _content_edit_form(detail: dict) -> str:
     if (untilEl && iso) untilEl.value = iso;
   }});
   sync();
+
+  var testQ = document.getElementById('mail-edit-test-q');
+  var testResults = document.getElementById('mail-edit-test-results');
+  var testUserId = document.getElementById('mail-edit-test-user-id');
+  var testSearchBtn = document.getElementById('mail-edit-test-search-btn');
+  var testSendBtn = document.getElementById('mail-edit-test-send-btn');
+  var testStatus = document.getElementById('mail-edit-test-status');
+  function editChannel(){{
+    var el = form.querySelector('[name=channel]');
+    return el && el.value ? el.value : 'telegram';
+  }}
+  function renderEditTestUsers(rows){{
+    if (!testResults) return;
+    if (!rows || !rows.length) {{
+      testResults.innerHTML = '<span class="muted">Никого не найдено</span>';
+      return;
+    }}
+    var pick = String((testUserId && testUserId.value) || '');
+    if (!pick && rows[0]) pick = String(rows[0].id);
+    if (testUserId) testUserId.value = pick;
+    var html = '<div class="mail-test-list">';
+    for (var i = 0; i < rows.length; i++){{
+      var u = rows[i];
+      var uname = u.username ? ('@' + u.username) : '';
+      var ch = [];
+      if (u.telegram_id) ch.push('TG');
+      if (u.vk_id) ch.push('VK');
+      var checked = String(u.id) === pick ? ' checked' : '';
+      html += '<label class="mail-test-item">' +
+        '<input type="radio" name="mail_edit_test_pick" value="' + u.id + '"' + checked + '>' +
+        '<span><b>' + (u.name || 'Без имени') + '</b> · id ' + u.id +
+        (uname ? (' · ' + uname) : '') +
+        ' · ' + ch.join('/') +
+        '</span></label>';
+    }}
+    html += '</div>';
+    testResults.innerHTML = html;
+    testResults.querySelectorAll('input[name="mail_edit_test_pick"]').forEach(function(r){{
+      r.addEventListener('change', function(){{ if (testUserId) testUserId.value = r.value; }});
+    }});
+  }}
+  function applyEditTestDefault(){{
+    var ch = editChannel();
+    var rows = [];
+    if (ch === 'both') {{
+      if (MAIL_EDIT_TEST_DEFAULTS.telegram) rows.push(MAIL_EDIT_TEST_DEFAULTS.telegram);
+      if (MAIL_EDIT_TEST_DEFAULTS.vkontakte) rows.push(MAIL_EDIT_TEST_DEFAULTS.vkontakte);
+    }} else if (MAIL_EDIT_TEST_DEFAULTS[ch]) {{
+      rows.push(MAIL_EDIT_TEST_DEFAULTS[ch]);
+    }}
+    if (!rows.length) return;
+    var u = rows[0];
+    if (testQ) testQ.value = u.username ? ('@' + u.username) : (u.name || '');
+    if (testUserId) testUserId.value = String(u.id);
+    renderEditTestUsers(rows);
+  }}
+  if (testSearchBtn) testSearchBtn.addEventListener('click', function(){{
+    var q = ((testQ && testQ.value) || '').trim();
+    if (!q) {{
+      if (testResults) testResults.innerHTML = '<span class="events-error">Введите имя, @username или телефон</span>';
+      return;
+    }}
+    if (testResults) testResults.innerHTML = '<span class="muted">Ищем…</span>';
+    var ch = editChannel();
+    var url = '/admin/mailing/users-search?q=' + encodeURIComponent(q) +
+      (ch === 'both' ? '' : ('&channel=' + encodeURIComponent(ch)));
+    fetch(url, {{credentials:'same-origin'}})
+      .then(function(r){{ return r.json(); }})
+      .then(function(d){{
+        if (d.error) {{
+          if (testResults) testResults.innerHTML = '<span class="events-error">' + d.error + '</span>';
+          return;
+        }}
+        renderEditTestUsers(d.users || []);
+      }})
+      .catch(function(){{
+        if (testResults) testResults.innerHTML = '<span class="events-error">Ошибка поиска</span>';
+      }});
+  }});
+  if (testQ) testQ.addEventListener('keydown', function(ev){{
+    if (ev.key === 'Enter') {{ ev.preventDefault(); if (testSearchBtn) testSearchBtn.click(); }}
+  }});
+  if (testSendBtn) testSendBtn.addEventListener('click', function(){{
+    var uid = ((testUserId && testUserId.value) || '').trim();
+    if (!uid) {{
+      if (testStatus) testStatus.innerHTML = '<span class="events-error">Сначала выберите человека</span>';
+      return;
+    }}
+    var fd = new FormData(form);
+    fd.set('user_id', uid);
+    fd.set('channel', editChannel());
+    if (testStatus) testStatus.innerHTML = '<span class="muted">Отправляем тест…</span>';
+    fetch('/admin/mailing/test', {{method:'POST', body: fd, credentials:'same-origin'}})
+      .then(function(r){{ return r.json().then(function(d){{ return {{ok:r.ok, d:d}}; }}); }})
+      .then(function(res){{
+        var d = res.d || {{}};
+        if (!res.ok || d.error) {{
+          if (testStatus) testStatus.innerHTML = '<span class="events-error">' + (d.error || 'Не удалось отправить') + '</span>';
+          return;
+        }}
+        if (testStatus) testStatus.innerHTML = '<b>Тест отправлен</b> <span class="muted">· ' +
+          (d.channel || '') + ' · user_id ' + (d.user_id || uid) + '</span>';
+      }})
+      .catch(function(){{
+        if (testStatus) testStatus.innerHTML = '<span class="events-error">Ошибка отправки теста</span>';
+      }});
+  }});
+  applyEditTestDefault();
 }})();
 </script>
 """
@@ -1493,6 +1621,7 @@ var MAIL_RESIDENTS_LAST_DATE = """
   .mailing-detail input[type=text],
   .mailing-detail input[type=url],
   .mailing-detail input[type=date],
+  .mailing-detail input[type=search],
   .mailing-detail select,
   .mailing-detail textarea,
   .mailing-detail input[type=file] {
