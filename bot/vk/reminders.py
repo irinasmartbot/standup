@@ -80,6 +80,7 @@ async def send_vk_booking_reminder(
     *,
     community_link: str,
     raffle: bool = False,
+    booking_format: str = "proverka",
 ) -> None:
     booking_id = row[0]
     name = row[2]
@@ -117,6 +118,7 @@ async def send_vk_booking_reminder(
             address_line=address_line,
             guests=guests or 1,
             expandable=False,
+            booking_format=booking_format,
         )
 
     msg_id = await client.send_message(
@@ -208,6 +210,7 @@ async def _process_format_reminders(
                     "24h",
                     community_link=community_link,
                     raffle=raffle,
+                    booking_format=booking_format,
                 )
                 update_reminder_flag(booking_id, "reminder_24h_sent")
                 try:
@@ -235,6 +238,7 @@ async def _process_format_reminders(
                     "day",
                     community_link=community_link,
                     raffle=raffle,
+                    booking_format=booking_format,
                 )
                 update_reminder_flag(booking_id, "reminder_day_sent")
                 try:

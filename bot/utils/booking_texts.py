@@ -96,6 +96,14 @@ def ticket_window_open(event_date: str) -> bool:
     return days_until <= 1
 
 
+def reminder_24h_show_phrase(booking_format: str | None = None) -> str:
+    """Как назвать шоу в напоминании за сутки — по формату брони."""
+    fmt = (booking_format or "proverka").strip().lower()
+    if fmt == "residents":
+        return "завтрашний сольник от резидентов"
+    return "завтрашнюю проверку материала"
+
+
 def proverka_reminder_24h_text(
     *,
     date_str: str,
@@ -103,8 +111,9 @@ def proverka_reminder_24h_text(
     address_line: str,
     guests: int,
     expandable: bool = True,
+    booking_format: str | None = None,
 ) -> str:
-    """Текст напоминания за сутки для проверки материала (TG/VK)."""
+    """Текст напоминания за сутки для проверки или сольника (TG/VK)."""
     time = escape(event_time or "")
     address = escape((address_line or "").strip())
     if address and not address.lower().startswith("адрес"):
@@ -113,8 +122,9 @@ def proverka_reminder_24h_text(
             address_display += "."
     else:
         address_display = f"📍 {address}" if address else "📍 Адрес"
+    show_phrase = reminder_24h_show_phrase(booking_format)
     body = (
-        f"Привет! 😊 Пишу подтвердить бронь на завтрашнюю проверку материала "
+        f"Привет! 😊 Пишу подтвердить бронь на {show_phrase} "
         f"({escape(date_str)})! 🎤\n\n"
         "<u>Чтобы подтвердить бронь, нажми на кнопку «Получить билет»</u>\n"
         "❗ <b>Внимание, если Вы не успеете подтвердить бронь, она будет аннулирована.</b>\n\n"

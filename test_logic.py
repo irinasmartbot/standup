@@ -1196,6 +1196,40 @@ def test_vk_raffle_screenshot_avoids_tg_handler_import():
     print("vk raffle screenshot avoids tg handler import: OK")
 
 
+def test_residents_reminder_24h_text():
+    from pathlib import Path
+
+    from bot.utils.booking_texts import proverka_reminder_24h_text, reminder_24h_show_phrase
+
+    assert reminder_24h_show_phrase("residents") == "завтрашний сольник от резидентов"
+    assert reminder_24h_show_phrase("proverka") == "завтрашнюю проверку материала"
+    assert reminder_24h_show_phrase(None) == "завтрашнюю проверку материала"
+    residents = proverka_reminder_24h_text(
+        date_str="18 ноября",
+        event_time="20:00",
+        address_line="Escobar",
+        guests=1,
+        expandable=False,
+        booking_format="residents",
+    )
+    proverka = proverka_reminder_24h_text(
+        date_str="18 ноября",
+        event_time="18:00",
+        address_line="Temple Bar",
+        guests=1,
+        expandable=False,
+        booking_format="proverka",
+    )
+    assert "завтрашний сольник от резидентов" in residents
+    assert "проверку материала" not in residents
+    assert "завтрашнюю проверку материала" in proverka
+    tg_src = Path("bot/handlers/reminders.py").read_text(encoding="utf-8")
+    vk_src = Path("bot/vk/reminders.py").read_text(encoding="utf-8")
+    assert "booking_format=booking_format" in tg_src
+    assert "booking_format=booking_format" in vk_src
+    print("residents reminder 24h text: OK")
+
+
 def test_vk_same_day_warning_import():
     from pathlib import Path
 
@@ -1342,6 +1376,7 @@ async def main():
     test_vk_new_stata_all_flow()
     test_vk_start_menu_flow()
     test_vk_raffle_screenshot_avoids_tg_handler_import()
+    test_residents_reminder_24h_text()
     test_vk_same_day_warning_import()
     test_random_show_covers()
     test_stata_phone_format()

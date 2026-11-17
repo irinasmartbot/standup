@@ -47,7 +47,7 @@ def booking_manage_kb(booking_id, include_ticket=True):
     return kb.as_markup()
 
 
-async def send_booking_reminder(row, reminder_type):
+async def send_booking_reminder(row, reminder_type, *, booking_format: str = "proverka"):
     booking_id, telegram_id, name, event_date, event_time, event_address, event_location, guests, *_ = row
     if not telegram_id:
         logger.warning("Skip TG reminder for booking %s: no telegram_id", booking_id)
@@ -71,6 +71,7 @@ async def send_booking_reminder(row, reminder_type):
             address_line=address_line,
             guests=guests or 1,
             expandable=False,
+            booking_format=booking_format,
         )
 
     await _clear_prev_buttons(booking_id, telegram_id)
@@ -116,75 +117,84 @@ async def process_due_reminders():
     from bot.utils.reminder_schedule import plan_booking_reminders
 
     now = now_msk().replace(tzinfo=None)
-    rows = list(get_booked_for_reminders("proverka")) + list(get_booked_for_reminders("residents"))
-    for row in rows:
-        if not _is_telegram_reminder_row(row):
-            continue
-        booking_id = row[0]
-        event_date = row[3]
-        event_time = row[4]
-        created_at = parse_created_at(row[8])
-        reminder_24h_sent = bool(row[9])
-        reminder_day_sent = bool(row[10])
-        event_dt = parse_event_datetime(event_date, event_time)
-        if not event_dt:
-            logger.warning("Cannot parse event datetime for booking %s: %s %s", booking_id, event_date, event_time)
-            continue
+    for booking_format in ("proverka", "residents"):
+        for row in get_booked_for_reminders(booking_format):
+            if not _is_telegram_reminder_row(row):
+                continue
+            booking_id = row[0]
+            event_date = row[3]
+            event_time = row[4]
+            created_at = parse_created_at(row[8])
+            reminder_24h_sent = bool(row[9])
+            reminder_day_sent = bool(row[10])
+            event_dt = parse_event_datetime(event_date, event_time)
+            if not event_dt:
+                logger.warning(
+                    "Cannot parse event datetime for booking %s: %s %s",
+                    booking_id,
+                    event_date,
+                    event_time,
+                )
+                continue
 
-        plan = plan_booking_reminders(created_at, event_dt)
-        day_fire_at = plan["reminder_day_at"]
-        annul_at = plan["annul_at"]
-        one_day_reminder_at = plan["reminder_24h_at"]
+            plan = plan_booking_reminders(created_at, event_dt)
+            day_fire_at = plan["reminder_day_at"]
+            annul_at = plan["annul_at"]
+            one_day_reminder_at = plan["reminder_24h_at"]
 
-        try:
-            # Напоминание накануне в 14:00 — только если бронь сделана за 2+ дня до шоу
-            if (
-                not reminder_24h_sent
-                and one_day_reminder_at is not None
-                and now >= one_day_reminder_at
-                and now < event_dt
-            ):
-                await send_booking_reminder(row, "24h")
-                update_reminder_flag(booking_id, "reminder_24h_sent")
-                try:
-                    from bot.db.analytics import EVENT_BOOKING_REMINDER_24H, track_event
-
-                    track_event(
-                        EVENT_BOOKING_REMINDER_24H,
-                        telegram_id=int(row[1]) if row[1] else None,
-                        booking_id=int(booking_id),
-                        props={"format": "proverka"},
+            try:
+                # Напоминание накануне в 14:00 — только если бронь сделана за 2+ дня до шоу
+                if (
+                    not reminder_24h_sent
+                    and one_day_reminder_at is not None
+                    and now >= one_day_reminder_at
+                    and now < event_dt
+                ):
+                    await send_booking_reminder(
+                        row, "24h", booking_format=booking_format
                     )
-                except Exception:
-                    pass
+                    update_reminder_flag(booking_id, "reminder_24h_sent")
+                    try:
+                        from bot.db.analytics import EVENT_BOOKING_REMINDER_24H, track_event
 
-            # Напоминание в день шоу
-            if (
-                not reminder_day_sent
-                and day_fire_at is not None
-                and now >= day_fire_at
-                and now < event_dt
-            ):
-                await send_booking_reminder(row, "day")
-                update_reminder_flag(booking_id, "reminder_day_sent")
-                try:
-                    from bot.db.analytics import EVENT_BOOKING_REMINDER_DAY, track_event
+                        track_event(
+                            EVENT_BOOKING_REMINDER_24H,
+                            telegram_id=int(row[1]) if row[1] else None,
+                            booking_id=int(booking_id),
+                            props={"format": booking_format},
+                        )
+                    except Exception:
+                        pass
 
-                    track_event(
-                        EVENT_BOOKING_REMINDER_DAY,
-                        telegram_id=int(row[1]) if row[1] else None,
-                        booking_id=int(booking_id),
-                        props={"format": "proverka"},
+                # Напоминание в день шоу
+                if (
+                    not reminder_day_sent
+                    and day_fire_at is not None
+                    and now >= day_fire_at
+                    and now < event_dt
+                ):
+                    await send_booking_reminder(
+                        row, "day", booking_format=booking_format
                     )
-                except Exception:
-                    pass
+                    update_reminder_flag(booking_id, "reminder_day_sent")
+                    try:
+                        from bot.db.analytics import EVENT_BOOKING_REMINDER_DAY, track_event
 
-            # Аннулирование (всегда после точки дневного напоминания + запас)
-            if now >= annul_at:
-                await send_annulled_message(row)
+                        track_event(
+                            EVENT_BOOKING_REMINDER_DAY,
+                            telegram_id=int(row[1]) if row[1] else None,
+                            booking_id=int(booking_id),
+                            props={"format": booking_format},
+                        )
+                    except Exception:
+                        pass
 
-        except Exception:
-            logger.exception("Failed to process reminder for booking %s", booking_id)
+                # Аннулирование (всегда после точки дневного напоминания + запас)
+                if now >= annul_at:
+                    await send_annulled_message(row)
+
+            except Exception:
+                logger.exception("Failed to process reminder for booking %s", booking_id)
 
 
 async def reminder_loop():
