@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS events (
     id BIGSERIAL PRIMARY KEY,
-    format TEXT NOT NULL CHECK (format IN ('proverka', '1plus1', 'best', 'masterclass', 'hitloto', 'residents')),
+    format TEXT NOT NULL CHECK (format IN ('proverka', '1plus1', 'best', 'masterclass', 'hitloto', 'elka', 'residents')),
     event_date DATE NOT NULL,
     weekday TEXT,
     event_time TIME NOT NULL,

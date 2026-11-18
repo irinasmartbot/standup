@@ -174,7 +174,7 @@ async def get_event(event_date, event_time, event_format="proverka"):
 async def get_event_by_id(event_id, event_format: str | None = None):
     if event_id is None or event_id == "":
         return None
-    formats = (event_format,) if event_format else ("proverka", "residents", "best", "hitloto")
+    formats = (event_format,) if event_format else ("proverka", "residents", "best", "hitloto", "elka")
     for fmt in formats:
         if not fmt:
             continue

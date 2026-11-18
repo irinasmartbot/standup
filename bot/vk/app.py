@@ -12,6 +12,7 @@ from bot.config import BOT_TOKEN, DATABASE_URL, EVENTS_SOURCE, HELP_CHAT_ID
 from bot.db.analytics import (
     EVENT_BOT_START,
     EVENT_BRANCH_BEST,
+    EVENT_BRANCH_ELKA,
     EVENT_BRANCH_HITLOTO,
     EVENT_BRANCH_PROVERKA,
     EVENT_BRANCH_RESIDENTS,
@@ -298,6 +299,7 @@ def _gift_format_label(value: str) -> str:
         "residents": "Сольники",
         "best": "BEST",
         "hitloto": "Хитлото",
+        "elka": "Елка для взрослых",
     }.get(value or "", value or "Шоу")
 
 
@@ -487,7 +489,7 @@ WELCOME_TEXT = (
     "и подарки на каждом мероприятии — это всё мы!\n\n"
     "📍 <b>Здесь можно</b>\n"
     "🎟 Забронировать места на <b>бесплатные шоу</b>\n"
-    "⭐ Купить билеты на <b>StandUp BEST</b> и <b>Хитлото</b>"
+    "⭐ Купить билеты на <b>StandUp BEST</b>, <b>Хитлото</b> и <b>Елку для взрослых</b>"
 )
 # Вечернее окно шоу (МСК): «Начать» и слово «подарок» → розыгрыш подарка на шоу.
 _EVENING_GIFT_HINT_HOUR_START = 19
@@ -520,6 +522,10 @@ BEST_ENTRY_TEXT = (
 )
 HITLOTO_ENTRY_TEXT = (
     "Привет 😊 Я помогу тебе выбрать билеты на <b>Хитлото</b> "
+    "от Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
+)
+ELKA_ENTRY_TEXT = (
+    "Привет 😊 Я помогу тебе выбрать билеты на <b>Елку для взрослых</b> "
     "от Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
 )
 RESIDENTS_ENTRY_TEXT = (
@@ -751,6 +757,7 @@ def formats_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("STANDUP BEST", _payload("best"), color="primary")
     kb.button("Хитлото", _payload("hitloto"), color="primary")
+    kb.button("🎄 Елка для взрослых", _payload("elka"), color="primary")
     kb.button("StandUp Проверка материала", _payload("check"), color="primary")
     kb.button("StandUp Сольники от резидентов", _payload("residents"), color="primary")
     kb.button("В главное меню", _payload("main_menu"))
@@ -762,6 +769,7 @@ def paid_formats_keyboard() -> str:
     kb = VKKeyboardBuilder(inline=True)
     kb.button("STANDUP BEST", _payload("best"), color="primary")
     kb.button("Хитлото", _payload("hitloto"), color="primary")
+    kb.button("🎄 Елка для взрослых", _payload("elka"), color="primary")
     kb.button("В главное меню", _payload("main_menu"))
     kb.adjust(1)
     return kb.as_json()
@@ -1062,6 +1070,7 @@ class VKBotApp:
             return cached
         file_map = {
             "hitloto_start": "hitloto_start.png",
+            "elka_start": "elka_start.png",
             "residents_start": "residents_start.jpg",
             "show_cover": "show_01.jpg",
             "temple_bar": "temple_bar.jpg",
@@ -2882,6 +2891,10 @@ class VKBotApp:
                 "правила бронирования": "booking_rules",
                 "standup best": "best",
                 "хитлото": "hitloto",
+                "елка": "elka",
+                "ёлка": "elka",
+                "елка для взрослых": "elka",
+                "ёлка для взрослых": "elka",
                 "standup проверка материала": "check",
                 "📅 даты best": "best_date_page",
                 "даты best": "best_date_page",
@@ -2926,7 +2939,7 @@ class VKBotApp:
                 "выбор по датам",
                 "выбрать по датам",
             }:
-                cmd = f"{context}_date_page" if context in {"best", "check", "hitloto", "residents"} else "check_date_page"
+                cmd = f"{context}_date_page" if context in {"best", "check", "hitloto", "elka", "residents"} else "check_date_page"
             if not cmd and text_key in {
                 "📍 выбор по площадке",
                 "выбор по площадке",
@@ -3394,6 +3407,25 @@ class VKBotApp:
             return
         if cmd == "hitloto_event":
             await self._send_hitloto_event(peer_id, payload.get("event_id"), vk_id=vk_id)
+            return
+        if cmd in {"elka", "elka_date_page"}:
+            page = int(payload.get("page") or 0)
+            if cmd == "elka":
+                self.peer_context[peer_id] = "elka"
+                self.peer_browse[peer_id] = "date"
+                self._clear_dates_card(peer_id)
+                self._track(vk_id, EVENT_BRANCH_ELKA)
+                await self._send_elka_dates(peer_id, page, entry=True, edit=False)
+                return
+            await self._send_elka_dates(peer_id, page, edit="page" in payload)
+            return
+        if cmd == "elka_date":
+            self.peer_browse[peer_id] = "date"
+            self._clear_dates_card(peer_id)
+            await self._send_elka_date(peer_id, payload.get("date") or "", vk_id=vk_id)
+            return
+        if cmd == "elka_event":
+            await self._send_elka_event(peer_id, payload.get("event_id"), vk_id=vk_id)
             return
         if cmd in {"residents_date_page"}:
             page = int(payload.get("page") or 0)
@@ -5407,6 +5439,101 @@ class VKBotApp:
         else:
             kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
         kb.button("Назад к датам", _payload("hitloto_date_page"))
+        kb.adjust(1)
+        attachment = await self._event_poster_attachment(peer_id, event)
+        await self._send_text(
+            peer_id,
+            _hitloto_event_text_vk(event),
+            keyboard=kb.as_json(),
+            attachment=attachment,
+        )
+
+    async def _send_elka_dates(
+        self,
+        peer_id: int,
+        page: int = 0,
+        *,
+        entry: bool = False,
+        edit: bool = False,
+    ) -> None:
+        self.peer_context[peer_id] = "elka"
+        try:
+            events = await self._load_events("elka")
+        except Exception:
+            logger.exception("Failed to load Elka events")
+            self._clear_dates_card(peer_id)
+            await self.client.send_message(
+                peer_id,
+                "Не удалось загрузить даты. Попробуй ещё раз через минуту.",
+                keyboard=paid_formats_keyboard(),
+            )
+            return
+        dates = sorted({e["date"] for e in events}, key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
+        if not dates:
+            self._clear_dates_card(peer_id)
+            kb = VKKeyboardBuilder(inline=True)
+            kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
+            kb.button("В главное меню", _payload("main_menu"))
+            kb.adjust(1)
+            await self.client.send_message(
+                peer_id,
+                "Пока нет актуальных мероприятий Елка для взрослых. Можно уточнить расписание у менеджера.",
+                keyboard=kb.as_json(),
+            )
+            return
+        max_page = max(0, (len(dates) - 1) // DATES_PAGE_SIZE)
+        page = max(0, min(int(page or 0), max_page))
+        text = ELKA_ENTRY_TEXT if entry else "Выбирай дату 👇"
+        keyboard = _dates_keyboard(dates, "elka_date", page, "main_menu")
+        await self._send_or_edit_dates_card(
+            peer_id,
+            text,
+            keyboard=keyboard,
+            attachment=await self._ensure_cover_attachment(peer_id, "elka_start"),
+            edit=edit,
+        )
+
+    async def _send_elka_date(self, peer_id: int, date: str, *, vk_id: int | None = None) -> None:
+        events = [e for e in await self._load_events("elka") if e["date"] == date]
+        if not events:
+            await self.client.send_message(peer_id, "Эта дата уже недоступна.", keyboard=self._main_menu_kb(peer_id))
+            return
+        if len(events) == 1:
+            await self._send_elka_event(peer_id, events[0]["id"], vk_id=vk_id or peer_id)
+            return
+        await self._send_text(
+            peer_id,
+            f"Елка для взрослых на {_date_label(date)}:",
+            keyboard=_events_keyboard(events, "elka_event", "elka"),
+            attachment=await self._ensure_cover_attachment(peer_id, "elka_start"),
+        )
+
+    async def _send_elka_event(self, peer_id: int, event_id: Any, *, vk_id: int | None = None) -> None:
+        event = next((e for e in await self._load_events("elka") if str(e["id"]) == str(event_id)), None)
+        if not event:
+            await self.client.send_message(peer_id, "Мероприятие уже недоступно.", keyboard=self._main_menu_kb(peer_id))
+            return
+        user_id = vk_id or peer_id
+        payment_url = event.get("payment_url") or ""
+        self._track(
+            user_id,
+            EVENT_SHOW_CARD,
+            event_id=event.get("id"),
+            props={
+                "format": "elka",
+                "browse": self.peer_browse.get(peer_id, "date"),
+                "date": event.get("date"),
+                "time": event.get("time"),
+                "location": event.get("location"),
+                "has_payment": bool(payment_url),
+            },
+        )
+        kb = VKKeyboardBuilder(inline=True)
+        if payment_url:
+            kb.button("Купить билет", link=payment_url)
+        else:
+            kb.button("Задать вопрос менеджеру", link=self.settings.manager_link)
+        kb.button("Назад к датам", _payload("elka_date_page"))
         kb.adjust(1)
         attachment = await self._event_poster_attachment(peer_id, event)
         await self._send_text(

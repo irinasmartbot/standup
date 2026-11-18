@@ -66,7 +66,7 @@ FLOWS: dict[str, dict[str, Any]] = {
         "title": "Купить билет",
         "headline": "Купить билет",
         "button": "Купить билет",
-        "lead": "Разрешите сообщения — пришлём платные форматы BEST и Хитлото в личку VK.",
+        "lead": "Разрешите сообщения — пришлём платные форматы BEST, Хитлото и Елку для взрослых в личку VK.",
         "ref": "standup_platka",
     },
     "chek_list": {
@@ -425,6 +425,7 @@ def _gift_format_label(value: str) -> str:
         "residents": "Сольники",
         "best": "BEST",
         "hitloto": "Хитлото",
+        "elka": "Елка для взрослых",
     }.get(value or "", value or "Шоу")
 
 
@@ -657,6 +658,7 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
         kb = VKKeyboardBuilder(inline=True)
         kb.button("STANDUP BEST", {"cmd": "best"}, color="primary")
         kb.button("Хитлото", {"cmd": "hitloto"}, color="primary")
+        kb.button("🎄 Елка для взрослых", {"cmd": "elka"}, color="primary")
         kb.button("В главное меню", {"cmd": "main_menu"})
         kb.adjust(1)
         await client.send_message(

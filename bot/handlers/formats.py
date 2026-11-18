@@ -11,6 +11,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import MANAGER_LINK, CHANNEL_LINK, TICKET_TEMPLATE
 from bot.db.analytics import (
     EVENT_BRANCH_BEST,
+    EVENT_BRANCH_ELKA,
     EVENT_BRANCH_HITLOTO,
     EVENT_CMD_BUY_TICKET,
     EVENT_SHOW_CARD,
@@ -37,6 +38,7 @@ VENUE_PHOTO_FILES = {"temple_bar.jpg", "escobar.jpg", "nebar.jpg"}
 SYSTEM_PHOTO_FILES = {
     "ticket_template.jpg",
     "hitloto_start.png",
+    "elka_start.png",
     "photo_2026-07-21_01-59-43.jpg",
     "residents_start.jpg",
     "photo_2026-10-02_19-50-45.jpg",
@@ -55,6 +57,10 @@ FORMATS_TEXT = """🎭 <b>Наши форматы шоу:</b>
 🎵 <b>Хитлото</b>
 Музыкальное лото в компании стендап-комика! Веселись, пой, пей, зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥
 🎟 Билеты — от <b>990 ₽</b>
+
+🎄 <b>Елка для взрослых</b>
+Дедлайны, ипотека и взрослые заботы подождут. На один вечер возвращаемся на новогодний утренник — с двумя стендап-комиками, импровизацией, командными играми, музыкой и подарками.
+🎟 Билеты — от <b>1 580 ₽</b>
 
 🎤 <b>StandUp Проверка материала</b>
 5–7 опытных комиков, участников известных проектов ТНТ и YouTube, рассказывают по 10–15 минут свежих, но не проверенных шуток. Вы услышите настоящий эксклюзив и поможете комикам понять, что смешно, а что стоит убрать из материала 🙈
@@ -75,7 +81,12 @@ BUY_TICKET_TEXT = (
     "🎵 <b>Хитлото</b>\n"
     "<i>Музыкальное лото в компании стендап-комика! Веселись, пой, пей, "
     "зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы.</i>\n"
-    "🎟 Билеты — от <b>990 ₽</b>."
+    "🎟 Билеты — от <b>990 ₽</b>\n\n"
+    "🎄 <b>Елка для взрослых</b>\n"
+    "<i>Дедлайны, ипотека и взрослые заботы подождут. На один вечер "
+    "возвращаемся на новогодний утренник — с двумя стендап-комиками, "
+    "импровизацией, командными играми, музыкой и подарками.</i>\n"
+    "🎟 Билеты — от <b>1 580 ₽</b>."
 )
 
 FREE_FORMATS_TEXT = (
@@ -111,6 +122,9 @@ FORMATS_RICH_HTML = """
 <h3>🎵 Хитлото</h3>
 <p>Музыкальное лото в компании стендап-комика! Веселись, пой, пей, зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы 🔥</p>
 <p>🎟 Билеты — от <b>990 ₽</b></p>
+<h3>🎄 Елка для взрослых</h3>
+<p>Дедлайны, ипотека и взрослые заботы подождут. На один вечер возвращаемся на новогодний утренник — с двумя стендап-комиками, импровизацией, командными играми, музыкой и подарками.</p>
+<p>🎟 Билеты — от <b>1 580 ₽</b></p>
 <h3>🎤 StandUp Проверка материала</h3>
 <p>5–7 опытных комиков, участников известных проектов ТНТ и YouTube, рассказывают по 10–15 минут свежих, но не проверенных шуток. Вы услышите настоящий эксклюзив и поможете комикам понять, что смешно, а что стоит убрать из материала 🙈</p>
 <p>🆓 Вход <b>бесплатный</b></p>
@@ -127,6 +141,9 @@ BUY_TICKET_RICH_HTML = """
 <h3>🎵 Хитлото</h3>
 <p><i>Музыкальное лото в компании стендап-комика! Веселись, пой, пей, зачеркивай прозвучавшие песни в своём бланке, и выигрывай призы.</i></p>
 <p>🎟 Билеты — от <b>990 ₽</b></p>
+<h3>🎄 Елка для взрослых</h3>
+<p><i>Дедлайны, ипотека и взрослые заботы подождут. На один вечер возвращаемся на новогодний утренник — с двумя стендап-комиками, импровизацией, командными играми, музыкой и подарками.</i></p>
+<p>🎟 Билеты — от <b>1 580 ₽</b></p>
 """
 
 QUICK_BOOKING_GREETING_RICH = (
@@ -274,6 +291,7 @@ def _random_format_photo():
             and f.lower() not in SYSTEM_PHOTO_FILES
             and not f.lower().startswith("rozygrysh_otzyv")
             and not f.lower().startswith("hitloto")
+            and not f.lower().startswith("elka")
             and not f.lower().startswith("pushkin")
         ]
     except FileNotFoundError:
@@ -336,6 +354,28 @@ async def _answer_with_residents_photo(message, text: str, reply_markup=None, pa
 async def _answer_with_format_photo(message, text: str, reply_markup=None, parse_mode=None, track_nav=False):
     sent = None
     photo = _random_format_photo()
+    if photo:
+        try:
+            sent = await message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception:
+            sent = None
+    if sent is None:
+        sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    if track_nav and sent:
+        remember_booking_nav(message.chat.id, sent.message_id)
+    return sent
+
+
+def _elka_photo():
+    path = os.path.join(PHOTOS_DIR, "elka_start.png")
+    if os.path.exists(path):
+        return FSInputFile(path)
+    return _random_format_photo()
+
+
+async def _answer_with_elka_photo(message, text: str, reply_markup=None, parse_mode=None, track_nav=False):
+    sent = None
+    photo = _elka_photo()
     if photo:
         try:
             sent = await message.answer_photo(photo=photo, caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
@@ -753,6 +793,7 @@ def _all_formats_kb(*, from_deep_link: bool = False):
     kb = InlineKeyboardBuilder()
     kb.button(text="STANDUP BEST", callback_data="best")
     kb.button(text="Хитлото", callback_data="hitloto")
+    kb.button(text="🎄 Елка для взрослых", callback_data="elka")
     kb.button(text="StandUp Проверка материала", callback_data="check")
     kb.button(text=RESIDENTS_MENU_BUTTON, callback_data="residents")
     back_text = "В главное меню" if from_deep_link else "◀️ Назад в меню"
@@ -765,6 +806,7 @@ def _paid_formats_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="STANDUP BEST", callback_data="best")
     kb.button(text="Хитлото", callback_data="hitloto")
+    kb.button(text="🎄 Елка для взрослых", callback_data="elka")
     kb.button(text="◀️ Назад в меню", callback_data="main_menu")
     kb.adjust(1)
     return kb.as_markup()
@@ -820,7 +862,7 @@ async def send_all_formats(message, *, from_deep_link: bool = False):
 
 
 async def send_buy_ticket_formats(message):
-    """Платные форматы: кнопка «Купить билет» — только BEST и Хитлото."""
+    """Платные форматы: кнопка «Купить билет» — BEST, Хитлото и Елка для взрослых."""
     await _send_rich_or_html(
         message,
         rich_html=BUY_TICKET_RICH_HTML,
@@ -1303,6 +1345,169 @@ async def hitloto_event(call: CallbackQuery):
         )
     else:
         await call.message.answer("Мероприятие уже прошло 😊 Выбери новую дату!", reply_markup=await _hitloto_dates_kb())
+    await call.answer()
+
+
+ELKA_ENTRY_TEXT = (
+    "Привет 😊 Я помогу тебе выбрать билеты на <b>Елку для взрослых</b> "
+    "от Moscow StandUp Show 🎤\n\nВыбирай дату 👇"
+)
+
+
+async def _elka_dates_kb():
+    events = await load_events("elka")
+    dates = sorted(set(e["date"] for e in events), key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
+    kb = InlineKeyboardBuilder()
+    for date in dates:
+        try:
+            d = datetime.strptime(date, "%d.%m.%Y")
+            label = d.strftime("%d ") + MONTHS[d.strftime("%B")]
+        except Exception:
+            label = date
+        kb.button(text=label, callback_data=f"elka_date_{date}")
+    kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+    if dates:
+        widths = [2] * (len(dates) // 2)
+        if len(dates) % 2:
+            widths.append(1)
+        widths.append(1)
+        kb.adjust(*widths)
+    else:
+        kb.adjust(1)
+    return kb.as_markup()
+
+
+def _elka_event_text(event):
+    lines = _host_lines(event.get("host") or "")
+    title = "Ведущие" if len(lines) > 1 else "Ведущий"
+    return _best_event_text(event, host_title=title)
+
+
+async def _send_elka_event_card(message, event, back_callback="elka_dates", *, telegram_id=None):
+    if telegram_id:
+        _track_show_card(
+            telegram_id,
+            event,
+            fmt="elka",
+            browse=browse_mode_from_callback(back_callback),
+        )
+    kb = InlineKeyboardBuilder()
+    payment_url = event.get("payment_url") or ""
+    if payment_url:
+        kb.button(text="🎟 Купить билет", url=payment_url)
+    else:
+        kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+    kb.button(text="◀️ Назад", callback_data=back_callback)
+    kb.adjust(1)
+    from bot.utils.event_poster import tg_send_event_card
+
+    await tg_send_event_card(
+        message,
+        event.get("image"),
+        caption=_elka_event_text(event),
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
+
+
+async def elka_format_entry(message):
+    track_event(EVENT_BRANCH_ELKA, telegram_id=message.from_user.id)
+    events = await load_events("elka")
+    if not events:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="💬 Задать вопрос менеджеру", url=MANAGER_LINK)
+        kb.button(text="◀️ Назад в меню", callback_data="main_menu")
+        kb.adjust(1)
+        await message.answer(
+            "Пока нет актуальных мероприятий <b>Елка для взрослых</b>. "
+            "Можно уточнить расписание у менеджера 👇",
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML",
+        )
+        return
+    await _answer_with_elka_photo(
+        message,
+        ELKA_ENTRY_TEXT,
+        reply_markup=await _elka_dates_kb(),
+        parse_mode="HTML",
+        track_nav=True,
+    )
+
+
+@router.callback_query(lambda c: c.data == "elka")
+async def elka_format(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    await elka_format_entry(call.message)
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data == "elka_dates")
+async def elka_dates(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    await _answer_with_elka_photo(
+        call.message, "Выбирай дату 👇", reply_markup=await _elka_dates_kb(), track_nav=True
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("elka_date_"))
+async def elka_date(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    date = call.data.replace("elka_date_", "", 1)
+    events = [e for e in await load_events("elka") if e["date"] == date]
+    if not events:
+        await call.message.answer(
+            "Это мероприятие уже прошло 😊 Выбери новую дату!",
+            reply_markup=await _elka_dates_kb(),
+        )
+        await call.answer()
+        return
+    if len(events) == 1:
+        await _send_elka_event_card(
+            call.message,
+            events[0],
+            back_callback="elka_dates",
+            telegram_id=call.from_user.id,
+        )
+        await call.answer()
+        return
+    kb = InlineKeyboardBuilder()
+    for event in events:
+        kb.button(
+            text=f"🕐 {event['time']} — {event['location']}",
+            callback_data=f"elka_event_{event['id']}_date_{date}",
+        )
+    kb.button(text="◀️ Назад к датам", callback_data="elka_dates")
+    kb.adjust(1)
+    await call.message.answer(
+        "На эту дату несколько мероприятий, выбери нужное 👇",
+        reply_markup=kb.as_markup(),
+    )
+    await call.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("elka_event_"))
+async def elka_event(call: CallbackQuery):
+    await _delete_previous_menu_message(call)
+    payload = call.data.replace("elka_event_", "", 1)
+    if "_date_" in payload:
+        event_id, date = payload.split("_date_", 1)
+        back_callback = f"elka_date_{date}"
+    else:
+        event_id, back_callback = payload, "elka_dates"
+    event = next((e for e in await load_events("elka") if str(e["id"]) == event_id), None)
+    if event:
+        await _send_elka_event_card(
+            call.message,
+            event,
+            back_callback=back_callback,
+            telegram_id=call.from_user.id,
+        )
+    else:
+        await call.message.answer(
+            "Мероприятие уже прошло 😊 Выбери новую дату!",
+            reply_markup=await _elka_dates_kb(),
+        )
     await call.answer()
 
 

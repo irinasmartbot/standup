@@ -46,6 +46,7 @@ ACTIVITY_SHORT_LABELS = {
     "branch_residents": "Ветка · Резиденты",
     "branch_best": "Ветка · BEST",
     "branch_hitloto": "Ветка · Hit Loto",
+    "branch_elka": "Ветка · Елка для взрослых",
     "browse_dates": "Выбор по дате",
     "browse_venues": "Выбор по площадке",
     "show_card": "Карточка концерта",
@@ -89,6 +90,7 @@ LAST_PLACE_LABELS = {
     "branch_residents": "Ветка «Резиденты»",
     "branch_best": "Ветка BEST",
     "branch_hitloto": "Ветка Hit Loto",
+    "branch_elka": "Ветка «Елка для взрослых»",
     "browse_dates": "Выбор даты",
     "browse_venues": "Выбор площадки",
     "show_card": "Карточка концерта",
@@ -1330,6 +1332,7 @@ _AUDIT_AFISHA_LABELS = {
     "best": "BEST",
     "proverka": "Проверка",
     "hitloto": "Hit Loto",
+    "elka": "Елка для взрослых",
     "rozygrysh": "Розыгрыш",
     "residents": "Резиденты",
 }
@@ -3051,6 +3054,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         f'{_analytics_metric_card("Зашли · Проверка", by_name.get("branch_proverka"), css_class="tone-proverka", href=_ae_link("branch_proverka"))}'
         f'{_analytics_metric_card("Зашли · BEST", by_name.get("branch_best"), css_class="tone-best", href=_ae_link("branch_best"))}'
         f'{_analytics_metric_card("Зашли · Hit Loto", by_name.get("branch_hitloto"), css_class="tone-hitloto", href=_ae_link("branch_hitloto"))}'
+        f'{_analytics_metric_card("Зашли · Елка", by_name.get("branch_elka"), css_class="tone-elka", href=_ae_link("branch_elka"))}'
         f'{_analytics_metric_card("Help / FAQ · обращение", by_name.get("cmd_help") or by_name.get("help_open"), href=_ae_link("cmd_help" if by_name.get("cmd_help") else "help_open"))}'
         f'{_analytics_metric_card("Брони созданы · проверка (бот)", (proverka_overview.get("from_bot") or {}).get("created") or proverka_overview.get("created"), href=_ae_link("booking_created"), mode="bookings")}'
         f'{_analytics_metric_card("Билет получен · проверка", (proverka_overview.get("from_bot") or {}).get("confirmed") or proverka_overview.get("confirmed"), mode="bookings")}'
@@ -3085,6 +3089,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         "help_question": "Написали в поддержку",
         "branch_best": "BEST · вход",
         "branch_hitloto": "Hit Loto · вход",
+        "branch_elka": "Елка для взрослых · вход",
         "branch_proverka": "Проверка · вход",
         "branch_residents": "Резиденты · вход",
         "buy_click": "Нажали «Купить»",
@@ -3124,7 +3129,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
                 "cmd_channel",
             ],
         ),
-        ("Ветки", ["branch_proverka", "branch_residents", "branch_best", "branch_hitloto"]),
+        ("Ветки", ["branch_proverka", "branch_residents", "branch_best", "branch_hitloto", "branch_elka"]),
         ("Карточки концертов", []),  # filled from show_cards breakdown below
         ("Помощь", ["help_question"]),
         (
@@ -3199,7 +3204,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
         event_groups.append(("Другое", other_names))
 
     show_card_rows = []
-    format_titles = {"best": "BEST", "hitloto": "Hit Loto", "proverka": "Проверка", "residents": "Резиденты"}
+    format_titles = {"best": "BEST", "hitloto": "Hit Loto", "elka": "Елка для взрослых", "proverka": "Проверка", "residents": "Резиденты"}
     browse_titles = {"date": "поиск по дате", "venue": "поиск по площадке"}
     for row in report.get("show_cards") or []:
         fmt = row.get("format") or ""
@@ -3340,6 +3345,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     card_matrix = {
         "best": {"date": (0, 0), "venue": (0, 0)},
         "hitloto": {"date": (0, 0), "venue": (0, 0)},
+        "elka": {"date": (0, 0), "venue": (0, 0)},
         "proverka": {"date": (0, 0), "venue": (0, 0)},
     }
     for row in report.get("show_cards") or []:
@@ -3355,6 +3361,7 @@ def _analytics_tab(report: dict, filters: dict) -> str:
     for fmt, title, tone in (
         ("best", "BEST", "tone-best"),
         ("hitloto", "Hit Loto", "tone-hitloto"),
+        ("elka", "Елка для взрослых", "tone-elka"),
         ("proverka", "Проверка", "tone-proverka"),
     ):
         by_date_e, by_date_u = card_matrix[fmt]["date"]
@@ -4410,9 +4417,11 @@ def render_admin_html(
     .tone-best h3, .tone-best .show-format-title, .metric.tone-best span {{ color:#1d4ed8; }}
     .tone-hitloto {{ background:#fff7ed; border-color:#fed7aa; }}
     .tone-hitloto h3, .tone-hitloto .show-format-title, .metric.tone-hitloto span {{ color:#c2410c; }}
+    .tone-elka {{ background:#fef2f2; border-color:#fecaca; }}
+    .tone-elka h3, .tone-elka .show-format-title, .metric.tone-elka span {{ color:#b91c1c; }}
     .tone-proverka {{ background:#f0fdf4; border-color:#bbf7d0; }}
     .tone-proverka h3, .tone-proverka .show-format-title, .metric.tone-proverka span {{ color:#15803d; }}
-    .metric.tone-best, .metric.tone-hitloto, .metric.tone-proverka {{ border-width:1px; }}
+    .metric.tone-best, .metric.tone-hitloto, .metric.tone-elka, .metric.tone-proverka {{ border-width:1px; }}
     .branch-grid {{ display:grid; grid-template-columns: 1fr; gap:14px; margin-top:18px; }}
     .branch-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:16px; padding:16px; }}
     .user-extra-stack {{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px; margin:12px 0 18px; align-items:start; }}
@@ -4828,7 +4837,7 @@ def _filters_from_request(request: web.Request) -> dict:
         date_from = ""
         date_to = ""
     ef = request.query.get("ef", "").strip()
-    if ef not in ("best", "proverka", "hitloto", "residents"):
+    if ef not in ("best", "proverka", "hitloto", "elka", "residents"):
         ef = "best" if tab == "events" else ""
     return {
         "tab": tab,
@@ -5483,7 +5492,7 @@ async def events_resend_ticket_page(request: web.Request) -> web.Response:
 
     post = await request.post()
     event_format = (post.get("ef") or "best").strip()
-    if event_format not in {"best", "proverka", "hitloto", "residents"}:
+    if event_format not in {"best", "proverka", "hitloto", "elka", "residents"}:
         event_format = "best"
     updated = (post.get("updated") or "1").strip() != "0"
     extra_note = (post.get("extra_note") or "").strip()
@@ -5822,7 +5831,7 @@ async def events_restore_page(request: web.Request) -> web.Response:
 
     post = await request.post()
     event_format = (post.get("ef") or "best").strip()
-    if event_format not in {"best", "proverka", "hitloto", "residents"}:
+    if event_format not in {"best", "proverka", "hitloto", "elka", "residents"}:
         event_format = "best"
     ids = post.getall("e_restore") if hasattr(post, "getall") else []
     result = await asyncio.get_running_loop().run_in_executor(

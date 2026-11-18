@@ -104,6 +104,7 @@ _EXCLUDED_RANDOM_COVER_KEYS = frozenset(
         "escobar",
         "nebar",
         "hitloto_start",
+        "elka_start",
         "photo_2026-07-21_01-59-43",
         "residents_start",
         "photo_2026-10-02_19-50-45",
@@ -119,6 +120,7 @@ _EXCLUDED_RANDOM_COVER_NAMES = frozenset(
         "nebar.jpg",
         "ticket_template.jpg",
         "hitloto_start.png",
+        "elka_start.png",
         "photo_2026-07-21_01-59-43.jpg",
         "residents_start.jpg",
         "photo_2026-10-02_19-50-45.jpg",
@@ -183,6 +185,12 @@ def random_show_cover_attachment(
             or "hitloto" in name
             or "хитлото" in key
             or "хитлото" in name
+            or key.startswith("elka")
+            or name.startswith("elka")
+            or "елка" in key
+            or "ёлка" in key
+            or "елка" in name
+            or "ёлка" in name
             or key.startswith("rozygrysh_otzyv")
             or name.startswith("rozygrysh_otzyv")
         ):
@@ -206,7 +214,7 @@ def _is_random_cover_file(path: Path) -> bool:
         return False
     if name in _EXCLUDED_RANDOM_COVER_NAMES:
         return False
-    if name.startswith("hitloto") or name.startswith("rozygrysh_otzyv") or name.startswith("pushkin"):
+    if name.startswith("hitloto") or name.startswith("elka") or name.startswith("rozygrysh_otzyv") or name.startswith("pushkin"):
         return False
     if "ticket" in name:
         return False

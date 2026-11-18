@@ -5,6 +5,7 @@ PROVERKA = "proverka"
 ROZYGRYSH = "rozygrysh"
 BEST = "best"
 HITLOTO = "hitloto"
+ELKA = "elka"
 
 RESIDENTS_LABEL = "StandUp Сольники от резидентов"
 RESIDENTS_LABEL_SHORT = "Сольники от резидентов"
@@ -31,6 +32,7 @@ EVENT_FORMAT_CHECK = (
     BEST,
     "masterclass",
     HITLOTO,
+    ELKA,
     RESIDENTS,
 )
 BOOKING_FORMAT_CHECK = (PROVERKA, "1plus1", ROZYGRYSH, RESIDENTS)

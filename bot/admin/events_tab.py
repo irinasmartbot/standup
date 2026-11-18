@@ -254,7 +254,7 @@ def render_events_tab(
 ) -> str:
     fmt = event_format if event_format in AFISHA_FORMATS else "best"
     bundle = bundle or {"active": [], "past": [], "hidden": []}
-    paid = fmt in {"best", "hitloto"}
+    paid = fmt in {"best", "hitloto", "elka"}
     show_seats = fmt in {"proverka", "residents"}
     # Hit Loto: no per-row «билеты»; Update still available for all formats.
     show_tickets = can_resend_tickets and fmt in {"best", "proverka", "residents"}

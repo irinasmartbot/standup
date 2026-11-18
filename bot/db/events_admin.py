@@ -15,11 +15,12 @@ from bot.utils.ticket import WEEKDAYS_RU
 
 logger = logging.getLogger(__name__)
 
-AFISHA_FORMATS = ("best", "proverka", "hitloto", "residents")
+AFISHA_FORMATS = ("best", "proverka", "hitloto", "elka", "residents")
 AFISHA_FORMAT_LABELS = {
     "best": "BEST",
     "proverka": "Проверка",
     "hitloto": "Hit Loto",
+    "elka": "Елка для взрослых",
     "residents": "Резиденты",
 }
 _FREE_AFISHA = {"proverka", "residents"}
