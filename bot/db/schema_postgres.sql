@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     event_id BIGINT NOT NULL REFERENCES events(id) ON DELETE RESTRICT,
     guests INTEGER NOT NULL CHECK (guests BETWEEN 1 AND 4),
-    format TEXT NOT NULL CHECK (format IN ('proverka', '1plus1', 'rozygrysh', 'residents')),
+    format TEXT NOT NULL CHECK (format IN ('proverka', '1plus1', 'rozygrysh', 'residents', 'certificate')),
     source TEXT NOT NULL DEFAULT 'telegram' CHECK (source IN ('telegram', 'vkontakte', 'import')),
     status TEXT NOT NULL DEFAULT 'booked' CHECK (status IN ('booked', 'confirmed', 'cancelled', 'annulled')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

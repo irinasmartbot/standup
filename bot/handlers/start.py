@@ -180,6 +180,8 @@ def _format_label(format_name: str) -> str:
 
     if format_name == "rozygrysh":
         return "Розыгрыш"
+    if format_name == "certificate":
+        return "Сертификат"
     if format_name == "proverka":
         return "Проверка материала"
     if format_name == "residents":
@@ -207,6 +209,10 @@ def _booking_command_text(row, page: int = 0, total: int = 1) -> str:
         f"Адрес: {escape(address or '')}",
         f"Гостей: {guests}",
     ]
+    if format_name == "certificate":
+        from bot.services.cert_texts import BRING_TEXT
+
+        lines.extend(["", escape(BRING_TEXT)])
     if status == "confirmed":
         lines.extend(["", "✅ Бронь подтверждена"])
     return "\n".join(lines)
@@ -238,8 +244,13 @@ def _booking_command_kb(row, page: int = 0, total: int = 1):
     action_count = 0
     can_change_guests = format_name in FREE_BOOKING_FORMATS
 
-    # «Получить билет» только из напоминания; в карточке — «Билет по брони», если уже выдан
-    if status == "booked":
+    if format_name == "certificate":
+        if status == "booked":
+            kb.button(text="Подтвердить бронь", callback_data=f"cert_cf:{booking_id}")
+            kb.button(text="Отменить бронь", callback_data=f"cert_cx:{booking_id}")
+            kb.button(text="Перенести дату", callback_data=f"cert_mv:{booking_id}")
+            action_count += 3
+    elif status == "booked":
         if format_name == "rozygrysh":
             kb.button(text="Что, если я хочу прийти не один?", callback_data="rz_not_alone")
             kb.button(text="Отменить бронь", callback_data=f"rz_cancel_{booking_id}")
@@ -249,7 +260,7 @@ def _booking_command_kb(row, page: int = 0, total: int = 1):
             kb.button(text="Изменить дату", callback_data=f"change_date_{booking_id}")
             kb.button(text="Изменить количество гостей", callback_data=f"change_guests_confirm_{booking_id}")
             action_count += 3
-    else:
+    elif format_name != "certificate":
         kb.button(text="🎟 Билет по брони", callback_data=f"cmd_booking_ticket:{page}")
         action_count += 1
         if format_name == "rozygrysh":
@@ -494,6 +505,14 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
                 message.from_user.id,
             )
 
+    from bot.services.cert_codes import looks_like_certificate_start
+
+    if looks_like_certificate_start(raw_payload):
+        from bot.handlers.certificate import begin_telegram
+
+        await begin_telegram(message, state, raw_payload)
+        return
+
     if payload_key == "standup_rozygr":
         from bot.handlers.rozygrysh import send_raffle_start
         await send_raffle_start(message, state)
@@ -737,6 +756,11 @@ async def command_booking_ticket(call: CallbackQuery):
 
     page = page % len(rows)
     row = rows[page]
+    if row[1] == "certificate":
+        from bot.services.cert_texts import NO_TICKET_TEXT
+
+        await call.answer(NO_TICKET_TEXT, show_alert=True)
+        return
     if row[2] != "confirmed":
         await call.answer("Билет ещё не подтверждён.", show_alert=True)
         return

@@ -19,11 +19,12 @@ logger = logging.getLogger(__name__)
 MSK = timezone(timedelta(hours=3))
 STATUSES = ("booked", "confirmed", "cancelled", "annulled")
 ACTIVE_STATUSES = {"booked", "confirmed"}
-FORMAT_OPTIONS = ("proverka", "rozygrysh", "residents")
+FORMAT_OPTIONS = ("proverka", "rozygrysh", "residents", "certificate")
 FORMAT_LABELS = {
     "proverka": "проверка",
     "rozygrysh": "розыгрыш",
     "residents": "резиденты",
+    "certificate": "сертификат",
 }
 STATUS_LABELS = {
     "booked": "Забронировано",
@@ -2195,6 +2196,7 @@ def _bookings_tab(dashboard: dict, filters: dict) -> str:
         ("proverka", "Проверка материала"),
         ("residents", "StandUp Сольники от резидентов"),
         ("rozygrysh", "Розыгрыш"),
+        ("certificate", "Сертификат"),
     ):
         if filters.get("format") and filters["format"] != fmt:
             continue

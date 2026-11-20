@@ -2153,7 +2153,13 @@ class VKBotApp:
                 self._forget_keep_ids(peer_id, ticket_mid)
             from bot.db.crud import get_booking_format, clear_raffle_after_user_cancel
 
-            was_raffle = (get_booking_format(booking_id) or "").strip().lower() == "rozygrysh"
+            booking_format = (get_booking_format(booking_id) or "").strip().lower()
+            if booking_format == "certificate":
+                from bot.vk.certificate import cancel_booking_message
+
+                await cancel_booking_message(self.client, peer_id, vk_id, booking_id)
+                return True
+            was_raffle = booking_format == "rozygrysh"
             update_booking_status(booking_id, "cancelled")
             if was_raffle:
                 try:
@@ -2208,6 +2214,14 @@ class VKBotApp:
             if ticket_mid:
                 await vk_mb.delete_ticket_message(self.client, peer_id, booking_id)
                 self._forget_keep_ids(peer_id, ticket_mid)
+            from bot.db.crud import get_booking_format
+
+            if (get_booking_format(booking_id) or "").strip().lower() == "certificate":
+                await self._send_text(
+                    peer_id,
+                    "Дату сертификата меняем кнопкой «Перенести дату».",
+                )
+                return True
             update_booking_status(booking_id, "cancelled")
             await self._strip_inline_keyboard(peer_id, confirm_mid)
             if ticket_mid and ticket_mid != confirm_mid:
@@ -2969,6 +2983,19 @@ class VKBotApp:
             logger.info("Skip VK cmd cooldown peer_id=%s cmd=%s", peer_id, cmd)
             return
 
+        from bot.vk.certificate import handle_incoming
+
+        if await handle_incoming(
+            self.client,
+            peer_id,
+            vk_id,
+            message=message,
+            text=text,
+            cmd=str(cmd) if cmd else None,
+            payload=payload if isinstance(payload, dict) else {},
+        ):
+            return
+
         if await self._handle_booking_flow(
             peer_id,
             vk_id,
@@ -3035,6 +3062,12 @@ class VKBotApp:
         ref = raw_ref.casefold()
         ref_source = str(message.get("ref_source") or payload.get("ref_source") or "").strip()
         source = _source_from_ref(raw_ref)
+        if is_start_entry and not cmd:
+            from bot.vk.certificate import begin_from_ref, is_certificate_ref
+
+            if is_certificate_ref(raw_ref, ref_source):
+                await begin_from_ref(self.client, peer_id, vk_id, raw_ref, ref_source)
+                return
         if is_start_entry:
             logger.info(
                 (
@@ -3546,14 +3579,28 @@ class VKBotApp:
             booking_formats=MANAGER_STATA_FORMATS,
         )
         chunks = _split_text(build_stata_report_all(rows, empty_text=EMPTY_TEXT_ALL))
+        from bot.handlers.manager_stata import build_stata_report
+
+        cert_rows = get_manager_stata_bookings_for_date(
+            event_date,
+            booking_format="certificate",
+            event_format="best",
+            statuses=("confirmed",),
+            event_formats=("best", "hitloto", "elka"),
+            booking_formats=("certificate",),
+        )
+        cert_text = "<b>Сертификаты</b>\n\n" + build_stata_report(
+            cert_rows,
+            empty_text="Нет подтверждённых броней по сертификату на указанную дату",
+        )
         back = _stata_all_back_keyboard()
         if len(chunks) == 1:
-            await self._send_text(peer_id, chunks[0], keyboard=back)
-            return
-        await self._send_text(peer_id, chunks[0])
-        for chunk in chunks[1:-1]:
-            await self._send_text(peer_id, chunk, replace_nav=False)
-        await self._send_text(peer_id, chunks[-1], keyboard=back, replace_nav=False)
+            await self._send_text(peer_id, chunks[0])
+        else:
+            await self._send_text(peer_id, chunks[0])
+            for chunk in chunks[1:]:
+                await self._send_text(peer_id, chunk, replace_nav=False)
+        await self._send_text(peer_id, cert_text, keyboard=back, replace_nav=False)
 
     async def _handle_check_list_flow(
         self,

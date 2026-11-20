@@ -30,6 +30,8 @@ def _format_label(format_name: str) -> str:
 
     if format_name == "rozygrysh":
         return "Розыгрыш"
+    if format_name == "certificate":
+        return "Сертификат"
     if format_name == "proverka":
         return "Проверка материала"
     if format_name == "residents":
@@ -64,6 +66,10 @@ def booking_card_text(row, *, page: int = 0, total: int = 1) -> str:
         f"<b>Адрес:</b> {address or ''}",
         f"<b>Гостей:</b> {guests}",
     ]
+    if format_name == "certificate":
+        from bot.services.cert_texts import BRING_TEXT
+
+        lines.extend(["", BRING_TEXT])
     if status == "confirmed":
         lines.extend(["", "✅ <b>Бронь подтверждена</b>"])
     return "\n".join(lines)
@@ -101,8 +107,13 @@ def bookings_keyboard(row, *, page: int = 0, total: int = 1) -> str:
     is_raffle = format_name == "rozygrysh"
     can_change_guests = format_name in FREE_BOOKING_FORMATS
 
-    # «Получить билет» только из напоминания; в карточке — «Билет по брони», если confirmed
-    if status == "confirmed":
+    if format_name == "certificate":
+        if status == "booked":
+            kb.button("Подтвердить бронь", _payload("cert_cf", id=booking_id), color="positive")
+            kb.button("Отменить бронь", _payload("cert_cx", id=booking_id))
+            kb.button("Перенести дату", _payload("cert_mv", id=booking_id))
+            action_count += 3
+    elif status == "confirmed":
         kb.button("🎟 Билет по брони", _payload("mb_ticket", page=page), color="primary")
         action_count += 1
         kb.button("Отменить бронь", _payload("mb_cancel_confirm", booking_id=booking_id))

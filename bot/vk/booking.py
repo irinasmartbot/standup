@@ -579,6 +579,12 @@ async def issue_ticket(
         )
         await client.send_message(peer_id, "Бронь не найдена или уже отменена.")
         return
+    from bot.db.crud import get_booking_format
+    from bot.services.cert_texts import NO_TICKET_TEXT
+
+    if (get_booking_format(booking_id) or "").strip().lower() == "certificate":
+        await client.send_message(peer_id, NO_TICKET_TEXT)
+        return
     status = booking[10]
     already_confirmed = status == "confirmed"
     # Индекс ticket_message_id в BOOKING_SELECT_SQL — 15.

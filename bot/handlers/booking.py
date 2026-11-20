@@ -1181,6 +1181,11 @@ async def cancel_select_back(call: CallbackQuery):
 @router.callback_query(F.data.startswith("cancel_do_"))
 async def cancel_do(call: CallbackQuery):
     booking_id = int(call.data.replace("cancel_do_", ""))
+    if (get_booking_format(booking_id) or "") == "certificate":
+        from bot.handlers.certificate import cancel_for_telegram
+
+        await cancel_for_telegram(call, booking_id)
+        return
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -1220,6 +1225,9 @@ async def cancel_do(call: CallbackQuery):
 async def change_date_do(call: CallbackQuery):
     booking_id = int(call.data.replace("change_date_do_", ""))
     fmt = (get_booking_format(booking_id) or "").strip().lower()
+    if fmt == "certificate":
+        await call.answer("Дату сертификата меняем кнопкой «Перенести дату»", show_alert=True)
+        return
     await _delete_ticket(booking_id, call.from_user.id)
     update_booking_status(booking_id, "cancelled")
     await refresh_user_commands(call.message.bot, call.from_user.id)

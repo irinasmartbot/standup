@@ -1120,7 +1120,7 @@ def get_user_bookings_for_commands(telegram_id=None, status=None, *, vk_id=None)
                 JOIN users u ON u.id = b.user_id
                 JOIN events e ON e.id = b.event_id
                 WHERE {user_sql}
-                  AND b.format IN ('proverka', 'rozygrysh', 'residents')
+                  AND b.format IN ('proverka', 'rozygrysh', 'residents', 'certificate')
                   {status_sql}
                   AND e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
                 ORDER BY e.event_date ASC, e.event_time ASC, b.id ASC

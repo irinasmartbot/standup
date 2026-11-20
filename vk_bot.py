@@ -36,6 +36,9 @@ async def main():
     from bot.db.events_admin import ensure_residents_format
 
     ensure_residents_format()
+    from bot.db.cert_store import ensure_certificate_tables
+
+    ensure_certificate_tables()
     from bot.db.crud import ensure_offline_gift_tables
 
     ensure_offline_gift_tables()

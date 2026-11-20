@@ -14,11 +14,12 @@ from bot.config import MODERATION_CHAT_ID, TECH_CHAT_ID, bot, dp
 from bot.db.models import init_db
 from bot.db.analytics import ensure_analytics_tables
 from bot.db.crud import ensure_help_tables, ensure_offline_gift_tables, ensure_raffle_tables
-from bot.handlers import start, formats, booking, residents, rozygrysh, offline_gift, manager_stata
+from bot.handlers import start, formats, booking, residents, rozygrysh, offline_gift, manager_stata, certificate
 from bot.handlers import mailing_callbacks, fallback, tech_ops
 from bot.db.mailing import ensure_mailing_tables
 from bot.handlers.reminders import reminder_loop
 from bot.handlers.rozygrysh_reminders import raffle_reminder_loop
+from bot.handlers.certificate_reminders import certificate_reminder_loop
 from bot.middlewares import ModerationChatSilenceMiddleware, TouchUserProfileMiddleware
 from bot.utils.tech_alerts import (
     MEANING_TG_CRASH,
@@ -93,6 +94,9 @@ async def main():
     from bot.db.events_admin import ensure_residents_format
 
     ensure_residents_format()
+    from bot.db.cert_store import ensure_certificate_tables
+
+    ensure_certificate_tables()
     try:
         await start.setup_bot_commands(bot)
     except (TelegramNetworkError, TelegramServerError) as exc:
@@ -120,6 +124,7 @@ async def main():
     dp.include_router(manager_stata.router)
     dp.include_router(offline_gift.router)
     dp.include_router(rozygrysh.router)
+    dp.include_router(certificate.router)
     dp.include_router(formats.router)
     dp.include_router(residents.router)
     dp.include_router(booking.router)
@@ -128,6 +133,7 @@ async def main():
     dp.include_router(fallback.router)
     asyncio.create_task(reminder_loop())
     asyncio.create_task(raffle_reminder_loop())
+    asyncio.create_task(certificate_reminder_loop())
     # Telegram Bad Gateway on initial getMe must not kill the process forever
     while True:
         try:

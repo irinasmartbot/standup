@@ -25,8 +25,19 @@ def _payload(value: str, **extra) -> dict:
     return {"cmd": value, **extra}
 
 
-def _reminder_keyboard(booking_id: int, *, raffle: bool = False) -> str:
+def _reminder_keyboard(booking_id: int, *, raffle: bool = False, certificate: bool = False) -> str:
     kb = VKKeyboardBuilder(inline=True)
+    if certificate:
+        kb.button(
+            "Подтвердить бронь",
+            _payload("cert_cf", id=booking_id),
+            color="positive",
+        )
+        kb.button("Отменить бронь", _payload("cert_cx", id=booking_id))
+        kb.button("Перенести дату", _payload("cert_mv", id=booking_id))
+        kb.button("В главное меню", _payload("main_menu"))
+        kb.adjust(1)
+        return kb.as_json()
     kb.button(
         "Получить билет",
         _payload("booking_get_ticket", booking_id=booking_id),
@@ -94,7 +105,15 @@ async def send_vk_booking_reminder(
         raise RuntimeError(f"VK reminder skipped: booking {booking_id} has no vk_id")
 
     date_str = format_date(event_date)
-    if reminder_type == "day":
+    certificate = booking_format == "certificate"
+    if certificate:
+        from bot.services.cert_texts import BRING_TEXT, CONFIRM_BUTTON, WARN_TEXT
+
+        text = (
+            f"{name}, бронь по сертификату на {date_str} в {event_time}.\n\n"
+            f"Нажми «{CONFIRM_BUTTON}».\n\n{WARN_TEXT}\n\n{BRING_TEXT}"
+        )
+    elif reminder_type == "day":
         text = (
             f"{name}, мне необходимо подтвердить, либо отменить Вашу бронь "
             f"на <b>{date_str}</b> в <b>{event_time}</b> 😊\n\n"
@@ -124,7 +143,11 @@ async def send_vk_booking_reminder(
     msg_id = await client.send_message(
         int(vk_id),
         text,
-        keyboard=_reminder_keyboard(booking_id, raffle=raffle),
+        keyboard=_reminder_keyboard(
+            booking_id,
+            raffle=raffle,
+            certificate=booking_format == "certificate",
+        ),
     )
     save_confirm_message_id(booking_id, msg_id)
 
@@ -136,6 +159,7 @@ async def send_vk_annulled_message(
     community_link: str,
     manager_link: str,
     raffle: bool = False,
+    certificate: bool = False,
 ) -> None:
     booking_id = row[0]
     vk_id = row[11] if len(row) > 11 else None
@@ -144,11 +168,17 @@ async def send_vk_annulled_message(
         raise RuntimeError(f"VK annul without vk_id for booking {booking_id}")
 
     link = community_link or CHANNEL_LINK
-    text = (
-        "Ваша бронь аннулирована, ждём Вас на других мероприятиях 😊\n\n"
-        f"При возникновении вопросов можно писать менеджеру: {manager_link}\n\n"
-        f"И не забудь заглянуть в наше сообщество: {link}"
-    )
+    if certificate:
+        text = (
+            "Бронь по сертификату снята: подтверждение не пришло вовремя. "
+            "Номер можно использовать на другую дату."
+        )
+    else:
+        text = (
+            "Ваша бронь аннулирована, ждём Вас на других мероприятиях 😊\n\n"
+            f"При возникновении вопросов можно писать менеджеру: {manager_link}\n\n"
+            f"И не забудь заглянуть в наше сообщество: {link}"
+        )
     await client.send_message(
         int(vk_id),
         text,
@@ -255,12 +285,18 @@ async def _process_format_reminders(
                     pass
 
             if now >= annul_at:
+                if booking_format == "certificate":
+                    from bot.services.cert_flow import expire_booking
+
+                    if await expire_booking(int(booking_id)) != "ok":
+                        continue
                 await send_vk_annulled_message(
                     client,
                     row,
                     community_link=community_link,
                     manager_link=manager_link,
                     raffle=raffle,
+                    certificate=booking_format == "certificate",
                 )
         except Exception:
             logger.exception("Failed VK reminder for booking %s", booking_id)
@@ -282,6 +318,12 @@ async def process_due_vk_reminders(client: VKClient, *, community_link: str, man
     await _process_format_reminders(
         client,
         booking_format="rozygrysh",
+        community_link=community_link,
+        manager_link=manager_link,
+    )
+    await _process_format_reminders(
+        client,
+        booking_format="certificate",
         community_link=community_link,
         manager_link=manager_link,
     )

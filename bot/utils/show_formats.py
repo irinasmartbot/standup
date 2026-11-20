@@ -6,6 +6,7 @@ ROZYGRYSH = "rozygrysh"
 BEST = "best"
 HITLOTO = "hitloto"
 ELKA = "elka"
+CERTIFICATE = "certificate"
 
 RESIDENTS_LABEL = "StandUp Сольники от резидентов"
 RESIDENTS_LABEL_SHORT = "Сольники от резидентов"
@@ -16,7 +17,7 @@ RESIDENTS_MENU_BUTTON = "StandUp Сольники от резидентов"
 FREE_BOOKING_FORMATS = (PROVERKA, RESIDENTS)
 
 # «Мои брони» and seat reports for door staff.
-MY_BOOKINGS_FORMATS = (PROVERKA, ROZYGRYSH, RESIDENTS)
+MY_BOOKINGS_FORMATS = (PROVERKA, ROZYGRYSH, RESIDENTS, CERTIFICATE)
 
 # Hall gift: guest join is VK `#flow=offline_gift`; staff checklist is
 # Telegram `?start=chek_list` and VK `#flow=chek_list`.
@@ -35,4 +36,4 @@ EVENT_FORMAT_CHECK = (
     ELKA,
     RESIDENTS,
 )
-BOOKING_FORMAT_CHECK = (PROVERKA, "1plus1", ROZYGRYSH, RESIDENTS)
+BOOKING_FORMAT_CHECK = (PROVERKA, "1plus1", ROZYGRYSH, RESIDENTS, CERTIFICATE)

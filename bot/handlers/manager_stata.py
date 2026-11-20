@@ -336,6 +336,20 @@ async def _send_report(message: Message, state: FSMContext, event_date: str, mod
             **extra,
         )
         text = build_stata_report(rows, empty_text=empty_text)
+        if mode == "rozygr":
+            cert_rows = get_manager_stata_bookings_for_date(
+                event_date,
+                booking_format="certificate",
+                event_format="best",
+                statuses=("confirmed",),
+                event_formats=("best", "hitloto", "elka"),
+                booking_formats=("certificate",),
+            )
+            cert_body = build_stata_report(
+                cert_rows,
+                empty_text="Нет подтверждённых броней по сертификату на указанную дату",
+            )
+            text = text + "\n\n<b>Сертификаты</b>\n\n" + cert_body
     chunks = _split_text(text)
     markup = _back_keyboard(mode)
 
