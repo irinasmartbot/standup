@@ -65,13 +65,6 @@ CERT_API_BASE = os.getenv(
 ).rstrip("/")
 CERT_BOT_TOKEN = os.getenv("CERT_BOT_TOKEN", "").strip()
 CERT_STAFF_TOKEN = os.getenv("CERT_STAFF_TOKEN", "").strip()
-# Реестр сертификатов на сайте. Пустые ключи — ветка молчит, гостю пишем написать менеджеру.
-CERT_API_BASE = os.getenv(
-    "CERT_API_BASE",
-    "https://moscowstandupshow.ru/wp-json/mss-cert/v1",
-).rstrip("/")
-CERT_BOT_TOKEN = os.getenv("CERT_BOT_TOKEN", "").strip()
-CERT_STAFF_TOKEN = os.getenv("CERT_STAFF_TOKEN", "").strip()
 HELP_CHAT_ID = os.getenv("HELP_CHAT_ID", "-1002342467016")
 # Отдельный чат для алертов (падение сервисов, необработанные ошибки).
 TECH_CHAT_ID = os.getenv("TECH_CHAT_ID", "").strip()
