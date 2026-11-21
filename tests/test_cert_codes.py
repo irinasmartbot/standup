@@ -9,7 +9,7 @@ from bot.services.cert_codes import (
     parse_certificate_start,
     safe_ref,
 )
-from bot.services.cert_texts import CAP_TEXT
+from bot.services.cert_texts import CAP_TEXT, date_ask_text, event_card_caption, reserved_caption
 
 
 class CertificateCodeTests(unittest.TestCase):
@@ -33,6 +33,25 @@ class CertificateCodeTests(unittest.TestCase):
             CAP_TEXT,
             "на указанную дату бесплатных мест по сертификату не осталось",
         )
+
+    def test_booking_ui_texts(self):
+        self.assertIn("Хитлото", date_ask_text("hitloto"))
+        self.assertIn("Выбирай дату", date_ask_text("best"))
+        event = {
+            "date": "12.12.2026",
+            "weekday": "суббота",
+            "time": "20:30",
+            "location": "Temple Bar",
+            "address": "м. Курская",
+            "description": "Хитлото",
+        }
+        card = event_card_caption(event, fmt="hitloto")
+        self.assertIn("Сертификат", card)
+        self.assertIn("Хитлото", card)
+        self.assertIn("20:30", card)
+        booked = reserved_caption(event, fmt="hitloto")
+        self.assertIn("Хитлото", booked)
+        self.assertIn("двое гостей", booked)
 
 
 if __name__ == "__main__":

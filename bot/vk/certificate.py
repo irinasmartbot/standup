@@ -18,10 +18,12 @@ from bot.services.cert_flow import (
     reserve_event,
     save_name,
     save_phone,
+    show_event_card,
     submit_number,
     submit_photo,
 )
 from bot.services.cert_texts import PHOTO_ASK_TEMPLATE
+from bot.vk.formatting import format_vk_text
 from bot.vk.keyboards import VKKeyboardBuilder
 from bot.vk.raffle import download_screenshot_bytes, extract_photo_from_message
 
@@ -29,9 +31,12 @@ logger = logging.getLogger(__name__)
 
 
 def _keyboard(step: dict) -> str | None:
-    buttons = step.get("buttons") or []
+    buttons = list(step.get("buttons") or [])
     if not buttons:
         return None
+    layout = step.get("layout")
+    if layout == "dates" and len(buttons) > 9:
+        buttons = buttons[:8] + buttons[-1:]
     kb = VKKeyboardBuilder(inline=True)
     for label, data in buttons:
         kind, _, rest = data.partition(":")
@@ -42,15 +47,27 @@ def _keyboard(step: dict) -> str | None:
             fmt, _, day = rest.partition(":")
             payload["fmt"] = fmt
             payload["date"] = day
-        elif kind in {"cert_ev", "cert_cf", "cert_cx", "cert_mv"}:
+        elif kind in {"cert_ev", "cert_card", "cert_cf", "cert_cx", "cert_mv"}:
             payload["id"] = int(rest)
         kb.button(label[:40], payload)
-    kb.adjust(1)
+    if layout == "dates" and len(buttons) > 1:
+        n = len(buttons) - 1
+        widths = [2] * (n // 2)
+        if n % 2:
+            widths.append(1)
+        widths.append(1)
+        kb.adjust(*widths)
+    else:
+        kb.adjust(1)
     return kb.as_json()
 
 
 async def _send(client, peer_id: int, step: dict) -> None:
-    await client.send_message(peer_id, step["text"], keyboard=_keyboard(step))
+    await client.send_message(
+        peer_id,
+        format_vk_text(step.get("text") or ""),
+        keyboard=_keyboard(step),
+    )
 
 
 def is_certificate_ref(raw_ref: str, ref_source: str = "") -> bool:
@@ -81,7 +98,7 @@ async def handle_incoming(
     payload: dict | None = None,
 ) -> bool:
     """True — сообщение сертификата обработано и дальше по меню идти не нужно."""
-    if cmd in {"cert_fmt", "cert_day", "cert_ev", "cert_cf", "cert_cx", "cert_mv"}:
+    if cmd in {"cert_fmt", "cert_day", "cert_card", "cert_ev", "cert_cf", "cert_cx", "cert_mv"}:
         await _on_command(client, peer_id, vk_id, cmd, payload or {})
         return True
     session = get_draft(vk_id=vk_id)
@@ -126,7 +143,9 @@ async def handle_incoming(
         code = session.get("code") or ""
         await client.send_message(
             peer_id,
-            PHOTO_ASK_TEMPLATE.format(code=code) if code else "Пришли фото сертификата.",
+            format_vk_text(
+                PHOTO_ASK_TEMPLATE.format(code=code) if code else "Пришли фото сертификата 📸"
+            ),
         )
         return True
     if state == "need_name":
@@ -158,6 +177,13 @@ async def _on_command(client, peer_id: int, vk_id: int, cmd: str, payload: dict)
             await client.send_message(peer_id, "Начни сертификат по ссылке со страницы ещё раз.")
             return
         step = await ask_events(session, str(payload.get("fmt") or ""), str(payload.get("date") or ""))
+        await _send(client, peer_id, step)
+        return
+    if cmd == "cert_card":
+        if not session:
+            await client.send_message(peer_id, "Начни сертификат по ссылке со страницы ещё раз.")
+            return
+        step = await show_event_card(session, int(payload.get("id") or 0))
         await _send(client, peer_id, step)
         return
     if cmd == "cert_ev":

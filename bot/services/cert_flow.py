@@ -39,14 +39,15 @@ from bot.services.cert_registry import (
 from bot.services.cert_texts import (
     ALREADY_BOOKED_TEXT,
     APPROVED_TEXT,
-    BRING_TEXT,
+    BACK_DATE_BUTTON,
+    BACK_FORMAT_BUTTON,
+    BOOK_BUTTON,
     CANCELLED_TEXT,
     CAP_TEXT,
-    CONFIRMED_TEXT,
-    DATE_ASK_TEXT,
     EMPTY_DATES_TEXT,
-    EVENT_ASK_TEXT,
     FORMAT_ASK_TEXT,
+    FORMAT_BUTTONS,
+    FORMAT_LABELS,
     JACKPOT_TEXT,
     MISMATCH_TEXT,
     NAME_ASK_TEXT,
@@ -59,20 +60,18 @@ from bot.services.cert_texts import (
     RESERVE_PENDING_TEXT,
     TRANSFER_TEXT,
     UNAVAILABLE_TEXT,
-    WARN_TEXT,
+    confirmed_caption,
+    date_ask_text,
+    event_card_caption,
+    reserved_caption,
 )
 from bot.services.sheets import get_event_by_id, load_events
 from bot.utils.reminder_schedule import plan_booking_reminders
 from bot.utils.show_formats import CERTIFICATE
-from bot.utils.ticket import parse_event_datetime
+from bot.utils.ticket import format_date, parse_event_datetime
 
 logger = logging.getLogger(__name__)
 
-FORMAT_LABELS = {
-    "hitloto": "Хитлото",
-    "best": "BEST",
-    "elka": "Елка для взрослых",
-}
 _EXPIRE_OK = {
     "not_found",
     "already_expired",
@@ -83,8 +82,27 @@ _EXPIRE_OK = {
 }
 
 
-def _step(text: str, *, expect: str = "none", buttons: list[tuple[str, str]] | None = None) -> dict[str, Any]:
-    return {"text": text, "expect": expect, "buttons": buttons or []}
+def _step(
+    text: str,
+    *,
+    expect: str = "none",
+    buttons: list[tuple[str, str]] | None = None,
+    screen: str = "text",
+    event: dict[str, Any] | None = None,
+    event_format: str | None = None,
+    layout: str | None = None,
+    html: bool = True,
+) -> dict[str, Any]:
+    return {
+        "text": text,
+        "expect": expect,
+        "buttons": buttons or [],
+        "screen": screen,
+        "event": event,
+        "event_format": event_format,
+        "layout": layout,
+        "html": html,
+    }
 
 
 def _guest_error(exc: Exception) -> str:
@@ -304,8 +322,12 @@ async def save_phone(session: dict[str, Any], phone: str) -> dict[str, Any]:
 
 
 async def ask_format() -> dict[str, Any]:
-    buttons = [(FORMAT_LABELS[fmt], f"cert_fmt:{fmt}") for fmt in SHOW_FORMATS]
+    buttons = [(label, f"cert_fmt:{fmt}") for label, fmt in FORMAT_BUTTONS]
     return _step(FORMAT_ASK_TEXT, expect="buttons", buttons=buttons)
+
+
+def _date_button_label(day: str) -> str:
+    return format_date(day)
 
 
 async def ask_dates(session: dict[str, Any], event_format: str) -> dict[str, Any]:
@@ -319,11 +341,18 @@ async def ask_dates(session: dict[str, Any], event_format: str) -> dict[str, Any
             dates.append(day)
     update_session(session["id"], event_format=event_format, state="need_date")
     if not dates:
-        buttons = [(FORMAT_LABELS[fmt], f"cert_fmt:{fmt}") for fmt in SHOW_FORMATS]
+        buttons = [(label, f"cert_fmt:{fmt}") for label, fmt in FORMAT_BUTTONS]
         return _step(EMPTY_DATES_TEXT, expect="buttons", buttons=buttons)
-    buttons = [(day, f"cert_day:{event_format}:{day}") for day in dates[:12]]
-    buttons.append(("Другой формат", "cert_fmt:back"))
-    return _step(DATE_ASK_TEXT, expect="buttons", buttons=buttons)
+    buttons = [(_date_button_label(day), f"cert_day:{event_format}:{day}") for day in dates[:20]]
+    buttons.append((BACK_FORMAT_BUTTON, "cert_fmt:back"))
+    return _step(
+        date_ask_text(event_format),
+        expect="buttons",
+        buttons=buttons,
+        screen="dates",
+        event_format=event_format,
+        layout="dates",
+    )
 
 
 async def ask_events(session: dict[str, Any], event_format: str, day: str) -> dict[str, Any]:
@@ -332,12 +361,49 @@ async def ask_events(session: dict[str, Any], event_format: str, day: str) -> di
     if not matched:
         return await ask_dates(session, event_format)
     update_session(session["id"], state="need_event")
+    if len(matched) == 1:
+        event = matched[0]
+        return _step(
+            event_card_caption(event, fmt=event_format),
+            expect="buttons",
+            buttons=[
+                (BOOK_BUTTON, f"cert_ev:{int(event['id'])}"),
+                (BACK_DATE_BUTTON, f"cert_fmt:{event_format}"),
+            ],
+            screen="event_card",
+            event=event,
+            event_format=event_format,
+        )
     buttons = []
     for event in matched[:8]:
-        label = f"{event.get('time') or ''} {event.get('location') or ''}".strip()
-        buttons.append((label[:40] or "Шоу", f"cert_ev:{int(event['id'])}"))
-    buttons.append(("Другая дата", f"cert_fmt:{event_format}"))
-    return _step(EVENT_ASK_TEXT, expect="buttons", buttons=buttons)
+        label = f"{event.get('time') or ''} · {event.get('location') or ''}".strip(" ·")
+        buttons.append((label[:40] or "Шоу", f"cert_card:{int(event['id'])}"))
+    buttons.append((BACK_DATE_BUTTON, f"cert_fmt:{event_format}"))
+    return _step(
+        "На эту дату несколько шоу — выбери нужное 👇",
+        expect="buttons",
+        buttons=buttons,
+        event_format=event_format,
+    )
+
+
+async def show_event_card(session: dict[str, Any], event_id: int) -> dict[str, Any]:
+    event = await get_event_by_id(int(event_id))
+    if not event or event.get("format") not in SHOW_FORMATS:
+        return await ask_format()
+    fmt = event.get("format") or session.get("event_format") or ""
+    update_session(session["id"], state="need_event", event_format=fmt)
+    return _step(
+        event_card_caption(event, fmt=fmt),
+        expect="buttons",
+        buttons=[
+            (BOOK_BUTTON, f"cert_ev:{int(event['id'])}"),
+            (BACK_DATE_BUTTON, f"cert_fmt:{fmt}"),
+        ],
+        screen="event_card",
+        event=event,
+        event_format=fmt,
+    )
 
 
 def _event_iso(date_str: str, time_str: str) -> tuple[str, str]:
@@ -395,7 +461,7 @@ async def reserve_event(session: dict[str, Any], event_id: int) -> dict[str, Any
     ids = certificate_booking_ids(int(event["id"]))
     if int(booking_id) not in ids[:CERT_CAP]:
         update_booking_status(booking_id, "cancelled")
-        return _step(CAP_TEXT)
+        return _step(f"😔 Увы, {CAP_TEXT}.")
 
     booking_ref = safe_ref(f"booking:{int(booking_id)}")
     seats_ref = safe_ref(f"seat_hold:{int(booking_id)}")
@@ -469,16 +535,13 @@ async def reserve_event(session: dict[str, Any], event_id: int) -> dict[str, Any
         state="booked",
         registry_confirmed=False,
     )
-    when = f"{event['date']} в {event['time']}"
-    where = ", ".join(part for part in (event.get("location"), event.get("address")) if part)
-    text = (
-        f"Бронь на двоих записана: {when}.\n{where}\n\n"
-        f"{WARN_TEXT}\n\n{BRING_TEXT}"
-    )
     return _step(
-        text,
+        reserved_caption(event, fmt=event.get("format") or ""),
         expect="buttons",
         buttons=_booking_buttons(int(booking_id)),
+        screen="event_card",
+        event=event,
+        event_format=event.get("format"),
     )
 
 
@@ -517,9 +580,9 @@ async def confirm_booking(booking_id: int, *, telegram_id: int | None = None, vk
     if not booking or not session or not _owns(session, booking, telegram_id=telegram_id, vk_id=vk_id):
         return _step("Бронь не найдена.")
     if booking["status"] == "confirmed" and session.get("registry_confirmed"):
-        return _step(CONFIRMED_TEXT)
+        return _step(confirmed_caption(booking))
     if booking["status"] not in {"booked", "confirmed"}:
-        return _step("Эта бронь уже неактивна.")
+        return _step("Эта бронь уже неактивна 🙂")
     payload = _booking_payload(session, booking_id)
     try:
         await registry.confirm(payload)
@@ -532,7 +595,7 @@ async def confirm_booking(booking_id: int, *, telegram_id: int | None = None, vk
     if booking["status"] != "confirmed":
         update_booking_status(booking_id, "confirmed")
     update_session(session["id"], registry_confirmed=True, state="booked")
-    return _step(CONFIRMED_TEXT)
+    return _step(confirmed_caption(booking))
 
 
 async def cancel_booking(booking_id: int, *, telegram_id: int | None = None, vk_id: int | None = None) -> dict[str, Any]:

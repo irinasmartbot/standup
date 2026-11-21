@@ -37,14 +37,13 @@ async def send_certificate_reminder(row, reminder_type: str) -> None:
     date_str = format_date(event_date)
     if reminder_type == "day":
         text = (
-            f"{name}, подтверди или отмени бронь по сертификату "
-            f"на {date_str} в {event_time}.\n\n"
+            f"{name}, сегодня шоу по сертификату — {date_str} в {event_time} 🎫\n\n"
             f"Нажми «{CONFIRM_BUTTON}».\n\n{WARN_TEXT}\n\n{BRING_TEXT}"
         )
     else:
         text = (
-            f"Напоминание о брони по сертификату на {date_str} в {event_time}.\n\n"
-            f"Нажми «{CONFIRM_BUTTON}», иначе бронь снимут, а номер останется свободным.\n\n"
+            f"Напоминание: бронь по сертификату на {date_str} в {event_time} 😊\n\n"
+            f"Нажми «{CONFIRM_BUTTON}», иначе снимем бронь, а номер останется свободным.\n\n"
             f"{BRING_TEXT}"
         )
     await bot.send_message(int(telegram_id), text, reply_markup=_kb(int(booking_id)))

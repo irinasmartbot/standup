@@ -110,7 +110,7 @@ async def send_vk_booking_reminder(
         from bot.services.cert_texts import BRING_TEXT, CONFIRM_BUTTON, WARN_TEXT
 
         text = (
-            f"{name}, бронь по сертификату на {date_str} в {event_time}.\n\n"
+            f"{name}, бронь по сертификату на {date_str} в {event_time} 🎫\n\n"
             f"Нажми «{CONFIRM_BUTTON}».\n\n{WARN_TEXT}\n\n{BRING_TEXT}"
         )
     elif reminder_type == "day":

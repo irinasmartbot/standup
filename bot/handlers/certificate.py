@@ -28,10 +28,12 @@ from bot.services.cert_flow import (
     review,
     save_name,
     save_phone,
+    show_event_card,
     submit_number,
     submit_photo,
 )
 from bot.services.cert_texts import APPROVED_TEXT, PHOTO_ASK_TEMPLATE, REJECT_TEXT
+from bot.utils.reply_keyboard import clear_reply_keyboard, mark_reply_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -54,10 +56,16 @@ _EXPECT_STATE = {
 }
 
 
-def _markup(step: dict):
+def _parse_mode(step: dict) -> str | None:
+    return "HTML" if step.get("html", True) else None
+
+
+def _markup(step: dict, *, chat_id: int | None = None):
     if step.get("expect") == "phone":
+        if chat_id:
+            mark_reply_keyboard(chat_id)
         return ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="Отправить телефон", request_contact=True)]],
+            keyboard=[[KeyboardButton(text="📱 Отправить телефон", request_contact=True)]],
             resize_keyboard=True,
             one_time_keyboard=True,
         )
@@ -67,17 +75,100 @@ def _markup(step: dict):
     kb = InlineKeyboardBuilder()
     for label, data in buttons:
         kb.button(text=label, callback_data=data)
-    kb.adjust(1)
+    layout = step.get("layout")
+    if layout == "dates" and len(buttons) > 1:
+        n = len(buttons) - 1
+        widths = [2] * (n // 2)
+        if n % 2:
+            widths.append(1)
+        widths.append(1)
+        kb.adjust(*widths)
+    else:
+        kb.adjust(1)
     return kb.as_markup()
 
 
-async def _show(message: Message, state: FSMContext, step: dict) -> None:
+async def _purge_cert_ui(chat_id: int, state: FSMContext, extra=()) -> None:
+    data = await state.get_data()
+    ids = list(data.get("cert_ui") or [])
+    for mid in extra:
+        if mid:
+            ids.append(int(mid))
+    seen: set[int] = set()
+    for mid in ids:
+        if mid in seen:
+            continue
+        seen.add(mid)
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+    await state.update_data(cert_ui=[])
+
+
+def _format_cover(event_format: str):
+    from bot.handlers.formats import _elka_photo, _hitloto_photo, _random_format_photo
+
+    if event_format == "hitloto":
+        return _hitloto_photo()
+    if event_format == "elka":
+        return _elka_photo()
+    return _random_format_photo()
+
+
+async def _send_step(message: Message, step: dict):
+    markup = _markup(step, chat_id=message.chat.id)
+    parse_mode = _parse_mode(step)
+    text = step.get("text") or ""
+    screen = step.get("screen") or "text"
+    if screen == "dates":
+        photo = _format_cover(str(step.get("event_format") or ""))
+        if photo:
+            try:
+                return await message.answer_photo(
+                    photo=photo,
+                    caption=text,
+                    reply_markup=markup,
+                    parse_mode=parse_mode,
+                )
+            except Exception:
+                logger.exception("certificate dates cover failed")
+    if screen == "event_card":
+        event = step.get("event") or {}
+        from bot.utils.event_poster import tg_send_event_card
+
+        return await tg_send_event_card(
+            message,
+            event.get("image"),
+            caption=text,
+            reply_markup=markup,
+            parse_mode=parse_mode,
+        )
+    return await message.answer(text, reply_markup=markup, parse_mode=parse_mode)
+
+
+async def _show(
+    message: Message,
+    state: FSMContext,
+    step: dict,
+    *,
+    extra_delete=(),
+    drop_user: bool = False,
+) -> None:
     expect = step.get("expect") or "none"
     if expect in _EXPECT_STATE:
         await state.set_state(_EXPECT_STATE[expect])
-    else:
-        await state.clear()
-    await message.answer(step["text"], reply_markup=_markup(step))
+    elif expect == "none":
+        await state.set_state(None)
+    extra = list(extra_delete)
+    if drop_user and message.message_id:
+        extra.append(message.message_id)
+    await _purge_cert_ui(message.chat.id, state, extra)
+    if step.get("expect") != "phone":
+        await clear_reply_keyboard(message)
+    sent = await _send_step(message, step)
+    if sent:
+        await state.update_data(cert_ui=[sent.message_id])
 
 
 async def begin_telegram(message: Message, state: FSMContext, raw: str) -> None:
@@ -134,11 +225,6 @@ async def _delete_mod_chat_messages(chat_id: int, *message_ids) -> None:
             pass
 
 
-async def _set_guest_state(storage, user_id: int, new_state) -> None:
-    key = StorageKey(bot_id=bot.id, chat_id=int(user_id), user_id=int(user_id))
-    await storage.set_state(key, new_state)
-
-
 @router.message(CertState.number, F.text, F.chat.type == "private")
 async def on_number(message: Message, state: FSMContext):
     session = get_draft(telegram_id=message.from_user.id)
@@ -146,7 +232,7 @@ async def on_number(message: Message, state: FSMContext):
         await state.clear()
         return
     step = await submit_number(session, message.text or "")
-    await _show(message, state, step)
+    await _show(message, state, step, drop_user=True)
 
 
 @router.message(CertState.photo, F.photo, F.chat.type == "private")
@@ -192,7 +278,7 @@ async def on_name(message: Message, state: FSMContext):
         await state.clear()
         return
     step = await save_name(session, message.text or "")
-    await _show(message, state, step)
+    await _show(message, state, step, drop_user=True)
 
 
 @router.message(CertState.phone, F.text | F.contact, F.chat.type == "private")
@@ -203,7 +289,7 @@ async def on_phone(message: Message, state: FSMContext):
         return
     raw = message.contact.phone_number if message.contact else (message.text or "")
     step = await save_phone(session, raw)
-    await _show(message, state, step)
+    await _show(message, state, step, drop_user=True)
 
 
 async def _draft_or_hint(call: CallbackQuery) -> dict | None:
@@ -224,7 +310,7 @@ async def on_format(call: CallbackQuery, state: FSMContext):
         step = await ask_format()
     else:
         step = await ask_dates(session, fmt)
-    await _show(call.message, state, step)
+    await _show(call.message, state, step, extra_delete=(call.message.message_id,))
     await call.answer()
 
 
@@ -235,7 +321,17 @@ async def on_day(call: CallbackQuery, state: FSMContext):
     if not session:
         return
     step = await ask_events(session, fmt, day)
-    await _show(call.message, state, step)
+    await _show(call.message, state, step, extra_delete=(call.message.message_id,))
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("cert_card:"))
+async def on_card(call: CallbackQuery, state: FSMContext):
+    session = await _draft_or_hint(call)
+    if not session:
+        return
+    step = await show_event_card(session, int(call.data.split(":", 1)[1]))
+    await _show(call.message, state, step, extra_delete=(call.message.message_id,))
     await call.answer()
 
 
@@ -246,7 +342,7 @@ async def on_event(call: CallbackQuery, state: FSMContext):
         return
     event_id = int(call.data.split(":", 1)[1])
     step = await reserve_event(session, event_id)
-    await _show(call.message, state, step)
+    await _show(call.message, state, step, extra_delete=(call.message.message_id,))
     await call.answer()
 
 
@@ -254,7 +350,7 @@ async def on_event(call: CallbackQuery, state: FSMContext):
 async def on_confirm(call: CallbackQuery, state: FSMContext):
     booking_id = int(call.data.split(":", 1)[1])
     step = await confirm_booking(booking_id, telegram_id=call.from_user.id)
-    await _show(call.message, state, step)
+    await _show(call.message, state, step, extra_delete=(call.message.message_id,))
     await call.answer()
 
 
@@ -266,10 +362,15 @@ async def on_cancel(call: CallbackQuery, state: FSMContext):
 
 async def cancel_for_telegram(call: CallbackQuery, booking_id: int, state: FSMContext | None = None) -> None:
     step = await cancel_booking(booking_id, telegram_id=call.from_user.id)
+    extra = (call.message.message_id,) if call.message else ()
     if state is not None:
-        await _show(call.message, state, step)
+        await _show(call.message, state, step, extra_delete=extra)
     else:
-        await call.message.answer(step["text"], reply_markup=_markup(step))
+        await call.message.answer(
+            step["text"],
+            reply_markup=_markup(step, chat_id=call.message.chat.id),
+            parse_mode=_parse_mode(step),
+        )
     await call.answer()
 
 
@@ -277,7 +378,7 @@ async def cancel_for_telegram(call: CallbackQuery, booking_id: int, state: FSMCo
 async def on_move(call: CallbackQuery, state: FSMContext):
     booking_id = int(call.data.split(":", 1)[1])
     step = await begin_transfer(booking_id, telegram_id=call.from_user.id)
-    await _show(call.message, state, step)
+    await _show(call.message, state, step, extra_delete=(call.message.message_id,))
     await call.answer()
 
 
@@ -291,11 +392,23 @@ async def _notify_guest(session: dict, text: str, *, approve: bool, storage) -> 
     if not guest_id:
         return
     guest_state = CertState.name if approve else CertState.photo
+    key = StorageKey(bot_id=bot.id, chat_id=int(guest_id), user_id=int(guest_id))
     try:
-        await _set_guest_state(storage, int(guest_id), guest_state)
+        await storage.set_state(key, guest_state)
+        data = await storage.get_data(key)
+        for mid in data.get("cert_ui") or []:
+            try:
+                await bot.delete_message(int(guest_id), int(mid))
+            except Exception:
+                pass
     except Exception:
         logger.exception("certificate guest fsm failed telegram_id=%s", guest_id)
-    await bot.send_message(int(guest_id), text)
+        data = {}
+    sent = await bot.send_message(int(guest_id), text, parse_mode="HTML")
+    try:
+        await storage.set_data(key, {**data, "cert_ui": [sent.message_id]})
+    except Exception:
+        logger.exception("certificate guest ui save failed telegram_id=%s", guest_id)
 
 
 async def _mark_card(
