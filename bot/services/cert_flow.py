@@ -43,6 +43,7 @@ from bot.services.cert_texts import (
     BOOK_BUTTON,
     CANCELLED_TEXT,
     CAP_TEXT,
+    CONFIRM_TOO_EARLY_TEXT,
     EMPTY_DATES_TEXT,
     FORMAT_ASK_TEXT,
     FORMAT_BUTTONS,
@@ -642,6 +643,10 @@ async def confirm_booking(booking_id: int, *, telegram_id: int | None = None, vk
         return _step(confirmed_caption(booking))
     if booking["status"] not in {"booked", "confirmed"}:
         return _step("Эта бронь уже неактивна 🙂")
+    from bot.utils.booking_texts import ticket_window_open
+
+    if booking["status"] == "booked" and not ticket_window_open(booking.get("event_date") or ""):
+        return _step(CONFIRM_TOO_EARLY_TEXT)
     payload = _booking_payload(session, booking_id)
     try:
         await registry.confirm(payload)

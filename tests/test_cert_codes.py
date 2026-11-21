@@ -1,5 +1,6 @@
 """Номер и стартовая ссылка сертификата не ходят в сеть."""
 
+from datetime import timedelta
 import unittest
 
 from bot.services.cert_codes import (
@@ -95,6 +96,54 @@ class CertificateCodeTests(unittest.TestCase):
         self.assertNotIn("Такой номер не найден", NUMBER_NOT_FOUND_TEXT)
         self.assertIn("QR", NUMBER_NOT_FOUND_TEXT)
         self.assertIn("MSS-000001", NUMBER_NOT_FOUND_TEXT)
+
+    def test_my_bookings_confirm_only_in_ticket_window(self):
+        import os
+
+        os.environ["BOT_TOKEN"] = "123456789:" + ("A" * 35)
+        from bot.handlers.start import _booking_command_kb
+        from bot.utils.ticket import now_msk
+        from bot.vk.my_bookings import bookings_keyboard
+
+        today = now_msk().date()
+        far = (today + timedelta(days=10)).strftime("%d.%m.%Y")
+        near = (today + timedelta(days=1)).strftime("%d.%m.%Y")
+
+        def _row(event_date: str):
+            return (
+                1439,
+                "certificate",
+                "booked",
+                event_date,
+                "20:30",
+                "м. Курская",
+                "Temple Bar",
+                2,
+                None,
+                None,
+                "Irina",
+            )
+
+        def _tg_labels(event_date: str) -> list[str]:
+            markup = _booking_command_kb(_row(event_date))
+            return [btn.text for row in markup.inline_keyboard for btn in row]
+
+        far_tg = _tg_labels(far)
+        self.assertNotIn("Подтвердить бронь", far_tg)
+        self.assertIn("Отменить бронь", far_tg)
+        self.assertIn("Перенести дату", far_tg)
+
+        near_tg = _tg_labels(near)
+        self.assertIn("Подтвердить бронь", near_tg)
+        self.assertIn("Отменить бронь", near_tg)
+
+        far_vk = bookings_keyboard(_row(far))
+        self.assertNotIn("Подтвердить бронь", far_vk)
+        self.assertIn("Отменить бронь", far_vk)
+        self.assertIn("Перенести дату", far_vk)
+
+        near_vk = bookings_keyboard(_row(near))
+        self.assertIn("Подтвердить бронь", near_vk)
 
 
 if __name__ == "__main__":

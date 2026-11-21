@@ -237,7 +237,8 @@ def _ticket_command_photo(row):
 
 
 def _booking_command_kb(row, page: int = 0, total: int = 1):
-    booking_id, format_name, status, *_ = row
+    booking_id, format_name, status, event_date, *_ = row
+    from bot.utils.booking_texts import ticket_window_open
     from bot.utils.show_formats import FREE_BOOKING_FORMATS
 
     kb = InlineKeyboardBuilder()
@@ -246,10 +247,12 @@ def _booking_command_kb(row, page: int = 0, total: int = 1):
 
     if format_name == "certificate":
         if status == "booked":
-            kb.button(text="Подтвердить бронь", callback_data=f"cert_cf:{booking_id}")
+            if ticket_window_open(event_date):
+                kb.button(text="Подтвердить бронь", callback_data=f"cert_cf:{booking_id}")
+                action_count += 1
             kb.button(text="Отменить бронь", callback_data=f"cert_cx:{booking_id}")
             kb.button(text="Перенести дату", callback_data=f"cert_mv:{booking_id}")
-            action_count += 3
+            action_count += 2
     elif status == "booked":
         if format_name == "rozygrysh":
             kb.button(text="Что, если я хочу прийти не один?", callback_data="rz_not_alone")
