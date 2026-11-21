@@ -118,7 +118,7 @@ async def handle_incoming(
     if not session and (text or "").strip().casefold() in {"сертификат", "сертификаты"}:
         step = await begin(
             channel="vk",
-            raw="msscert",
+            raw="certificate",
             vk_id=vk_id,
             peer_id=peer_id,
         )

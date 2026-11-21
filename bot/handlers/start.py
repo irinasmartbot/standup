@@ -507,10 +507,10 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
 
     from bot.services.cert_codes import looks_like_certificate_start
 
-    if looks_like_certificate_start(raw_payload):
+    if looks_like_certificate_start(raw_payload) or payload_key == "certificate":
         from bot.handlers.certificate import begin_telegram
 
-        await begin_telegram(message, state, raw_payload)
+        await begin_telegram(message, state, "certificate")
         return
 
     if payload_key == "standup_rozygr":

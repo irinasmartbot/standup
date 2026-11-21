@@ -57,15 +57,14 @@ https://vk.ru/app54704296#flow=new_stata_all
 https://go.moscowstandupshow.ru/vk-mini/start/new_stata_all
 ```
 
-Бронь по сертификату с сайта (как Telegram `?start=msscert_...`). Кнопки в меню mini app нет. Прямой `write-` с внешнего сайта VK не открывает диалог — только mini app. В WordPress поле VK:
+Бронь по сертификату с сайта. Без токена и без номера в ссылке — только приветствие и ввод номера. Кнопки в меню mini app нет. Прямой `write-` с внешнего сайта не открывает диалог. В WordPress:
 
 ```text
-https://vk.ru/app54704296_-225298932#flow=certificate
+https://telegram.me/StandUp_Show_bot?start=certificate
 https://vk.ru/app54704296#flow=certificate
-https://go.moscowstandupshow.ru/vk-mini/start/certificate
 ```
 
-Сайт дописывает `?ref=msscert_ТОКЕН`. Mini app читает токен из hash, query и `vk_ref`.
+VK ссылка без хвостов `?ref=` / `?ref_source=`.
 
 На ПК ссылка с `_-225298932` иногда теряет hash и открывает общее меню — тогда короткая без группы. Это не участие гостя (`#flow=offline_gift`) и не розыгрыш за репост (`#flow=raffle`).
 

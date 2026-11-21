@@ -27,7 +27,6 @@ from bot.db.crud import create_booking, update_booking_status
 from bot.services.cert_codes import (
     is_preview_code,
     normalize_certificate_code,
-    parse_certificate_start,
     safe_ref,
 )
 from bot.services.cert_registry import (
@@ -149,11 +148,8 @@ async def begin(
 ) -> dict[str, Any]:
     if not postgres_ready() or not registry.configured():
         return _step(UNAVAILABLE_TEXT)
-    token, code_raw = parse_certificate_start(raw)
-    if not token and not code_raw and ref_source.casefold() == "mss_certificate":
-        token = (raw or "").strip()
     close_drafts(telegram_id=telegram_id, vk_id=vk_id)
-    session = insert_session(
+    insert_session(
         code="",
         channel="vk" if channel == "vk" else "telegram",
         telegram_id=telegram_id,
@@ -161,21 +157,6 @@ async def begin(
         peer_id=peer_id,
         state="await_number",
     )
-    if token:
-        try:
-            data = await registry.resolve(handoff_token=token)
-        except (RegistryNotConfigured, RegistryTemporary, RegistryRefusal) as exc:
-            if isinstance(exc, RegistryRefusal) and exc.code in {
-                "not_found",
-                "unknown_code",
-                "missing_code",
-            }:
-                return _step(NUMBER_NOT_FOUND_TEXT, expect="number")
-            update_session(session["id"], state="closed")
-            return _step(_guest_error(exc))
-        return await _accept_resolved(session, data, typed="")
-    if code_raw:
-        return await submit_number(session, code_raw)
     return _step(START_TEXT, expect="number")
 
 

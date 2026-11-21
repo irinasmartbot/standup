@@ -1182,6 +1182,10 @@ def test_vk_certificate_flow():
     assert parse_mini_app_flow("#flow=certificate") == "certificate"
     assert parse_mini_app_flow("flow=certificate") == "certificate"
     assert parse_mini_app_flow("msscert") == "certificate"
+    from bot.services.cert_codes import looks_like_certificate_start, parse_certificate_start
+
+    assert looks_like_certificate_start("certificate")
+    assert parse_certificate_start("certificate") == ("", "")
     assert "certificate" in FLOWS
     assert "certificate" in MINI_APP_DIRECT_FLOWS
     assert "certificate" not in MINI_APP_VISIBLE_FLOWS
@@ -1210,6 +1214,7 @@ def test_vk_certificate_flow():
     gift_at = body.find("get_offline_gift_today_events")
     assert cert_at != -1 and gift_at != -1 and cert_at < gift_at
     assert "begin_from_ref" in body[cert_at:gift_at]
+    assert '"certificate", ""' in body[cert_at:gift_at]
     print("vk certificate flow: OK")
 
 

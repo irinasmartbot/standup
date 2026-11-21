@@ -823,9 +823,7 @@ async def _send_flow_chain_body(
     if flow_key == "certificate":
         from bot.vk.certificate import begin_from_ref
 
-        raw_ref = (cert_ref or "").strip() or "msscert"
-        source = (cert_source or "").strip() or "mss_certificate"
-        await begin_from_ref(client, int(vk_id), int(vk_id), raw_ref, source)
+        await begin_from_ref(client, int(vk_id), int(vk_id), "certificate", "")
         return
 
     from bot.db.crud import get_offline_gift_today_events
@@ -2210,22 +2208,18 @@ async def mini_app_start(request: web.Request) -> web.Response:
         raise web.HTTPNotFound(text="Unknown VK Mini App flow")
     cid = _request_cid(request)
     source = _request_source(request)
-    extra: dict[str, str] = {}
-    raw_ref = str(request.query.get("ref") or "").strip()
-    raw_ref_source = str(request.query.get("ref_source") or "").strip()
-    if flow_key == "certificate":
-        extra["ref"] = raw_ref or "msscert"
-        extra["ref_source"] = raw_ref_source or "mss_certificate"
     _remember_mini_flow(request, flow_key)
     settings = load_vk_settings()
-    target = _mini_app_vk_url(
-        settings,
-        flow_key,
-        short=True,
-        cid=cid,
-        source=source,
-        extra=extra or None,
-    )
+    if flow_key == "certificate":
+        target = _mini_app_vk_url(settings, flow_key, short=True)
+    else:
+        target = _mini_app_vk_url(
+            settings,
+            flow_key,
+            short=True,
+            cid=cid,
+            source=source,
+        )
     return _html_response(_mobile_vk_jump_html(flow_key, target))
 
 
