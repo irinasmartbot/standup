@@ -19,6 +19,7 @@ from bot.services.cert_flow import (
     ask_dates,
     ask_events,
     ask_format,
+    ask_phone_manual,
     begin,
     begin_transfer,
     cancel_booking,
@@ -31,6 +32,7 @@ from bot.services.cert_flow import (
     show_event_card,
     submit_number,
     submit_photo,
+    use_saved_phone,
 )
 from bot.services.cert_texts import APPROVED_TEXT, PHOTO_ASK_TEMPLATE, REJECT_TEXT
 from bot.utils.reply_keyboard import clear_reply_keyboard, mark_reply_keyboard
@@ -292,12 +294,38 @@ async def on_phone(message: Message, state: FSMContext):
     await _show(message, state, step, drop_user=True)
 
 
+@router.message(CertState.pick, F.contact, F.chat.type == "private")
+@router.message(CertState.pick, F.text, F.chat.type == "private")
+async def on_pick_phone(message: Message, state: FSMContext):
+    session = get_draft(telegram_id=message.from_user.id)
+    if not session or session.get("state") != "need_phone":
+        raise SkipHandler
+    raw = message.contact.phone_number if message.contact else (message.text or "")
+    step = await save_phone(session, raw)
+    await _show(message, state, step, drop_user=True)
+
+
 async def _draft_or_hint(call: CallbackQuery) -> dict | None:
     session = draft_for(telegram_id=call.from_user.id)
     if session:
         return session
     await call.answer("Начни сертификат по ссылке со страницы ещё раз", show_alert=True)
     return None
+
+
+@router.callback_query(F.data.startswith("cert_ph:"))
+async def on_phone_choice(call: CallbackQuery, state: FSMContext):
+    session = await _draft_or_hint(call)
+    if not session:
+        return
+    choice = call.data.split(":", 1)[1]
+    if choice == "ok":
+        step = await use_saved_phone(session)
+    else:
+        step = ask_phone_manual()
+    extra = (call.message.message_id,) if call.message else ()
+    await _show(call.message, state, step, extra_delete=extra)
+    await call.answer()
 
 
 @router.callback_query(F.data.startswith("cert_fmt:"))

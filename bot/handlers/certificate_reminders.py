@@ -10,7 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import bot
 from bot.db.crud import annul_booking, get_booked_for_reminders, update_reminder_flag
 from bot.services.cert_flow import expire_booking
-from bot.services.cert_texts import BRING_TEXT, CONFIRM_BUTTON, WARN_TEXT
+from bot.services.cert_texts import CONFIRM_BUTTON, reminder_24h_text, reminder_day_text
 from bot.utils.show_formats import CERTIFICATE
 from bot.utils.ticket import format_date, now_msk, parse_created_at, parse_event_datetime
 
@@ -32,21 +32,26 @@ async def send_certificate_reminder(row, reminder_type: str) -> None:
     name = row[2]
     event_date = row[3]
     event_time = row[4]
+    event_address = row[5] if len(row) > 5 else ""
+    event_location = row[6] if len(row) > 6 else ""
     if not telegram_id:
         return
     date_str = format_date(event_date)
+    location_line = f"📍 Локация {event_location}, {event_address}".strip(", ")
     if reminder_type == "day":
-        text = (
-            f"{name}, сегодня шоу по сертификату — {date_str} в {event_time} 🎫\n\n"
-            f"Нажми «{CONFIRM_BUTTON}».\n\n{WARN_TEXT}\n\n{BRING_TEXT}"
-        )
+        text = reminder_day_text(name=name, date_str=date_str, event_time=event_time)
     else:
-        text = (
-            f"Напоминание: бронь по сертификату на {date_str} в {event_time} 😊\n\n"
-            f"Нажми «{CONFIRM_BUTTON}», иначе снимем бронь, а номер останется свободным.\n\n"
-            f"{BRING_TEXT}"
+        text = reminder_24h_text(
+            name=name,
+            event_time=event_time,
+            location_line=location_line,
         )
-    await bot.send_message(int(telegram_id), text, reply_markup=_kb(int(booking_id)))
+    await bot.send_message(
+        int(telegram_id),
+        text,
+        reply_markup=_kb(int(booking_id)),
+        parse_mode="HTML",
+    )
 
 
 async def send_certificate_annulled(row) -> None:

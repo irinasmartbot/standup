@@ -52,23 +52,29 @@ from bot.services.cert_texts import (
     MISMATCH_TEXT,
     NAME_ASK_TEXT,
     NUMBER_ASK_TEXT,
+    NUMBER_NOT_FOUND_TEXT,
+    START_TEXT,
+    START_WORDS,
     PENDING_TEXT,
     PHONE_ASK_TEXT,
+    PHONE_CONFIRM_TEXT,
+    PHONE_OK_BUTTON,
+    PHONE_OTHER_BUTTON,
     PHOTO_ASK_TEMPLATE,
     PREVIEW_TEXT,
     REJECT_TEXT,
     RESERVE_PENDING_TEXT,
     TRANSFER_TEXT,
     UNAVAILABLE_TEXT,
+    booked_thanks_text,
     confirmed_caption,
     date_ask_text,
     event_card_caption,
-    reserved_caption,
 )
 from bot.services.sheets import get_event_by_id, load_events
 from bot.utils.reminder_schedule import plan_booking_reminders
 from bot.utils.show_formats import CERTIFICATE
-from bot.utils.ticket import format_date, parse_event_datetime
+from bot.utils.ticket import format_date, now_msk, parse_event_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +98,7 @@ def _step(
     event_format: str | None = None,
     layout: str | None = None,
     html: bool = True,
+    booking_id: int | None = None,
 ) -> dict[str, Any]:
     return {
         "text": text,
@@ -102,6 +109,7 @@ def _step(
         "event_format": event_format,
         "layout": layout,
         "html": html,
+        "booking_id": booking_id,
     }
 
 
@@ -111,11 +119,11 @@ def _guest_error(exc: Exception) -> str:
     if isinstance(exc, RegistryTemporary):
         return "Сайт сертификатов не ответил. Повтори то же действие через минуту."
     if isinstance(exc, RegistryRefusal):
-        if exc.http_status in {401, 403} or not exc.message:
-            if exc.code in {"not_found", "unknown_code"}:
-                return "Такой номер не найден."
-            return exc.message or "Этот номер сейчас нельзя использовать."
-        return exc.message
+        if exc.code in {"not_found", "unknown_code", "missing_code"}:
+            return NUMBER_NOT_FOUND_TEXT
+        if exc.http_status in {401, 403}:
+            return UNAVAILABLE_TEXT
+        return exc.message or "Этот номер сейчас нельзя использовать."
     return UNAVAILABLE_TEXT
 
 
@@ -157,12 +165,18 @@ async def begin(
         try:
             data = await registry.resolve(handoff_token=token)
         except (RegistryNotConfigured, RegistryTemporary, RegistryRefusal) as exc:
+            if isinstance(exc, RegistryRefusal) and exc.code in {
+                "not_found",
+                "unknown_code",
+                "missing_code",
+            }:
+                return _step(NUMBER_NOT_FOUND_TEXT, expect="number")
             update_session(session["id"], state="closed")
             return _step(_guest_error(exc))
         return await _accept_resolved(session, data, typed="")
     if code_raw:
         return await submit_number(session, code_raw)
-    return _step(NUMBER_ASK_TEXT, expect="number")
+    return _step(START_TEXT, expect="number")
 
 
 async def _accept_resolved(session: dict[str, Any], data: dict[str, Any], *, typed: str) -> dict[str, Any]:
@@ -185,6 +199,8 @@ async def _accept_resolved(session: dict[str, Any], data: dict[str, Any], *, typ
 
 
 async def submit_number(session: dict[str, Any], raw: str) -> dict[str, Any]:
+    if (raw or "").casefold().strip() in START_WORDS:
+        return _step(START_TEXT, expect="number")
     code = normalize_certificate_code(raw)
     if not code:
         return _step(NUMBER_ASK_TEXT, expect="number")
@@ -303,12 +319,47 @@ async def review(
     return session, REJECT_TEXT
 
 
+def _saved_phone(session: dict[str, Any]) -> str | None:
+    from bot.db.crud import get_last_phone
+    from bot.utils.phone import normalize_phone
+
+    if session.get("vk_id"):
+        return normalize_phone(get_last_phone(vk_id=int(session["vk_id"])))
+    if session.get("telegram_id"):
+        return normalize_phone(get_last_phone(int(session["telegram_id"])))
+    return None
+
+
+def ask_phone(session: dict[str, Any]) -> dict[str, Any]:
+    from html import escape
+
+    saved = _saved_phone(session)
+    if saved:
+        return _step(
+            PHONE_CONFIRM_TEXT.format(phone=escape(saved)),
+            expect="buttons",
+            buttons=[
+                (PHONE_OK_BUTTON, "cert_ph:ok"),
+                (PHONE_OTHER_BUTTON, "cert_ph:new"),
+            ],
+        )
+    return _step(PHONE_ASK_TEXT, expect="phone")
+
+
+def ask_phone_manual() -> dict[str, Any]:
+    return _step(PHONE_ASK_TEXT, expect="phone")
+
+
 async def save_name(session: dict[str, Any], name: str) -> dict[str, Any]:
     clean = " ".join((name or "").split())
     if len(clean) < 2 or len(clean) > 80:
         return _step(NAME_ASK_TEXT, expect="name")
-    update_session(session["id"], name=clean, state="need_phone")
-    return _step(PHONE_ASK_TEXT, expect="phone")
+    session = update_session(session["id"], name=clean, state="need_phone") or {
+        **session,
+        "name": clean,
+        "state": "need_phone",
+    }
+    return ask_phone(session)
 
 
 async def save_phone(session: dict[str, Any], phone: str) -> dict[str, Any]:
@@ -319,6 +370,13 @@ async def save_phone(session: dict[str, Any], phone: str) -> dict[str, Any]:
         return _step(PHONE_ASK_TEXT, expect="phone")
     update_session(session["id"], phone=clean, state="need_format")
     return await ask_format()
+
+
+async def use_saved_phone(session: dict[str, Any]) -> dict[str, Any]:
+    saved = _saved_phone(session)
+    if not saved:
+        return ask_phone_manual()
+    return await save_phone(session, saved)
 
 
 async def ask_format() -> dict[str, Any]:
@@ -535,24 +593,44 @@ async def reserve_event(session: dict[str, Any], event_id: int) -> dict[str, Any
         state="booked",
         registry_confirmed=False,
     )
+    try:
+        days_until = (
+            datetime.strptime(event["date"], "%d.%m.%Y").date() - now_msk().date()
+        ).days
+    except Exception:
+        days_until = 99
+    text = booked_thanks_text(event, fmt=event.get("format") or "", days_until=days_until)
+    if days_until <= 1:
+        from bot.utils.booking_texts import reminder_details_cut
+
+        location_line = (
+            f"📍 Локация {event.get('location') or ''}, {event.get('address') or ''}"
+        ).strip(", ")
+        text = f"{text}\n\n{reminder_details_cut(event_time=event.get('time') or '', location_line=location_line, guests=2)}"
     return _step(
-        reserved_caption(event, fmt=event.get("format") or ""),
+        text,
         expect="buttons",
-        buttons=_booking_buttons(int(booking_id)),
-        screen="event_card",
+        buttons=_booking_buttons(int(booking_id), include_confirm=days_until <= 1),
+        screen="text",
         event=event,
         event_format=event.get("format"),
+        booking_id=int(booking_id),
     )
 
 
-def _booking_buttons(booking_id: int) -> list[tuple[str, str]]:
+def _booking_buttons(booking_id: int, *, include_confirm: bool = False) -> list[tuple[str, str]]:
     from bot.services.cert_texts import CANCEL_BUTTON, CONFIRM_BUTTON, MOVE_BUTTON
 
-    return [
-        (CONFIRM_BUTTON, f"cert_cf:{int(booking_id)}"),
-        (CANCEL_BUTTON, f"cert_cx:{int(booking_id)}"),
-        (MOVE_BUTTON, f"cert_mv:{int(booking_id)}"),
-    ]
+    buttons = []
+    if include_confirm:
+        buttons.append((CONFIRM_BUTTON, f"cert_cf:{int(booking_id)}"))
+    buttons.extend(
+        [
+            (CANCEL_BUTTON, f"cert_cx:{int(booking_id)}"),
+            (MOVE_BUTTON, f"cert_mv:{int(booking_id)}"),
+        ]
+    )
+    return buttons
 
 
 def _owns(session: dict[str, Any] | None, booking: dict[str, Any], *, telegram_id: int | None, vk_id: int | None) -> bool:

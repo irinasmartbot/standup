@@ -2660,6 +2660,43 @@ def get_confirmed_raffle_past_for_cleanup():
             return [row[0] for row in cur.fetchall()]
 
 
+def get_manager_stata_booking_dates(
+    limit: int = 16,
+    *,
+    event_formats: tuple[str, ...] | list[str] | None = None,
+    booking_formats: tuple[str, ...] | list[str] | None = None,
+    statuses: tuple[str, ...] | list[str] | None = None,
+) -> list[str]:
+    """Ближайшие даты с бронями нужных форматов (кнопки менеджера)."""
+    if not _use_postgres():
+        return []
+    e_fmts = [str(x).strip().lower() for x in (event_formats or ()) if str(x).strip()]
+    b_fmts = [str(x).strip().lower() for x in (booking_formats or ()) if str(x).strip()]
+    status_list = [str(s).strip().lower() for s in (statuses or ("confirmed",)) if str(s).strip()]
+    if not e_fmts or not b_fmts:
+        return []
+    if not status_list:
+        status_list = ["confirmed"]
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT to_char(e.event_date, 'DD.MM.YYYY') AS event_date
+                FROM bookings b
+                JOIN events e ON e.id = b.event_id
+                WHERE e.event_date >= (now() AT TIME ZONE 'Europe/Moscow')::date
+                  AND e.format = ANY(%s)
+                  AND b.format = ANY(%s)
+                  AND b.status = ANY(%s)
+                GROUP BY e.event_date
+                ORDER BY e.event_date
+                LIMIT %s
+                """,
+                (e_fmts, b_fmts, status_list, int(limit)),
+            )
+            return [row[0] for row in cur.fetchall() if row and row[0]]
+
+
 def get_manager_stata_dates(
     limit: int = 16,
     *,

@@ -107,12 +107,18 @@ async def send_vk_booking_reminder(
     date_str = format_date(event_date)
     certificate = booking_format == "certificate"
     if certificate:
-        from bot.services.cert_texts import BRING_TEXT, CONFIRM_BUTTON, WARN_TEXT
+        from bot.services.cert_texts import reminder_24h_text, reminder_day_text
 
-        text = (
-            f"{name}, бронь по сертификату на {date_str} в {event_time} 🎫\n\n"
-            f"Нажми «{CONFIRM_BUTTON}».\n\n{WARN_TEXT}\n\n{BRING_TEXT}"
-        )
+        location_line = f"📍 Локация {event_location}, {event_address}".strip(", ")
+        if reminder_type == "day":
+            text = reminder_day_text(name=name, date_str=date_str, event_time=event_time)
+        else:
+            text = reminder_24h_text(
+                name=name,
+                event_time=event_time,
+                location_line=location_line,
+                expandable=False,
+            )
     elif reminder_type == "day":
         text = (
             f"{name}, мне необходимо подтвердить, либо отменить Вашу бронь "

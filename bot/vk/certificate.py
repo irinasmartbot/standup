@@ -11,6 +11,7 @@ from bot.services.cert_flow import (
     ask_dates,
     ask_events,
     ask_format,
+    ask_phone_manual,
     begin,
     begin_transfer,
     cancel_booking,
@@ -21,6 +22,7 @@ from bot.services.cert_flow import (
     show_event_card,
     submit_number,
     submit_photo,
+    use_saved_phone,
 )
 from bot.services.cert_texts import PHOTO_ASK_TEMPLATE
 from bot.vk.formatting import format_vk_text
@@ -47,6 +49,8 @@ def _keyboard(step: dict) -> str | None:
             fmt, _, day = rest.partition(":")
             payload["fmt"] = fmt
             payload["date"] = day
+        elif kind == "cert_ph":
+            payload["choice"] = rest
         elif kind in {"cert_ev", "cert_card", "cert_cf", "cert_cx", "cert_mv"}:
             payload["id"] = int(rest)
         kb.button(label[:40], payload)
@@ -98,7 +102,16 @@ async def handle_incoming(
     payload: dict | None = None,
 ) -> bool:
     """True — сообщение сертификата обработано и дальше по меню идти не нужно."""
-    if cmd in {"cert_fmt", "cert_day", "cert_card", "cert_ev", "cert_cf", "cert_cx", "cert_mv"}:
+    if cmd in {
+        "cert_fmt",
+        "cert_day",
+        "cert_card",
+        "cert_ev",
+        "cert_cf",
+        "cert_cx",
+        "cert_mv",
+        "cert_ph",
+    }:
         await _on_command(client, peer_id, vk_id, cmd, payload or {})
         return True
     session = get_draft(vk_id=vk_id)
@@ -164,6 +177,16 @@ async def handle_incoming(
 
 async def _on_command(client, peer_id: int, vk_id: int, cmd: str, payload: dict) -> None:
     session = get_draft(vk_id=vk_id)
+    if cmd == "cert_ph":
+        if not session:
+            await client.send_message(peer_id, "Начни сертификат по ссылке со страницы ещё раз.")
+            return
+        if str(payload.get("choice") or "") == "ok":
+            step = await use_saved_phone(session)
+        else:
+            step = ask_phone_manual()
+        await _send(client, peer_id, step)
+        return
     if cmd == "cert_fmt":
         if not session:
             await client.send_message(peer_id, "Начни сертификат по ссылке со страницы ещё раз.")

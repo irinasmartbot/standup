@@ -2,13 +2,13 @@
 
 - ?start=new_stata — Проверка материала (только подтверждённые)
 - ?start=new_stata_all — Проверка: все / подтверждённые / не подтвердили
-- ?start=new_stata_rozygr — розыгрыш (бронь на BEST, только подтверждённые)
+- ?start=new_stata_rozygr — розыгрыш и сертификаты (подтверждённые)
 """
 
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 from html import escape
 
 from aiogram import F, Router
@@ -17,7 +17,11 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.crud import get_manager_stata_bookings_for_date, get_manager_stata_dates
+from bot.db.crud import (
+    get_manager_stata_booking_dates,
+    get_manager_stata_bookings_for_date,
+    get_manager_stata_dates,
+)
 from bot.utils.phone import format_stata_phone
 from bot.utils.show_formats import MANAGER_STATA_FORMATS, RESIDENTS
 from bot.utils.ticket import now_msk
@@ -41,7 +45,7 @@ CHOOSE_DATE_TEXT_ALL = (
 )
 CHOOSE_DATE_TEXT_ROZYGR = (
     "Выбери дату, на которую нужно получить список гостей "
-    "с билетом по розыгрышу.\n\n"
+    "с билетом по розыгрышу и подтверждёнными бронями по сертификату.\n\n"
     "Если нужной даты нет — напиши в формате DD.MM.YYYY"
 )
 EMPTY_TEXT_PROVERKA = "Нет подтверждённых броней на указанную дату"
@@ -87,9 +91,30 @@ def _rolling_calendar_dates(count: int = ROZYGR_DATE_BUTTONS) -> list[str]:
     return [(today + timedelta(days=i)).strftime("%d.%m.%Y") for i in range(n)]
 
 
+def _parse_date_key(value: str):
+    try:
+        return datetime.strptime(value, "%d.%m.%Y")
+    except Exception:
+        return datetime.max
+
+
 def _dates_for_mode(mode: str) -> list[str]:
     if mode == "rozygr":
-        return _rolling_calendar_dates()
+        rolling = _rolling_calendar_dates()
+        booked = get_manager_stata_booking_dates(
+            event_formats=("best", "hitloto", "elka"),
+            booking_formats=("rozygrysh", "certificate"),
+            statuses=("confirmed",),
+            limit=16,
+        )
+        seen: set[str] = set()
+        merged: list[str] = []
+        for day in rolling + booked:
+            if day and day not in seen:
+                seen.add(day)
+                merged.append(day)
+        merged.sort(key=_parse_date_key)
+        return merged[:16]
     if mode in {"proverka", "all"}:
         return get_manager_stata_dates(event_formats=MANAGER_STATA_FORMATS)
     _, event_format, *_ = _mode_cfg(mode)

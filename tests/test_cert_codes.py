@@ -9,7 +9,17 @@ from bot.services.cert_codes import (
     parse_certificate_start,
     safe_ref,
 )
-from bot.services.cert_texts import CAP_TEXT, date_ask_text, event_card_caption, reserved_caption
+from bot.services.cert_texts import (
+    APPROVED_TEXT,
+    CAP_TEXT,
+    FORMAT_ASK_TEXT,
+    NUMBER_NOT_FOUND_TEXT,
+    START_TEXT,
+    booked_thanks_text,
+    date_ask_text,
+    event_card_caption,
+    reminder_24h_text,
+)
 
 
 class CertificateCodeTests(unittest.TestCase):
@@ -37,6 +47,11 @@ class CertificateCodeTests(unittest.TestCase):
     def test_booking_ui_texts(self):
         self.assertIn("Хитлото", date_ask_text("hitloto"))
         self.assertIn("Выбирай дату", date_ask_text("best"))
+        self.assertIn("на два лица", date_ask_text("hitloto"))
+        self.assertNotIn("количество не меняется", date_ask_text("hitloto"))
+        self.assertNotIn("одну дату и один формат", APPROVED_TEXT)
+        self.assertNotIn("количество не меняется", APPROVED_TEXT)
+        self.assertNotIn("количество не меняется", FORMAT_ASK_TEXT)
         event = {
             "date": "12.12.2026",
             "weekday": "суббота",
@@ -49,9 +64,24 @@ class CertificateCodeTests(unittest.TestCase):
         self.assertIn("Сертификат", card)
         self.assertIn("Хитлото", card)
         self.assertIn("20:30", card)
-        booked = reserved_caption(event, fmt="hitloto")
+        booked = booked_thanks_text(event, fmt="hitloto", days_until=10)
         self.assertIn("Хитлото", booked)
-        self.assertIn("двое гостей", booked)
+        self.assertIn("Отлично! Мы внесли Вас в списки гостей", booked)
+        self.assertIn("Подтвердить бронь", booked)
+        self.assertNotIn("подтверждена", booked)
+        same_day = booked_thanks_text(event, fmt="hitloto", days_until=1)
+        self.assertIn("ОБЯЗАТЕЛЬНО подтвердите бронь", same_day)
+        reminder = reminder_24h_text(
+            name="Irina",
+            event_time="19:00",
+            location_line="📍 Локация Temple Bar, м. Курская",
+        )
+        self.assertIn("Подтвердить бронь", reminder)
+        self.assertNotIn("Получить билет", reminder)
+        self.assertIn("бумажному сертификату", START_TEXT)
+        self.assertIn("MSS-000001", START_TEXT)
+        self.assertNotIn("Такой номер не найден", NUMBER_NOT_FOUND_TEXT)
+        self.assertIn("QR", NUMBER_NOT_FOUND_TEXT)
 
 
 if __name__ == "__main__":
