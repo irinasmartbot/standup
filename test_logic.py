@@ -1015,7 +1015,8 @@ def test_offline_gift_stale_event_recovery():
 
     app_src = Path("bot/vk/app.py").read_text(encoding="utf-8")
     assert "Шоу не найдено или уже недоступно" not in app_src
-    assert "VK не видит подписку на сообщество" in app_src
+    assert "Выполни задание ведущего и снова нажми кнопку Готово" in app_src
+    assert "VK не видит подписку на сообщество" not in app_src
     assert "_recover_offline_gift_event" in app_src
     assert "_offline_gift_subscribed" in app_src
     print("offline gift stale event recovery: OK")

@@ -18,6 +18,10 @@ def main():
     assert ticket_gender("Никита") == "m"
     assert ticket_gender("Илья") == "m"
     assert ticket_gender("Ярослав и Юля") == "m"
+    assert ticket_gender("Дима Гагарин") == "m"
+    assert ticket_gender("Миша") == "m"
+    assert ticket_gender("Костя") == "m"
+    assert ticket_gender("Марина") == "f"
 
     if os.path.exists(STATE):
         os.remove(STATE)

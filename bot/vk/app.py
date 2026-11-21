@@ -316,17 +316,10 @@ def _gift_event_label(event: dict[str, Any]) -> str:
 
 
 def _offline_gift_pending_text(event: dict[str, Any], *, still_waiting: bool) -> str:
+    _ = still_waiting
     show = html.escape(_gift_event_label(event))
-    if still_waiting:
-        return (
-            "🎁 <b>Пока тебя нет в списке.</b>\n\n"
-            "VK не видит подписку на сообщество.\n"
-            "Нажми «Перейти в сообщество», подпишись, вернись сюда и нажми «Готово».\n\n"
-            f"<b>Шоу:</b> {show}"
-        )
     return (
-        "🎁 <b>Ты пока не в списке участников.</b>\n\n"
-        "Подпишись на сообщество и нажми «Готово» — тогда попадёшь в список.\n\n"
+        "🎁 <b>Выполни задание ведущего и снова нажми кнопку Готово.</b>\n\n"
         f"<b>Шоу:</b> {show}"
     )
 
