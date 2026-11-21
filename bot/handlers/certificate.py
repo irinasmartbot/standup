@@ -187,7 +187,7 @@ async def begin_telegram(message: Message, state: FSMContext, raw: str) -> None:
     F.chat.type == "private",
 )
 async def manual_certificate_start(message: Message, state: FSMContext):
-    await begin_telegram(message, state, "msscert")
+    await begin_telegram(message, state, "certificate")
 
 
 def _is_moderation(chat_id: int) -> bool:

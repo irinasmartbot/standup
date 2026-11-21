@@ -1167,6 +1167,58 @@ def test_vk_start_menu_flow():
     print("vk start menu flow: OK")
 
 
+def test_vk_certificate_flow():
+    from pathlib import Path
+
+    from bot.admin.vk_entry import (
+        FLOWS,
+        MINI_APP_DIRECT_FLOWS,
+        MINI_APP_VISIBLE_FLOWS,
+        _certificate_handoff_from_entry,
+        parse_mini_app_flow,
+        remap_raffle_button_in_gift_session,
+    )
+
+    assert parse_mini_app_flow("certificate") == "certificate"
+    assert parse_mini_app_flow("#flow=certificate") == "certificate"
+    assert parse_mini_app_flow("flow=certificate") == "certificate"
+    assert parse_mini_app_flow("msscert") == "certificate"
+    from bot.services.cert_codes import looks_like_certificate_start, parse_certificate_start
+
+    assert looks_like_certificate_start("certificate")
+    assert parse_certificate_start("certificate") == ("", "")
+    assert "certificate" in FLOWS
+    assert "certificate" in MINI_APP_DIRECT_FLOWS
+    assert "certificate" not in MINI_APP_VISIBLE_FLOWS
+    assert remap_raffle_button_in_gift_session("raffle", "#flow=certificate") == "raffle"
+
+    ref, source = _certificate_handoff_from_entry(
+        {"ref": "msscert_abc123", "ref_source": "mss_certificate", "hash": "#flow=certificate"},
+        {},
+    )
+    assert ref == "msscert_abc123"
+    assert source == "mss_certificate"
+    ref2, _ = _certificate_handoff_from_entry(
+        {"hash": "#flow=certificate&ref=msscert_num_MSS-000001"},
+        {},
+    )
+    assert ref2 == "msscert_num_MSS-000001"
+    ref3, _ = _certificate_handoff_from_entry(
+        {"hash": "#flow=certificate"},
+        {"vk_ref": "msscert_from_site"},
+    )
+    assert ref3 == "msscert_from_site"
+
+    entry_src = Path("bot/admin/vk_entry.py").read_text(encoding="utf-8")
+    body = entry_src[entry_src.find("async def _send_flow_chain_body") :]
+    cert_at = body.find('if flow_key == "certificate"')
+    gift_at = body.find("get_offline_gift_today_events")
+    assert cert_at != -1 and gift_at != -1 and cert_at < gift_at
+    assert "begin_from_ref" in body[cert_at:gift_at]
+    assert '"certificate", ""' in body[cert_at:gift_at]
+    print("vk certificate flow: OK")
+
+
 def test_vk_raffle_screenshot_avoids_tg_handler_import():
     from pathlib import Path
 
@@ -1376,6 +1428,7 @@ async def main():
     test_vk_chek_list_flow()
     test_vk_new_stata_all_flow()
     test_vk_start_menu_flow()
+    test_vk_certificate_flow()
     test_vk_raffle_screenshot_avoids_tg_handler_import()
     test_residents_reminder_24h_text()
     test_vk_same_day_warning_import()

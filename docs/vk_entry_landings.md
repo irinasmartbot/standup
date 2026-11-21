@@ -37,6 +37,8 @@ https://vk.com/app54704296_-225298932#flow=raffle
 https://vk.com/app54704296_-225298932#flow=offline_gift
 https://vk.ru/app54704296_-225298932#flow=chek_list
 https://vk.ru/app54704296_-225298932#flow=new_stata_all
+https://vk.ru/app54704296_-225298932#flow=certificate
+https://vk.ru/app54704296#flow=certificate
 ```
 
 Служебный чек-лист участников зального розыгрыша (как Telegram `?start=chek_list`): даты → шоу → список VK, выбор победителя. Кнопки в общем меню mini app нет.
@@ -54,6 +56,15 @@ https://vk.ru/app54704296_-225298932#flow=new_stata_all
 https://vk.ru/app54704296#flow=new_stata_all
 https://go.moscowstandupshow.ru/vk-mini/start/new_stata_all
 ```
+
+Бронь по сертификату с сайта. Без токена и без номера в ссылке — только приветствие и ввод номера. Кнопки в меню mini app нет. Прямой `write-` с внешнего сайта не открывает диалог. В WordPress:
+
+```text
+https://telegram.me/StandUp_Show_bot?start=certificate
+https://vk.ru/app54704296#flow=certificate
+```
+
+VK ссылка без хвостов `?ref=` / `?ref_source=`.
 
 На ПК ссылка с `_-225298932` иногда теряет hash и открывает общее меню — тогда короткая без группы. Это не участие гостя (`#flow=offline_gift`) и не розыгрыш за репост (`#flow=raffle`).
 
@@ -81,6 +92,7 @@ https://go.moscowstandupshow.ru/vk-mini/start/raffle
 https://go.moscowstandupshow.ru/vk-mini/start/offline_gift
 https://go.moscowstandupshow.ru/vk-mini/start/chek_list
 https://go.moscowstandupshow.ru/vk-mini/start/new_stata_all
+https://go.moscowstandupshow.ru/vk-mini/start/certificate
 ```
 
 ## Как работает

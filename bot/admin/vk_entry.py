@@ -8,7 +8,7 @@
 3) пробуем открыть приложение VK (не сайт vk.com)
 
 GET  /vk/booking | /vk/residents | /vk/platka | /vk/raffle | /vk/offline-gift
-     Mini App direct: residents | platka | chek_list | new_stata_all
+     Mini App direct: residents | platka | chek_list | new_stata_all | certificate
 POST /vk/entry
 """
 
@@ -23,7 +23,7 @@ import os
 import time
 from html import escape
 from typing import Any
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl, quote, urlencode
 
 from aiohttp import web
 
@@ -90,6 +90,13 @@ FLOWS: dict[str, dict[str, Any]] = {
         "lead": "Разрешите сообщения — пришлём главное меню в личку VK.",
         "ref": "standup_start",
     },
+    "certificate": {
+        "title": "Сертификат",
+        "headline": "Бронь по сертификату",
+        "button": "Оформить сертификат",
+        "lead": "Разрешите сообщения — продолжим бронь по сертификату в личке VK.",
+        "ref": "msscert",
+    },
 }
 
 # После модерации снова показываем все входные сценарии mini app.
@@ -101,6 +108,7 @@ MINI_APP_DIRECT_FLOWS: tuple[str, ...] = (
     "chek_list",
     "new_stata_all",
     "start",
+    "certificate",
 )
 EXPIRED_DIRECT_FLOWS: frozenset[str] = frozenset(
     {
@@ -144,6 +152,10 @@ _FLOW_ALIASES: dict[str, str] = {
     "main": "start",
     "main_menu": "start",
     "standup_start": "start",
+    "certificate": "certificate",
+    "cert": "certificate",
+    "msscert": "certificate",
+    "mss_certificate": "certificate",
 }
 
 
@@ -195,6 +207,39 @@ def parse_mini_app_flow(value: str) -> str:
     return aliased if aliased in FLOWS else ""
 
 
+def _certificate_handoff_from_entry(data: dict[str, Any], params: dict[str, str]) -> tuple[str, str]:
+    from bot.services.cert_codes import looks_like_certificate_start
+
+    hash_raw = str(
+        (data or {}).get("hash")
+        or params.get("hash")
+        or params.get("vk_hash")
+        or ""
+    ).strip()
+    hash_params = dict(parse_qsl(hash_raw.lstrip("#").lstrip("?"), keep_blank_values=True))
+    candidates = [
+        (data or {}).get("ref"),
+        hash_params.get("ref"),
+        params.get("ref"),
+        params.get("vk_ref"),
+        hash_params.get("start"),
+        (data or {}).get("start_param"),
+        params.get("start_param"),
+    ]
+    ref = ""
+    for value in candidates:
+        text = str(value or "").strip()
+        if looks_like_certificate_start(text):
+            ref = text
+            break
+    source = str(
+        (data or {}).get("ref_source")
+        or hash_params.get("ref_source")
+        or "mss_certificate"
+    ).strip()
+    return ref or "msscert", source or "mss_certificate"
+
+
 def remap_raffle_button_in_gift_session(posted_flow: str, *hints: str) -> str:
     """Вход по offline_gift: кнопка raffle / «за репост» всё равно подарок на шоу."""
     posted = (posted_flow or "").strip()
@@ -228,6 +273,7 @@ def _mini_app_vk_url(
     cid: str = "",
     source: str = "",
     with_group: bool = False,
+    extra: dict[str, str] | None = None,
 ) -> str:
     """Ссылка mini app внутри VK.
 
@@ -254,6 +300,11 @@ def _mini_app_vk_url(
     source_value = (source or "").strip()
     if source_value:
         parts.append(f"source={source_value}")
+    for key, value in (extra or {}).items():
+        text = str(value or "").strip()
+        if not key or not text:
+            continue
+        parts.append(f"{quote(str(key), safe='')}={quote(text, safe='')}")
     if parts:
         url = f"{url}#{'&'.join(parts)}"
     return url
@@ -451,6 +502,8 @@ async def _send_flow_chain(
     *,
     cid: str = "",
     source: str = "",
+    cert_ref: str = "",
+    cert_source: str = "",
 ) -> None:
     """Сразу ветка бота — без сообщения «нажмите кнопку ниже»."""
     from bot.db.analytics import EVENT_BOT_START, track_event
@@ -461,10 +514,13 @@ async def _send_flow_chain(
     # Общий антидубль с VK-ботом (разные процессы / воркеры).
     # Офлайн-розыгрыш: 30 мин без дубля карточки; повтор = действие «участвовать/выбрать».
     ttl = 1800.0 if flow_key == "offline_gift" else None
+    dedupe_key = flow_key
+    if flow_key == "certificate" and (cert_ref or "").strip():
+        dedupe_key = f"certificate:{(cert_ref or '').strip()[:80]}"
     claimed = (
-        claim_flow_send(int(vk_id), flow_key, ttl_sec=ttl)
+        claim_flow_send(int(vk_id), dedupe_key, ttl_sec=ttl)
         if ttl is not None
-        else claim_flow_send(int(vk_id), flow_key)
+        else claim_flow_send(int(vk_id), dedupe_key)
     )
     if not claimed:
         logger.info("VK entry deduped vk_id=%s flow=%s", vk_id, flow_key)
@@ -507,9 +563,17 @@ async def _send_flow_chain(
             logger.exception("queue bot_open_goal failed vk_id=%s flow=%s", vk_id, flow_key)
 
     try:
-        await _send_flow_chain_body(client, settings, flow_key, vk_id, vk_raffle)
+        await _send_flow_chain_body(
+            client,
+            settings,
+            flow_key,
+            vk_id,
+            vk_raffle,
+            cert_ref=cert_ref,
+            cert_source=cert_source,
+        )
     except Exception:
-        clear_flow_send(int(vk_id), flow_key)
+        clear_flow_send(int(vk_id), dedupe_key)
         raise
 
 
@@ -603,7 +667,16 @@ async def _booking_cover_attachment(client: VKClient, vk_id: int, settings) -> s
     return await resolve_booking_cover_attachment(client, vk_id, settings)
 
 
-async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id: int, vk_raffle) -> None:
+async def _send_flow_chain_body(
+    client: VKClient,
+    settings,
+    flow_key: str,
+    vk_id: int,
+    vk_raffle,
+    *,
+    cert_ref: str = "",
+    cert_source: str = "",
+) -> None:
     from bot.db.analytics import EVENT_BRANCH_PROVERKA, track_event
 
     if flow_key == "raffle":
@@ -745,6 +818,12 @@ async def _send_flow_chain_body(client: VKClient, settings, flow_key: str, vk_id
         from bot.vk.app import send_start_menu_message
 
         await send_start_menu_message(client, vk_id, settings)
+        return
+
+    if flow_key == "certificate":
+        from bot.vk.certificate import begin_from_ref
+
+        await begin_from_ref(client, int(vk_id), int(vk_id), "certificate", "")
         return
 
     from bot.db.crud import get_offline_gift_today_events
@@ -1220,6 +1299,8 @@ def _mini_app_html(default_flow: str = "") -> str:
   var dialogOpened = false;
   var openAfterSendFromTap = false;
   var launchParamsQuery = window.location.search || "";
+  var pageSearch = window.location.search || "";
+  var pageHash = window.location.hash || "";
   var statusEl = document.getElementById("status");
   var leadEl = document.getElementById("lead");
   var actionsEl = document.getElementById("actions");
@@ -1364,7 +1445,11 @@ def _mini_app_html(default_flow: str = "") -> str:
     menu: "start",
     main: "start",
     main_menu: "start",
-    standup_start: "start"
+    standup_start: "start",
+    certificate: "certificate",
+    cert: "certificate",
+    msscert: "certificate",
+    mss_certificate: "certificate"
   }};
   var EXPIRED_FLOWS = {{
     booking_resident: true,
@@ -1468,6 +1553,36 @@ def _mini_app_html(default_flow: str = "") -> str:
     var params = parseHashParams(value);
     return String(
       params.get("source") || params.get("utm_source") || params.get("utm_campaign") || ""
+    ).trim();
+  }}
+
+  function parseCertRefValue(value) {{
+    if (!value) return "";
+    var params = parseHashParams(value);
+    var direct = String(value).replace(/^#/, "").replace(/^\\?/, "").trim();
+    if (/^msscert/i.test(direct.split("&")[0])) return direct.split("&")[0];
+    return String(
+      params.get("ref") || params.get("start") || params.get("start_param") || ""
+    ).trim();
+  }}
+
+  function certRefFromLocation() {{
+    var search = new URLSearchParams(pageSearch || window.location.search || "");
+    var launch = new URLSearchParams((launchParamsQuery || "").replace(/^\\?/, ""));
+    return (
+      parseCertRefValue(pageHash || "") ||
+      parseCertRefValue(window.location.hash || "") ||
+      String(search.get("ref") || search.get("start") || search.get("start_param") || "").trim() ||
+      String(launch.get("ref") || launch.get("vk_ref") || launch.get("start") || "").trim() ||
+      String(search.get("vk_ref") || "").trim()
+    );
+  }}
+
+  function certRefSourceFromLocation() {{
+    var search = new URLSearchParams(pageSearch || window.location.search || "");
+    var params = parseHashParams(pageHash || window.location.hash || "");
+    return String(
+      params.get("ref_source") || search.get("ref_source") || ""
     ).trim();
   }}
 
@@ -1751,7 +1866,9 @@ def _mini_app_html(default_flow: str = "") -> str:
         flow: currentFlow,
         cid: detectedCid || cidFromLocation() || "",
         source: detectedSource || sourceFromLocation() || "",
-        hash: window.location.hash || "",
+        hash: window.location.hash || pageHash || "",
+        ref: certRefFromLocation(),
+        ref_source: certRefSourceFromLocation(),
         launch_params: launchParamsQuery
       }})
     }})
@@ -2093,7 +2210,16 @@ async def mini_app_start(request: web.Request) -> web.Response:
     source = _request_source(request)
     _remember_mini_flow(request, flow_key)
     settings = load_vk_settings()
-    target = _mini_app_vk_url(settings, flow_key, short=True, cid=cid, source=source)
+    if flow_key == "certificate":
+        target = _mini_app_vk_url(settings, flow_key, short=True)
+    else:
+        target = _mini_app_vk_url(
+            settings,
+            flow_key,
+            short=True,
+            cid=cid,
+            source=source,
+        )
     return _html_response(_mobile_vk_jump_html(flow_key, target))
 
 
@@ -2268,6 +2394,7 @@ async def mini_entry_post(request: web.Request) -> web.Response:
     cid = str((data or {}).get("cid") or "").strip()
     source = str((data or {}).get("source") or "").strip()
     raw_hash = str((data or {}).get("hash") or "").strip()
+    cert_ref, cert_source = _certificate_handoff_from_entry(data or {}, params)
     original_flow = flow_key
     flow_key = remap_raffle_button_in_gift_session(
         flow_key,
@@ -2293,7 +2420,10 @@ async def mini_entry_post(request: web.Request) -> web.Response:
     if vk_id <= 0:
         return web.json_response({"ok": False, "error": "Не удалось определить VK id."}, status=400)
 
-    if _cooldown_hit(vk_id, flow_key):
+    cooldown_key = flow_key
+    if flow_key == "certificate":
+        cooldown_key = f"certificate:{(cert_ref or '')[:80]}"
+    if _cooldown_hit(vk_id, cooldown_key):
         return web.json_response(
             {"ok": True, "ok_soft": True, "error": "Сообщение уже отправляли — проверьте личку VK."}
         )
@@ -2308,9 +2438,18 @@ async def mini_entry_post(request: web.Request) -> web.Response:
 
     client = VKClient(settings)
     try:
-        await _send_flow_chain(client, settings, flow_key, vk_id, cid=cid, source=source)
+        await _send_flow_chain(
+            client,
+            settings,
+            flow_key,
+            vk_id,
+            cid=cid,
+            source=source,
+            cert_ref=cert_ref,
+            cert_source=cert_source,
+        )
     except VKAPIError as exc:
-        _clear_cooldown(vk_id, flow_key)
+        _clear_cooldown(vk_id, cooldown_key)
         err = str(exc).lower()
         logger.warning("VK mini entry send failed vk_id=%s flow=%s: %s", vk_id, flow_key, exc)
         if "permission" in err or "901" in err or "deny" in err or "can't send" in err:
@@ -2326,7 +2465,7 @@ async def mini_entry_post(request: web.Request) -> web.Response:
             status=502,
         )
     except Exception:
-        _clear_cooldown(vk_id, flow_key)
+        _clear_cooldown(vk_id, cooldown_key)
         logger.exception("VK mini entry unexpected vk_id=%s flow=%s", vk_id, flow_key)
         return web.json_response(
             {"ok": False, "error": "Не удалось отправить сообщение. Попробуйте позже."},

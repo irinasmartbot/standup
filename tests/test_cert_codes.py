@@ -33,7 +33,9 @@ class CertificateCodeTests(unittest.TestCase):
         self.assertEqual(parse_certificate_start("msscert_abc"), ("abc", ""))
         self.assertEqual(parse_certificate_start("msscert_num_MSS-000001"), ("", "MSS-000001"))
         self.assertEqual(parse_certificate_start("msscert"), ("", ""))
+        self.assertEqual(parse_certificate_start("certificate"), ("", ""))
         self.assertTrue(looks_like_certificate_start("msscert_TOKEN"))
+        self.assertTrue(looks_like_certificate_start("certificate"))
         self.assertFalse(looks_like_certificate_start("standup_rozygr"))
 
     def test_safe_ref_and_cap_text(self):
@@ -78,7 +80,7 @@ class CertificateCodeTests(unittest.TestCase):
         )
         self.assertIn("Подтвердить бронь", reminder)
         self.assertNotIn("Получить билет", reminder)
-        self.assertIn("бумажному сертификату", START_TEXT)
+        self.assertIn("по твоему бумажному сертификату", START_TEXT)
         self.assertIn("MSS-000001", START_TEXT)
         self.assertNotIn("Такой номер не найден", NUMBER_NOT_FOUND_TEXT)
         self.assertIn("QR", NUMBER_NOT_FOUND_TEXT)

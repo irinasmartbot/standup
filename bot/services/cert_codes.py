@@ -37,14 +37,14 @@ def parse_certificate_start(raw: str | None) -> tuple[str, str]:
         return "", value[len(num_prefix) :]
     if low.startswith(token_prefix):
         return value[len(token_prefix) :], ""
-    if low in {"msscert", "mss_certificate"}:
+    if low in {"msscert", "mss_certificate", "certificate"}:
         return "", ""
     return "", ""
 
 
 def looks_like_certificate_start(raw: str | None) -> bool:
     low = (raw or "").strip().casefold()
-    return low.startswith("msscert") or low == "mss_certificate"
+    return low.startswith("msscert") or low in {"mss_certificate", "certificate"}
 
 
 def safe_ref(value: str, *, limit: int = 160) -> str:
