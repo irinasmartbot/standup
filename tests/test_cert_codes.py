@@ -14,6 +14,7 @@ from bot.services.cert_texts import (
     CAP_TEXT,
     FORMAT_ASK_TEXT,
     NUMBER_NOT_FOUND_TEXT,
+    PHOTO_ASK_TEMPLATE,
     START_TEXT,
     booked_thanks_text,
     date_ask_text,
@@ -69,10 +70,16 @@ class CertificateCodeTests(unittest.TestCase):
         booked = booked_thanks_text(event, fmt="hitloto", days_until=10)
         self.assertIn("Хитлото", booked)
         self.assertIn("Отлично! Мы внесли Вас в списки гостей", booked)
-        self.assertIn("Подтвердить бронь", booked)
+        self.assertNotIn("Количество гостей", booked)
+        self.assertNotIn("за сутки до мероприятия", booked)
+        self.assertIn("<b>считаться израсходованным</b>", booked)
+        self.assertIn("«ОТМЕНИТЬ БРОНЬ»", booked)
+        self.assertIn("ОБЯЗАТЕЛЬНО СОХРАНИТЕ БУМАЖНЫЙ СЕРТИФИКАТ", booked)
         self.assertNotIn("подтверждена", booked)
         same_day = booked_thanks_text(event, fmt="hitloto", days_until=1)
-        self.assertIn("ОБЯЗАТЕЛЬНО подтвердите бронь", same_day)
+        self.assertIn("подтвердите бронь", same_day)
+        self.assertNotIn("Количество гостей", same_day)
+        self.assertIn("<b>считаться израсходованным</b>", same_day)
         reminder = reminder_24h_text(
             name="Irina",
             event_time="19:00",
@@ -81,9 +88,13 @@ class CertificateCodeTests(unittest.TestCase):
         self.assertIn("Подтвердить бронь", reminder)
         self.assertNotIn("Получить билет", reminder)
         self.assertIn("по твоему бумажному сертификату", START_TEXT)
-        self.assertIn("MSS-000001", START_TEXT)
+        self.assertIn("отсканировал QR", START_TEXT)
+        self.assertIn("одним сообщением", START_TEXT)
+        self.assertIn("{code}", PHOTO_ASK_TEMPLATE)
+        self.assertIn("соответствующее поле", PHOTO_ASK_TEMPLATE)
         self.assertNotIn("Такой номер не найден", NUMBER_NOT_FOUND_TEXT)
         self.assertIn("QR", NUMBER_NOT_FOUND_TEXT)
+        self.assertIn("MSS-000001", NUMBER_NOT_FOUND_TEXT)
 
 
 if __name__ == "__main__":
