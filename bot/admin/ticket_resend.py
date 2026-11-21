@@ -20,6 +20,18 @@ def _use_postgres() -> bool:
     return BOOKINGS_SOURCE == "postgres" and bool(DATABASE_URL)
 
 
+def _is_certificate_booking(row: dict | None) -> bool:
+    return (row or {}).get("booking_format", "").strip().lower() == "certificate"
+
+
+def _certificate_no_ticket_error(meta: dict) -> dict:
+    return {
+        "ok": False,
+        "error": "по сертификату билет картинкой не выдаём",
+        **meta,
+    }
+
+
 def _bot_token() -> str:
     return (os.getenv("BOT_TOKEN") or "").strip()
 
@@ -57,6 +69,7 @@ def list_event_ticket_holders(event_id: int) -> list[dict]:
                     JOIN events e ON e.id = b.event_id
                     WHERE b.event_id = %(event_id)s
                       AND b.status = 'confirmed'
+                      AND b.format IS DISTINCT FROM 'certificate'
                     ORDER BY b.confirmed_at NULLS LAST, b.id
                     """,
                     {"event_id": int(event_id)},
@@ -292,6 +305,8 @@ async def resend_ticket_async(
     meta = _booking_audit_item(row, booking_id)
     if not row:
         return {"ok": False, "error": "бронь не найдена", **meta}
+    if _is_certificate_booking(row):
+        return _certificate_no_ticket_error(meta)
     if row.get("status") != "confirmed":
         return {
             "ok": False,
@@ -543,6 +558,8 @@ async def issue_ticket_from_admin_async(booking_id: int) -> dict:
     meta = _booking_audit_item(row, booking_id)
     if not row:
         return {"ok": False, "error": "бронь не найдена", **meta}
+    if _is_certificate_booking(row):
+        return _certificate_no_ticket_error(meta)
 
     already_confirmed = (row.get("status") or "") == "confirmed"
     status = (row.get("status") or "").strip()

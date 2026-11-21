@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.base import StorageKey
@@ -98,6 +99,39 @@ async def manual_certificate_start(message: Message, state: FSMContext):
 
 def _is_moderation(chat_id: int) -> bool:
     return bool(MODERATION_CHAT_ID) and str(chat_id) == str(MODERATION_CHAT_ID)
+
+
+# card_message_id -> {session_id, prompt_message_id}
+_PENDING_REJECT_BY_MSG: dict[int, dict] = {}
+
+
+def is_pending_cert_reject_reply(reply_to_message_id: int) -> bool:
+    if reply_to_message_id in _PENDING_REJECT_BY_MSG:
+        return True
+    return any(
+        data.get("prompt_message_id") == reply_to_message_id
+        for data in _PENDING_REJECT_BY_MSG.values()
+    )
+
+
+def _pending_reject_lookup(message_id: int):
+    data = _PENDING_REJECT_BY_MSG.get(message_id)
+    if data:
+        return message_id, data
+    for card_id, item in _PENDING_REJECT_BY_MSG.items():
+        if item.get("prompt_message_id") == message_id:
+            return card_id, item
+    return None, None
+
+
+async def _delete_mod_chat_messages(chat_id: int, *message_ids) -> None:
+    for mid in message_ids:
+        if not mid:
+            continue
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
 
 
 async def _set_guest_state(storage, user_id: int, new_state) -> None:
@@ -247,33 +281,7 @@ async def on_move(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("cert_mod_ok_") | F.data.startswith("cert_mod_no_"))
-async def on_review(call: CallbackQuery, state: FSMContext):
-    if not call.message or not _is_moderation(call.message.chat.id):
-        await call.answer("Недоступно", show_alert=True)
-        return
-    approve = call.data.startswith("cert_mod_ok_")
-    session_id = int(call.data.rsplit("_", 1)[1])
-    session, text = await review(
-        session_id,
-        approve=approve,
-        reviewer_id=call.from_user.id,
-    )
-    if text not in {APPROVED_TEXT, REJECT_TEXT}:
-        await call.answer(text[:180], show_alert=True)
-        return
-    try:
-        await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    mark = "принято" if approve else "отклонено"
-    try:
-        await call.message.edit_caption(caption=(call.message.caption or "") + f"\n\n{mark}")
-    except Exception:
-        pass
-    await call.answer("Готово")
-    if not session:
-        return
+async def _notify_guest(session: dict, text: str, *, approve: bool, storage) -> None:
     if session.get("channel") == "vk" and session.get("vk_id"):
         from bot.vk.raffle import send_vk_text
 
@@ -284,10 +292,200 @@ async def on_review(call: CallbackQuery, state: FSMContext):
         return
     guest_state = CertState.name if approve else CertState.photo
     try:
-        await _set_guest_state(state.storage, int(guest_id), guest_state)
+        await _set_guest_state(storage, int(guest_id), guest_state)
     except Exception:
         logger.exception("certificate guest fsm failed telegram_id=%s", guest_id)
     await bot.send_message(int(guest_id), text)
+
+
+async def _mark_card(
+    chat_id: int,
+    message_id: int,
+    *,
+    caption: str | None,
+    approve: bool,
+    reason: str = "",
+) -> None:
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id=chat_id, message_id=message_id, reply_markup=None
+        )
+    except Exception:
+        pass
+    mark = "принято" if approve else "отклонено"
+    if reason:
+        mark += f"\nПричина: {reason}"
+    try:
+        await bot.edit_message_caption(
+            chat_id=chat_id,
+            message_id=message_id,
+            caption=(caption or "") + f"\n\n{mark}",
+        )
+    except Exception:
+        pass
+
+
+async def _decide_review(
+    *,
+    session_id: int,
+    approve: bool,
+    reviewer_id: int,
+    reason: str,
+    chat_id: int,
+    message_id: int,
+    caption: str | None,
+    storage,
+) -> str:
+    session, text = await review(
+        session_id,
+        approve=approve,
+        reviewer_id=reviewer_id,
+        reason=reason,
+    )
+    if text not in {APPROVED_TEXT, REJECT_TEXT}:
+        return text
+    guest_text = text
+    if not approve and reason:
+        guest_text = f"{REJECT_TEXT}\n\nКомментарий менеджера: {reason}"
+    await _mark_card(
+        chat_id,
+        message_id,
+        caption=caption,
+        approve=approve,
+        reason=reason,
+    )
+    if session:
+        await _notify_guest(session, guest_text, approve=approve, storage=storage)
+    return "ok"
+
+
+@router.callback_query(F.data.startswith("cert_mod_ok_"))
+async def on_mod_ok(call: CallbackQuery, state: FSMContext):
+    if not call.message or not _is_moderation(call.message.chat.id):
+        await call.answer("Недоступно", show_alert=True)
+        return
+    session_id = int(call.data.removeprefix("cert_mod_ok_"))
+    pending = _PENDING_REJECT_BY_MSG.pop(call.message.message_id, None)
+    if pending:
+        await _delete_mod_chat_messages(call.message.chat.id, pending.get("prompt_message_id"))
+    result = await _decide_review(
+        session_id=session_id,
+        approve=True,
+        reviewer_id=call.from_user.id,
+        reason="",
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        caption=call.message.caption,
+        storage=state.storage,
+    )
+    if result != "ok":
+        await call.answer(result[:180], show_alert=True)
+        return
+    await call.answer("Готово")
+
+
+@router.callback_query(F.data.startswith("cert_mod_no_reason_"))
+async def on_mod_no_reason(call: CallbackQuery, state: FSMContext):
+    if not call.message or not _is_moderation(call.message.chat.id):
+        await call.answer("Недоступно", show_alert=True)
+        return
+    session_id = int(call.data.removeprefix("cert_mod_no_reason_"))
+    card_msg_id = call.message.message_id
+    old_pending = _PENDING_REJECT_BY_MSG.pop(card_msg_id, None)
+    if old_pending:
+        await _delete_mod_chat_messages(
+            call.message.chat.id, old_pending.get("prompt_message_id")
+        )
+    prompt = await call.message.reply(
+        "Напишите причину отказа, нажав «ответить» на сообщение с данным скрином\n\n"
+        f"Заявка #{session_id}",
+    )
+    _PENDING_REJECT_BY_MSG[card_msg_id] = {
+        "session_id": session_id,
+        "prompt_message_id": prompt.message_id,
+        "caption": call.message.caption or "",
+    }
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("cert_mod_no_silent_"))
+async def on_mod_no_silent(call: CallbackQuery, state: FSMContext):
+    if not call.message or not _is_moderation(call.message.chat.id):
+        await call.answer("Недоступно", show_alert=True)
+        return
+    session_id = int(call.data.removeprefix("cert_mod_no_silent_"))
+    await _reject_silent(call, state, session_id)
+
+
+@router.callback_query(F.data.startswith("cert_mod_no_"))
+async def on_mod_no_legacy(call: CallbackQuery, state: FSMContext):
+    if not call.message or not _is_moderation(call.message.chat.id):
+        await call.answer("Недоступно", show_alert=True)
+        return
+    rest = call.data.removeprefix("cert_mod_no_")
+    if rest.startswith("silent_") or rest.startswith("reason_"):
+        return
+    session_id = int(rest)
+    await _reject_silent(call, state, session_id)
+
+
+async def _reject_silent(call: CallbackQuery, state: FSMContext, session_id: int) -> None:
+    pending = _PENDING_REJECT_BY_MSG.pop(call.message.message_id, None)
+    if pending:
+        await _delete_mod_chat_messages(call.message.chat.id, pending.get("prompt_message_id"))
+    result = await _decide_review(
+        session_id=session_id,
+        approve=False,
+        reviewer_id=call.from_user.id,
+        reason="",
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        caption=call.message.caption,
+        storage=state.storage,
+    )
+    if result != "ok":
+        await call.answer(result[:180], show_alert=True)
+        return
+    await call.answer("Отклонено")
+
+
+@router.message(F.reply_to_message)
+async def on_mod_reject_reason(message: Message, state: FSMContext):
+    if not _is_moderation(message.chat.id):
+        raise SkipHandler
+    replied_id = message.reply_to_message.message_id
+    card_msg_id, pending = _pending_reject_lookup(replied_id)
+    if not pending and message.reply_to_message.reply_to_message:
+        card_msg_id, pending = _pending_reject_lookup(
+            message.reply_to_message.reply_to_message.message_id
+        )
+    if not pending:
+        raise SkipHandler
+
+    session_id = int(pending["session_id"])
+    prompt_message_id = pending.get("prompt_message_id")
+    reason = (message.text or "").strip()
+    if not reason:
+        await message.reply("Нужен текст причины. Ответьте реплаем на карточку с фото.")
+        return
+
+    _PENDING_REJECT_BY_MSG.pop(card_msg_id, None)
+    result = await _decide_review(
+        session_id=session_id,
+        approve=False,
+        reviewer_id=message.from_user.id,
+        reason=reason,
+        chat_id=message.chat.id,
+        message_id=int(card_msg_id),
+        caption=pending.get("caption") or "",
+        storage=state.storage,
+    )
+    await _delete_mod_chat_messages(
+        message.chat.id, prompt_message_id, message.message_id
+    )
+    if result != "ok":
+        err = await message.reply(result[:180])
+        await _delete_mod_chat_messages(message.chat.id, err.message_id)
 
 
 def is_certificate_start(raw: str) -> bool:

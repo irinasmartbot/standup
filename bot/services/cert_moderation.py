@@ -53,9 +53,13 @@ async def send_certificate_photo(
     kb = InlineKeyboardBuilder()
     kb.button(text="ПРИНЯТЬ", callback_data=f"cert_mod_ok_{int(session_id)}", style="success")
     kb.button(
-        text="ОТКЛОНИТЬ",
-        callback_data=f"cert_mod_no_{int(session_id)}",
+        text="ОТКЛОНИТЬ без комментария",
+        callback_data=f"cert_mod_no_silent_{int(session_id)}",
         style="danger",
+    )
+    kb.button(
+        text="ОТКЛОНИТЬ с комментарием",
+        callback_data=f"cert_mod_no_reason_{int(session_id)}",
     )
     kb.adjust(1)
     try:

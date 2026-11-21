@@ -1,8 +1,8 @@
 """В чате модерации бот не ведёт клиентские диалоги.
 
 Разрешено только:
-- callback ПРИНЯТЬ / ОТКЛОНИТЬ (rz_mod_*);
-- reply с причиной отказа на карточку скрина после ОТКЛОНИТЬ.
+- callback ПРИНЯТЬ / ОТКЛОНИТЬ (rz_mod_* и cert_mod_*);
+- reply с причиной отказа на карточку после «ОТКЛОНИТЬ с комментарием».
 """
 
 from typing import Any, Awaitable, Callable, Dict
@@ -36,7 +36,9 @@ class ModerationChatSilenceMiddleware(BaseMiddleware):
         if isinstance(event, CallbackQuery) and event.message:
             if event.message.chat.id != mod_id:
                 return await handler(event, data)
-            if event.data and event.data.startswith("rz_mod_"):
+            if event.data and (
+                event.data.startswith("rz_mod_") or event.data.startswith("cert_mod_")
+            ):
                 return await handler(event, data)
             try:
                 await event.answer()
@@ -49,13 +51,20 @@ class ModerationChatSilenceMiddleware(BaseMiddleware):
                 return await handler(event, data)
             # причина отказа — только reply на карточку после ОТКЛОНИТЬ
             if event.reply_to_message:
+                from bot.handlers.certificate import is_pending_cert_reject_reply
                 from bot.handlers.rozygrysh import is_pending_reject_reply
 
                 replied = event.reply_to_message
-                if is_pending_reject_reply(replied.message_id):
+
+                def _pending(message_id: int) -> bool:
+                    return is_pending_reject_reply(message_id) or is_pending_cert_reject_reply(
+                        message_id
+                    )
+
+                if _pending(replied.message_id):
                     return await handler(event, data)
                 # reply на подсказку бота, которая сама reply на карточку
-                if replied.reply_to_message and is_pending_reject_reply(replied.reply_to_message.message_id):
+                if replied.reply_to_message and _pending(replied.reply_to_message.message_id):
                     return await handler(event, data)
             return None
 

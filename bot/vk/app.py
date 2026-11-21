@@ -2041,6 +2041,11 @@ class VKBotApp:
             return
         page = page % len(rows)
         row = rows[page]
+        if row[1] == "certificate":
+            from bot.services.cert_texts import NO_TICKET_TEXT
+
+            await self.client.send_message(peer_id, NO_TICKET_TEXT)
+            return
         if row[2] != "confirmed":
             await self.client.send_message(peer_id, "Билет ещё не подтверждён.")
             return
@@ -2257,10 +2262,18 @@ class VKBotApp:
                 return True
             from bot.db.crud import get_booking_format
 
-            if (get_booking_format(booking_id) or "").strip().lower() == "rozygrysh":
+            guests_fmt = (get_booking_format(booking_id) or "").strip().lower()
+            if guests_fmt == "rozygrysh":
                 await self._send_text(
                     peer_id,
                     "В розыгрыше бронь только на 1 гостя — изменить количество нельзя.",
+                    replace_nav=False,
+                )
+                return True
+            if guests_fmt == "certificate":
+                await self._send_text(
+                    peer_id,
+                    "По сертификату всегда двое гостей — изменить количество нельзя.",
                     replace_nav=False,
                 )
                 return True
@@ -2283,10 +2296,18 @@ class VKBotApp:
                 return True
             from bot.db.crud import get_booking_format
 
-            if (get_booking_format(booking_id) or "").strip().lower() == "rozygrysh":
+            guests_fmt = (get_booking_format(booking_id) or "").strip().lower()
+            if guests_fmt == "rozygrysh":
                 await self._send_text(
                     peer_id,
                     "В розыгрыше бронь только на 1 гостя — изменить количество нельзя.",
+                    replace_nav=False,
+                )
+                return True
+            if guests_fmt == "certificate":
+                await self._send_text(
+                    peer_id,
+                    "По сертификату всегда двое гостей — изменить количество нельзя.",
                     replace_nav=False,
                 )
                 return True

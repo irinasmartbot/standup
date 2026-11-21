@@ -252,6 +252,16 @@ async def cancel_event_bookings_async(event_ids: list[int]) -> dict:
             tid = row.get("telegram_id")
             vid = row.get("vk_id")
             try:
+                if (row.get("booking_format") or "").strip().lower() == "certificate":
+                    from bot.services.cert_flow import release_unconfirmed
+
+                    outcome = await release_unconfirmed(int(booking_id))
+                    if outcome == "retry":
+                        result["fail"] += 1
+                        result["errors"].append(
+                            f"#{booking_id}: сайт не отпустил сертификат, бронь не снята"
+                        )
+                        continue
                 if source in {"vk", "vkontakte"} or (vid and not tid):
                     if vid:
                         await _delete_vk_ticket(int(vid), row.get("ticket_message_id"))

@@ -2555,7 +2555,9 @@ def _user_send_ticket_html(
     eligible = [
         b
         for b in (bookings or [])
-        if (b.get("status") or "") in {"booked", "confirmed"} and b.get("id")
+        if (b.get("status") or "") in {"booked", "confirmed"}
+        and b.get("id")
+        and (b.get("format") or "") != "certificate"
     ]
     if not eligible:
         return ""

@@ -1332,10 +1332,14 @@ def _is_raffle_booking(booking_id: int) -> bool:
 
 
 async def _reject_raffle_guest_change(call_or_message, booking_id: int) -> bool:
-    """Розыгрыш — всегда 1 гость, смену числа гостей блокируем."""
-    if not _is_raffle_booking(int(booking_id)):
+    """Розыгрыш — 1 гость, сертификат — всегда двое. Смену числа блокируем."""
+    fmt = (get_booking_format(int(booking_id)) or "").strip().lower()
+    if fmt == "rozygrysh":
+        text = "В розыгрыше бронь только на 1 гостя — изменить количество нельзя."
+    elif fmt == "certificate":
+        text = "По сертификату всегда двое гостей — изменить количество нельзя."
+    else:
         return False
-    text = "В розыгрыше бронь только на 1 гостя — изменить количество нельзя."
     if isinstance(call_or_message, CallbackQuery):
         await call_or_message.answer(text, show_alert=True)
     else:

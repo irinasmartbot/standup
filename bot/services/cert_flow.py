@@ -246,7 +246,13 @@ async def submit_photo(
     return _step(PENDING_TEXT)
 
 
-async def review(session_id: int, *, approve: bool, reviewer_id: int) -> tuple[dict[str, Any] | None, str]:
+async def review(
+    session_id: int,
+    *,
+    approve: bool,
+    reviewer_id: int,
+    reason: str = "",
+) -> tuple[dict[str, Any] | None, str]:
     session = get_session(session_id)
     if not session:
         return None, "Заявка не найдена"
@@ -262,7 +268,7 @@ async def review(session_id: int, *, approve: bool, reviewer_id: int) -> tuple[d
         "decision": "approve" if approve else "reject",
         "kind": "pair",
         "reviewer": safe_ref(f"moderator:{int(reviewer_id)}"),
-        "reason": "",
+        "reason": (reason or "").strip()[:500],
     }
     try:
         await registry.review(payload)
@@ -494,6 +500,17 @@ def _owns(session: dict[str, Any] | None, booking: dict[str, Any], *, telegram_i
     return int(booking.get("telegram_id") or 0) == int(telegram_id or 0)
 
 
+def _booking_payload(session: dict[str, Any], booking_id: int) -> dict[str, Any]:
+    channel = "vk" if session.get("channel") == "vk" else "telegram"
+    user_id = session["vk_id"] if channel == "vk" else session["telegram_id"]
+    return {
+        "code": session["code"],
+        "channel": channel,
+        "user_id": str(int(user_id)),
+        "booking_ref": session.get("booking_ref") or safe_ref(f"booking:{int(booking_id)}"),
+    }
+
+
 async def confirm_booking(booking_id: int, *, telegram_id: int | None = None, vk_id: int | None = None) -> dict[str, Any]:
     booking = booking_context(booking_id)
     session = get_session_by_booking(booking_id)
@@ -503,14 +520,7 @@ async def confirm_booking(booking_id: int, *, telegram_id: int | None = None, vk
         return _step(CONFIRMED_TEXT)
     if booking["status"] not in {"booked", "confirmed"}:
         return _step("Эта бронь уже неактивна.")
-    channel = "vk" if session.get("channel") == "vk" else "telegram"
-    user_id = session["vk_id"] if channel == "vk" else session["telegram_id"]
-    payload = {
-        "code": session["code"],
-        "channel": channel,
-        "user_id": str(int(user_id)),
-        "booking_ref": session.get("booking_ref") or safe_ref(f"booking:{int(booking_id)}"),
-    }
+    payload = _booking_payload(session, booking_id)
     try:
         await registry.confirm(payload)
     except RegistryTemporary:
@@ -534,14 +544,7 @@ async def cancel_booking(booking_id: int, *, telegram_id: int | None = None, vk_
         return _step("После подтверждения эту бронь уже не отменить. Сертификат списан.")
     if booking["status"] != "booked":
         return _step("Эта бронь уже неактивна.")
-    channel = "vk" if session.get("channel") == "vk" else "telegram"
-    user_id = session["vk_id"] if channel == "vk" else session["telegram_id"]
-    payload = {
-        "code": session["code"],
-        "channel": channel,
-        "user_id": str(int(user_id)),
-        "booking_ref": session.get("booking_ref") or safe_ref(f"booking:{int(booking_id)}"),
-    }
+    payload = _booking_payload(session, booking_id)
     try:
         await registry.cancel(payload)
     except RegistryTemporary:
@@ -577,14 +580,7 @@ async def expire_booking(booking_id: int) -> str:
     if not session:
         logger.error("certificate expire without session booking_id=%s", booking_id)
         return "retry"
-    channel = "vk" if session.get("channel") == "vk" else "telegram"
-    user_id = session["vk_id"] if channel == "vk" else session["telegram_id"]
-    payload = {
-        "code": session["code"],
-        "channel": channel,
-        "user_id": str(int(user_id)),
-        "booking_ref": session.get("booking_ref") or safe_ref(f"booking:{int(booking_id)}"),
-    }
+    payload = _booking_payload(session, booking_id)
     try:
         await registry.expire(payload)
     except RegistryRefusal as exc:
@@ -596,6 +592,52 @@ async def expire_booking(booking_id: int) -> str:
         logger.warning("certificate expire temporary booking_id=%s", booking_id)
         return "retry"
     update_session(session["id"], state="need_format", booking_id=None, booking_ref=None)
+    return "ok"
+
+
+async def release_unconfirmed(booking_id: int) -> str:
+    """When admin hides a show: free the number if the guest has not confirmed.
+
+    ok — registry released, local cancel is safe
+    spent — already confirmed, number stays used, local cancel is still allowed
+    skip — not a certificate booking
+    retry — do not cancel locally, registry did not accept
+    """
+    booking = booking_context(booking_id)
+    session = get_session_by_booking(booking_id)
+    if not booking or booking.get("format") != CERTIFICATE:
+        return "skip"
+    if booking.get("status") == "confirmed" or (session and session.get("registry_confirmed")):
+        return "spent"
+    if booking.get("status") != "booked":
+        return "skip"
+    if not session:
+        logger.error("certificate staff cancel without session booking_id=%s", booking_id)
+        return "retry"
+    try:
+        await registry.cancel(_booking_payload(session, booking_id))
+    except RegistryRefusal as exc:
+        if exc.code in _EXPIRE_OK:
+            update_session(
+                session["id"],
+                state="need_format",
+                booking_id=None,
+                booking_ref=None,
+                registry_confirmed=False,
+            )
+            return "ok"
+        logger.error("certificate staff cancel refused booking_id=%s code=%s", booking_id, exc.code)
+        return "retry"
+    except (RegistryTemporary, RegistryNotConfigured):
+        logger.warning("certificate staff cancel temporary booking_id=%s", booking_id)
+        return "retry"
+    update_session(
+        session["id"],
+        state="need_format",
+        booking_id=None,
+        booking_ref=None,
+        registry_confirmed=False,
+    )
     return "ok"
 
 
