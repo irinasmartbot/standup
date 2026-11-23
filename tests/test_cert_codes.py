@@ -9,6 +9,7 @@ from bot.services.cert_codes import (
     normalize_certificate_code,
     parse_certificate_start,
     safe_ref,
+    telegram_file_id_from_photo_ref,
 )
 from bot.services.cert_texts import (
     APPROVED_TEXT,
@@ -39,6 +40,42 @@ class CertificateCodeTests(unittest.TestCase):
         self.assertTrue(looks_like_certificate_start("msscert_TOKEN"))
         self.assertTrue(looks_like_certificate_start("certificate"))
         self.assertFalse(looks_like_certificate_start("standup_rozygr"))
+
+    def test_telegram_file_id_from_photo_ref(self):
+        self.assertEqual(
+            telegram_file_id_from_photo_ref("tg_file:AgACAgIAAxkBAAEiXOfileid"),
+            "AgACAgIAAxkBAAEiXOfileid",
+        )
+        self.assertEqual(telegram_file_id_from_photo_ref("vk_photo:123_456"), "")
+        self.assertEqual(telegram_file_id_from_photo_ref("https://example.com/p.jpg"), "")
+        self.assertEqual(telegram_file_id_from_photo_ref("short"), "")
+
+    def test_admin_certificate_section_html(self):
+        from bot.admin.app import _user_certificate_html
+
+        empty = _user_certificate_html([])
+        self.assertIn("сертификат ещё не использован", empty)
+        self.assertIn("Заявок с фото сертификата пока нет", empty)
+
+        html = _user_certificate_html(
+            [
+                {
+                    "id": 23,
+                    "code": "0017",
+                    "state": "need_event",
+                    "photo_ref": "tg_file:" + ("B" * 24),
+                    "registry_confirmed": False,
+                    "created_at": None,
+                    "updated_at": None,
+                    "booking_id": None,
+                }
+            ]
+        )
+        self.assertIn("/admin/cert-photo/23", html)
+        self.assertIn("Показать фото", html)
+        self.assertIn("выбор шоу", html)
+        self.assertIn("сертификат ещё не использован", html)
+        self.assertNotIn("Заявок с фото сертификата пока нет", html)
 
     def test_safe_ref_and_cap_text(self):
         self.assertEqual(safe_ref("booking:12"), "booking:12")

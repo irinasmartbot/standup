@@ -47,6 +47,18 @@ def looks_like_certificate_start(raw: str | None) -> bool:
     return low.startswith("msscert") or low in {"mss_certificate", "certificate"}
 
 
+def telegram_file_id_from_photo_ref(photo_ref: str | None) -> str:
+    """Достать Telegram file_id из photo_ref сессии. Иначе пустая строка."""
+    raw = (photo_ref or "").strip()
+    if raw.startswith("tg_file:"):
+        raw = raw.split(":", 1)[1].strip()
+    if not raw or len(raw) < 16:
+        return ""
+    if raw.startswith(("vk_", "http://", "https://", "photo")):
+        return ""
+    return raw
+
+
 def safe_ref(value: str, *, limit: int = 160) -> str:
     cleaned = _REF_SAFE.sub("", value or "")
     return cleaned[:limit]

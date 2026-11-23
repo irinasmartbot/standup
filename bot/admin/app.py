@@ -2543,6 +2543,102 @@ def _user_raffle_html(submissions: list[dict], flags: dict) -> str:
     )
 
 
+_CERT_STATE_LABELS = {
+    "await_number": "ждёт номер",
+    "await_photo": "ждёт фото",
+    "pending_review": "на модерации",
+    "need_name": "ждёт имя",
+    "need_phone": "ждёт телефон",
+    "need_format": "выбор формата",
+    "need_date": "выбор даты",
+    "need_event": "выбор шоу",
+    "booked": "есть бронь",
+    "closed": "закрыта",
+}
+
+
+def _user_certificate_html(sessions: list[dict]) -> str:
+    spent = any(bool(row.get("registry_confirmed")) for row in sessions or [])
+    used_html = (
+        '<p><span class="badge" style="background:#64748b">сертификат списан</span></p>'
+        if spent
+        else '<p><span class="badge" style="background:#22c55e">сертификат ещё не использован</span></p>'
+    )
+    if not sessions:
+        return used_html + '<p class="muted">Заявок с фото сертификата пока нет.</p>'
+    from bot.services.cert_codes import telegram_file_id_from_photo_ref
+
+    cards = []
+    total = len(sessions)
+    for idx, row in enumerate(sessions):
+        state = (row.get("state") or "").strip()
+        status_l = _CERT_STATE_LABELS.get(state, state or "—")
+        if state == "pending_review":
+            status_mod = "pending"
+        elif bool(row.get("registry_confirmed")):
+            status_mod = "approved"
+        else:
+            status_mod = "other"
+        created = _fmt_msk(row.get("created_at"))
+        updated = _fmt_msk(row.get("updated_at")) if row.get("updated_at") else ""
+        code = (row.get("code") or "").strip() or "—"
+        facts = [
+            f"<div><dt>Номер</dt><dd>{_h(code)}</dd></div>",
+            f"<div><dt>Создана</dt><dd>{_h(created)}</dd></div>",
+        ]
+        if updated:
+            facts.append(f"<div><dt>Обновлена</dt><dd>{_h(updated)}</dd></div>")
+        if row.get("booking_id"):
+            facts.append(
+                f"<div><dt>Бронь</dt><dd>#{_h(str(row.get('booking_id')))}</dd></div>"
+            )
+        file_html = ""
+        sid = row.get("id")
+        photo_ref = (row.get("photo_ref") or "").strip()
+        file_id = telegram_file_id_from_photo_ref(photo_ref)
+        if sid and file_id:
+            preview_url = f"/admin/cert-photo/{int(sid)}"
+            file_html = (
+                f'<div class="screen-preview">'
+                f'<a class="pill" href="{_h(preview_url)}" target="_blank" rel="noopener">Показать фото</a>'
+                f'<img src="{_h(preview_url)}" alt="Фото сертификата #{_h(str(sid))}" loading="lazy" />'
+                f"</div>"
+            )
+        elif photo_ref:
+            file_html = (
+                '<p class="muted screen-preview-note">'
+                "Превью недоступно для этой заявки — смотрите фото в чате модерации."
+                "</p>"
+            )
+        else:
+            file_html = '<p class="muted screen-preview-note">Фото ещё не присылали.</p>'
+        if photo_ref:
+            file_html += (
+                '<details class="screen-file-id">'
+                "<summary>file_id</summary>"
+                f"<code>{_h(photo_ref)}</code>"
+                "</details>"
+            )
+        cards.append(
+            f'<article class="screen-card screen-card--{status_mod}" data-idx="{idx}">'
+            f'<div class="screen-card-top">'
+            f'<span class="screen-card-title">#{_h(str(row.get("id")))} · сертификат</span>'
+            f'<span class="badge screen-status screen-status--{status_mod}">{_h(status_l)}</span>'
+            f"</div>"
+            f'<dl class="screen-card-facts">{"".join(facts)}</dl>'
+            f"{file_html}"
+            f'<div class="screen-card-nav muted">{idx + 1} / {total}</div>'
+            "</article>"
+        )
+    return (
+        used_html
+        + '<div class="screen-carousel" tabindex="0">'
+        + "".join(cards)
+        + "</div>"
+        + '<p class="muted screen-carousel-hint">Листайте карточки сертификата вбок</p>'
+    )
+
+
 def _user_send_ticket_html(
     bookings: list[dict],
     user_key: str = "",
@@ -2924,6 +3020,7 @@ def _users_tab(
             f'{_user_extra_details("Напоминания", _user_reminders_html(user["bookings"]), tone="reminders")}'
             f'{_user_extra_details("Билеты", _user_tickets_html(user["bookings"], user_key=user["key"], can_resend_tickets=can_resend_tickets), tone="tickets")}'
             f'{_user_extra_details("Скрины розыгрыша", _user_raffle_html(extras.get("submissions") or [], extras.get("flags") or {}), tone="raffle")}'
+            f'{_user_extra_details("Скрины сертификата", _user_certificate_html(extras.get("certificates") or []), tone="certificate")}'
             "</div>"
             f'{_booking_table(bookings, show_format=True)}'
             "</section>"
@@ -4428,12 +4525,14 @@ def render_admin_html(
     .metric.tone-best, .metric.tone-hitloto, .metric.tone-elka, .metric.tone-proverka {{ border-width:1px; }}
     .branch-grid {{ display:grid; grid-template-columns: 1fr; gap:14px; margin-top:18px; }}
     .branch-card {{ background:#f8fafc; border:1px solid var(--line); border-radius:16px; padding:16px; }}
-    .user-extra-stack {{ display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px; margin:12px 0 18px; align-items:start; }}
+    .user-extra-stack {{ display:grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap:10px; margin:12px 0 18px; align-items:start; }}
     .user-extra-details {{ background:#f8fafc; border:1px solid var(--line); border-radius:14px; overflow:hidden; }}
     .user-extra-activity {{ background:#eff6ff; border-color:#93c5fd; }}
     .user-extra-activity .user-extra-summary strong {{ color:#1d4ed8; }}
     .user-extra-raffle {{ background:#fff7ed; border-color:#fdba74; }}
     .user-extra-raffle .user-extra-summary strong {{ color:#c2410c; }}
+    .user-extra-certificate {{ background:#ecfeff; border-color:#67e8f9; }}
+    .user-extra-certificate .user-extra-summary strong {{ color:#0e7490; }}
     .user-extra-tickets {{ background:#f5f3ff; border-color:#c4b5fd; }}
     .user-extra-tickets .user-extra-summary strong {{ color:#6d28d9; }}
     .user-extra-reminders {{ background:#f0fdf4; border-color:#86efac; }}
@@ -4683,6 +4782,9 @@ def render_admin_html(
       .user-extra-details[open] {{ grid-column:auto; }}
       .funnel-step.funnel-spacer {{ display:none; }}
       .branch-metrics {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
+    }}
+    @media (max-width: 1400px) and (min-width: 1101px) {{
+      .user-extra-stack {{ grid-template-columns: repeat(3, minmax(0,1fr)); }}
     }}
     @media (max-width: 1100px) and (min-width: 901px) {{
       .user-extra-stack, .command-grid {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
@@ -5328,6 +5430,7 @@ async def admin_page(request: web.Request) -> web.Response:
 
                 def _load_user_extras():
                     from bot.db.analytics import fetch_user_activity, fetch_user_activity_counts
+                    from bot.db.cert_store import list_sessions_for_user
                     from bot.db.crud import (
                         get_raffle_submissions_for_telegram,
                         get_raffle_submissions_for_vk,
@@ -5362,6 +5465,9 @@ async def admin_page(request: web.Request) -> web.Response:
                             user_id=uid, telegram_id=tid, vk_id=vid, limit=20
                         ),
                         "submissions": submissions,
+                        "certificates": list_sessions_for_user(
+                            telegram_id=tid, vk_id=vid
+                        ),
                         "flags": get_user_raffle_flags(
                             telegram_id=tid, user_id=uid, vk_id=vid
                         ),
@@ -5860,37 +5966,8 @@ async def events_restore_page(request: web.Request) -> web.Response:
     raise web.HTTPFound(f"/admin?tab=events&ef={quote(event_format)}&saved=1")
 
 
-async def raffle_screen_page(request: web.Request) -> web.Response:
-    """Проксирует скрин заявки из Telegram по file_id — без сохранения на диск сервера."""
-    config = request.app["config"]
-    if not _check_auth(request, config):
-        raise web.HTTPFound("/admin")
-    if not _can_view_ops(request, config):
-        raise web.HTTPForbidden(text="Недостаточно прав")
-
-    try:
-        submission_id = int(request.match_info["submission_id"])
-    except (TypeError, ValueError, KeyError):
-        raise web.HTTPBadRequest(text="Некорректный id заявки") from None
-
-    from bot.db.crud import get_raffle_submission
-
-    row = await asyncio.get_running_loop().run_in_executor(
-        None, get_raffle_submission, submission_id
-    )
-    if not row:
-        raise web.HTTPNotFound(text="Заявка не найдена")
-
-    # id, telegram_id, username, full_name, kind, status, photo_file_id, ...
-    file_id = (row[6] or "").strip() if len(row) > 6 else ""
-    if not _looks_like_telegram_file_id(file_id):
-        raise web.HTTPNotFound(
-            text=(
-                "Превью недоступно: в заявке нет Telegram file_id. "
-                "Для старых VK-заявок откройте скрин в чате модерации."
-            )
-        )
-
+async def _telegram_photo_response(file_id: str) -> web.Response:
+    """Проксирует фото из Telegram по file_id — без сохранения на диск сервера."""
     token = (os.getenv("BOT_TOKEN") or "").strip()
     if not token:
         raise web.HTTPServiceUnavailable(text="BOT_TOKEN не задан на сервере админки")
@@ -5924,6 +6001,69 @@ async def raffle_screen_page(request: web.Request) -> web.Response:
         raise web.HTTPNotFound(text="Не удалось загрузить скрин из Telegram") from None
     finally:
         await bot.session.close()
+
+
+async def raffle_screen_page(request: web.Request) -> web.Response:
+    """Проксирует скрин заявки из Telegram по file_id — без сохранения на диск сервера."""
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        raise web.HTTPFound("/admin")
+    if not _can_view_ops(request, config):
+        raise web.HTTPForbidden(text="Недостаточно прав")
+
+    try:
+        submission_id = int(request.match_info["submission_id"])
+    except (TypeError, ValueError, KeyError):
+        raise web.HTTPBadRequest(text="Некорректный id заявки") from None
+
+    from bot.db.crud import get_raffle_submission
+
+    row = await asyncio.get_running_loop().run_in_executor(
+        None, get_raffle_submission, submission_id
+    )
+    if not row:
+        raise web.HTTPNotFound(text="Заявка не найдена")
+
+    # id, telegram_id, username, full_name, kind, status, photo_file_id, ...
+    file_id = (row[6] or "").strip() if len(row) > 6 else ""
+    if not _looks_like_telegram_file_id(file_id):
+        raise web.HTTPNotFound(
+            text=(
+                "Превью недоступно: в заявке нет Telegram file_id. "
+                "Для старых VK-заявок откройте скрин в чате модерации."
+            )
+        )
+    return await _telegram_photo_response(file_id)
+
+
+async def cert_photo_page(request: web.Request) -> web.Response:
+    """Проксирует фото сертификата из Telegram по photo_ref сессии."""
+    config = request.app["config"]
+    if not _check_auth(request, config):
+        raise web.HTTPFound("/admin")
+    if not _can_view_ops(request, config):
+        raise web.HTTPForbidden(text="Недостаточно прав")
+
+    try:
+        session_id = int(request.match_info["session_id"])
+    except (TypeError, ValueError, KeyError):
+        raise web.HTTPBadRequest(text="Некорректный id заявки") from None
+
+    from bot.db.cert_store import get_session
+    from bot.services.cert_codes import telegram_file_id_from_photo_ref
+
+    row = await asyncio.get_running_loop().run_in_executor(None, get_session, session_id)
+    if not row:
+        raise web.HTTPNotFound(text="Заявка не найдена")
+    file_id = telegram_file_id_from_photo_ref(row.get("photo_ref") or "")
+    if not file_id:
+        raise web.HTTPNotFound(
+            text=(
+                "Превью недоступно: в заявке нет Telegram file_id. "
+                "Для VK-заявок откройте фото в чате модерации."
+            )
+        )
+    return await _telegram_photo_response(file_id)
 
 
 async def site_funnel_export_page(request: web.Request) -> web.Response:
@@ -7000,6 +7140,7 @@ def create_app(config: AdminConfig | None = None) -> web.Application:
     app.router.add_get("/", index_page)
     app.router.add_get("/admin", admin_page)
     app.router.add_get("/admin/raffle-screen/{submission_id}", raffle_screen_page)
+    app.router.add_get("/admin/cert-photo/{session_id}", cert_photo_page)
     app.router.add_get("/admin/ticket-preview/{booking_id}", ticket_preview_page)
     app.router.add_get("/admin/analytics/site-funnel.docx", site_funnel_export_page)
     app.router.add_get("/admin/events/hide-preview", events_hide_preview_page)

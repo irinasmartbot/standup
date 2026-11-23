@@ -158,6 +158,40 @@ def get_session(session_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def list_sessions_for_user(
+    *,
+    telegram_id: int | None = None,
+    vk_id: int | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    if not postgres_ready():
+        return []
+    if telegram_id is None and vk_id is None:
+        return []
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, code, channel, telegram_id, vk_id, state, photo_ref,
+                    claim_id, booking_id, registry_confirmed, created_at, updated_at
+                FROM certificate_sessions
+                WHERE (%s::bigint IS NOT NULL AND telegram_id = %s)
+                   OR (%s::bigint IS NOT NULL AND vk_id = %s)
+                ORDER BY id DESC
+                LIMIT %s
+                """,
+                (
+                    telegram_id,
+                    telegram_id,
+                    vk_id,
+                    vk_id,
+                    int(limit),
+                ),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
 def get_draft(*, telegram_id: int | None = None, vk_id: int | None = None) -> dict[str, Any] | None:
     if not postgres_ready():
         return None
