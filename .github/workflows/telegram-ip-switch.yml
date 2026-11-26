@@ -43,6 +43,7 @@ jobs:
               import subprocess
               import sys
               import tempfile
+              import textwrap
               import time
               from datetime import datetime, timezone
               from pathlib import Path
@@ -140,7 +141,8 @@ jobs:
               backup.mkdir(mode=0o700)
               shutil.copy2(ENV, backup / 'env.before')
               os.chmod(backup / 'env.before', 0o600)
-              rollback_source = '''import hashlib, os, subprocess, tempfile
+              rollback_source = '''
+              import hashlib, os, subprocess, tempfile
               from pathlib import Path
               target = Path(ENV_PATH)
               backup = Path(BACKUP_PATH)
@@ -159,6 +161,7 @@ jobs:
               '''
               for key, value in {'ENV_PATH': str(ENV), 'BACKUP_PATH': str(backup / 'env.before'), 'EXPECTED_HASH': hashlib.sha256(updated).hexdigest(), 'ORIGINAL_MODE': stat.S_IMODE(metadata.st_mode), 'RESTART_COMMANDS': restart_commands}.items():
                   rollback_source = rollback_source.replace(key, repr(value))
+              rollback_source = textwrap.dedent(rollback_source)
               compile(rollback_source, 'rollback.py', 'exec')
               (backup / 'rollback.py').write_text(rollback_source)
               os.chmod(backup / 'rollback.py', 0o700)
