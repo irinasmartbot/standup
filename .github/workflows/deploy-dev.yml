@@ -92,4 +92,13 @@ jobs:
             echo "$HEALTH_CRON"
           ) | crontab -
           echo "health-watch cron installed"
+          # Personal transport monitor is opt-in; never infer the recipient from TECH_CHAT_ID.
+          if /home/standup/app/venv/bin/python -c "from dotenv import dotenv_values; import sys; v=dotenv_values('.env').get('TELEGRAM_MONITOR_CHAT_ID') or ''; sys.exit(0 if v.isdigit() and int(v) > 0 else 1)"; then
+            TRANSPORT_CRON='* * * * * cd /home/standup/app && /home/standup/app/venv/bin/python /home/standup/app/scripts/telegram_transport_watch.py >> /home/standup/backups/telegram-transport-watch.log 2>&1'
+            (
+              crontab -l 2>/dev/null | grep -v 'scripts/telegram_transport_watch.py' || true
+              echo "$TRANSPORT_CRON"
+            ) | crontab -
+            echo "telegram transport monitor cron installed"
+          fi
           EOF
