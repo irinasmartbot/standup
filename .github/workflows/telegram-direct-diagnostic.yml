@@ -1,0 +1,100 @@
+name: Diagnose Telegram direct connection
+# Read-only one-off connectivity check. Does not deploy or restart services.
+on:
+  push:
+    branches:
+      - codex/telegram-direct-diagnostic-20261126
+    paths:
+      - '.github/workflows/telegram-direct-diagnostic.yml'
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check Telegram from configured VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key_file=$(mktemp)
+          hosts_file=$(mktemp)
+          trap 'rm -f "$key_file" "$hosts_file"' EXIT
+          printf '%s\n' "$VPS_SSH_KEY" > "$key_file"
+          ssh-keyscan -T 10 -H "$VPS_HOST" > "$hosts_file" 2>/dev/null
+          ssh -T -i "$key_file" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts_file" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE_DIAGNOSTIC'
+          set -eu
+          test -d /home/standup/app
+          cd /home/standup/app
+          /home/standup/app/venv/bin/python -B -u - <<'PY_DIAGNOSTIC'
+          import http.client, ipaddress, json, socket, ssl, subprocess, time
+          from pathlib import Path
+          from dotenv import dotenv_values
+
+          root = Path("/home/standup/app")
+          env = dotenv_values(root / ".env")
+          print("server_probe_started=true", flush=True)
+          for unit in ("standup-bot", "standup-admin", "telegram-api-relay"):
+              r = subprocess.run(["systemctl", "show", unit, "--property=ActiveState,SubState", "--no-pager"], capture_output=True, text=True, timeout=5)
+              states = [line for line in r.stdout.splitlines() if line.startswith(("ActiveState=", "SubState="))]
+              print(unit, " ".join(states) or "state_unavailable", flush=True)
+          mode = env.get("TELEGRAM_RELAY_MODE") or "fallback"
+          host = env.get("TELEGRAM_RELAY_HOST") or ""
+          print("configured_mode=" + (mode if mode in ("off", "always", "fallback") else "invalid"), flush=True)
+          print("relay_configured=" + str(bool(host)).lower(), flush=True)
+          try:
+              addresses = sorted({item[4][0] for item in socket.getaddrinfo("api.telegram.org", 443, type=socket.SOCK_STREAM)})
+              print("telegram_dns=" + ",".join(addresses), flush=True)
+              print("dns_addresses_public=" + str(all(ipaddress.ip_address(a).is_global for a in addresses)).lower(), flush=True)
+          except Exception as exc:
+              print("dns_error=" + type(exc).__name__, flush=True)
+
+          class RelayConnection(http.client.HTTPSConnection):
+              def connect(self):
+                  raw = socket.create_connection((host, int(env.get("TELEGRAM_RELAY_PORT") or 18443)), timeout=8)
+                  try:
+                      self.sock = ssl.create_default_context().wrap_socket(raw, server_hostname="api.telegram.org")
+                  except BaseException:
+                      raw.close()
+                      raise
+
+          def probe(label, path, relay=False):
+              conn = RelayConnection("api.telegram.org", timeout=8) if relay else http.client.HTTPSConnection("api.telegram.org", timeout=8)
+              started = time.monotonic()
+              try:
+                  conn.request("GET", path)
+                  response = conn.getresponse()
+                  data = response.read(65536)
+                  item = {"probe": label, "http_status": response.status, "seconds": round(time.monotonic()-started, 3)}
+                  if path != "/":
+                      try:
+                          payload = json.loads(data)
+                          item["telegram_ok"] = payload.get("ok") is True
+                          if isinstance(payload.get("error_code"), int):
+                              item["telegram_error_code"] = payload["error_code"]
+                      except (ValueError, AttributeError):
+                          item["json_valid"] = False
+                  print(json.dumps(item), flush=True)
+              except Exception as exc:
+                  print(json.dumps({"probe": label, "error_type": type(exc).__name__, "seconds": round(time.monotonic()-started, 3)}), flush=True)
+              finally:
+                  conn.close()
+
+          for attempt in range(1, 6):
+              probe("direct_root_" + str(attempt), "/")
+          if host:
+              probe("relay_root", "/", relay=True)
+          token = env.get("BOT_TOKEN")
+          if token:
+              probe("direct_getMe", "/bot" + token + "/getMe")
+              if host:
+                  probe("relay_getMe", "/bot" + token + "/getMe", relay=True)
+          else:
+              print("bot_token_present=false", flush=True)
+          print("server_probe_finished=true", flush=True)
+          PY_DIAGNOSTIC
+          REMOTE_DIAGNOSTIC
