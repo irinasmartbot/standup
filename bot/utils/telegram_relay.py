@@ -6,12 +6,13 @@ TLS SNI and certificate validation still use api.telegram.org.
 Modes (TELEGRAM_RELAY_MODE):
 - off: always direct, even if TELEGRAM_RELAY_HOST is set
 - always: every api.telegram.org:443 request goes through the tunnel
-- fallback: try direct first; on network errors retry through the tunnel
+- fallback: try direct first; retry through the tunnel only when safe
 """
 
 from __future__ import annotations
 
 import http.client
+import ipaddress
 import json
 import logging
 import os
@@ -93,6 +94,37 @@ def telegram_relay_settings() -> TelegramRelaySettings:
         return TelegramRelaySettings(host="", port=0)
     port = _int_env("TELEGRAM_RELAY_PORT", 18443)
     return TelegramRelaySettings(host=host, port=port)
+
+
+def telegram_direct_settings() -> TelegramRelaySettings | None:
+    """Pin only the connection address; URL, SNI and certificate stay Telegram's."""
+    host = (os.getenv("TELEGRAM_DIRECT_HOST") or "").strip()
+    if not host:
+        return None
+    ipaddress.IPv4Address(host)
+    return TelegramRelaySettings(host=host, port=443)
+
+
+class TelegramConnectError(OSError):
+    """TCP/TLS failed before any HTTP request was written."""
+
+
+def safe_to_retry(method: str, exc: BaseException) -> bool:
+    # A lost response to sendMessage/sendPhoto is not evidence of non-delivery.
+    # These read methods are also safe after an ambiguous response timeout.
+    if method in {"getMe", "getUpdates", "getWebhookInfo", "getChat", "getChatMember", "getChatAdministrators", "getChatMemberCount", "getFile"}:
+        return True
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (TelegramConnectError, aiohttp.ClientConnectorError)):
+            return True
+        connection_timeout = getattr(aiohttp, "ConnectionTimeoutError", ())
+        if connection_timeout and isinstance(current, connection_timeout):
+            return True
+        current = getattr(current, "original", None) or current.__cause__ or current.__context__
+    return False
 
 
 def telegram_relay_mode() -> str:
@@ -187,10 +219,11 @@ def format_transport_summary(*, last_events: list[dict[str, Any]] | None = None)
         f"Доля через мост: {bridge_pct}",
         "",
         "Как часто в мост: не по расписанию.",
-        "Каждый запрос сначала идёт напрямую (до 5 сек на соединение).",
-        "Если Beget отвечает — мост не используется.",
-        "Если 3 раза подряд напрямую не вышло — около минуты только мост,",
-        "потом снова проба напрямую.",
+        f"Соединение напрямую: до {telegram_direct_connect_timeout():g} сек.",
+        "Если прямой путь отвечает — мост не используется.",
+        f"После {_int_env('TELEGRAM_DIRECT_FAILS_BEFORE_SKIP', DEFAULT_FAILS_BEFORE_SKIP)} сетевых сбоев подряд",
+        f"прямая попытка повторяется через {_float_env('TELEGRAM_DIRECT_COOLDOWN_SEC', DEFAULT_DIRECT_COOLDOWN_SEC):g} сек.",
+        "Запрос с неизвестным результатом отправки автоматически не повторяется.",
     ]
     if _stats.last_event:
         label = _EVENT_RU.get(_stats.last_event, _stats.last_event)
@@ -420,12 +453,27 @@ class TelegramRelayResolver(AbstractResolver):
 
 def _make_aiogram_session(*, relay: bool):
     from aiogram.client.session.aiohttp import AiohttpSession
+    from aiogram.exceptions import TelegramNetworkError
 
-    session = AiohttpSession(limit=telegram_api_connection_limit(relay=relay))
-    if relay:
-        settings = telegram_relay_settings()
-        if settings.enabled:
-            session._connector_init["resolver"] = TelegramRelayResolver(settings)
+    class BoundedSession(AiohttpSession):
+        async def make_request(self, bot, method, timeout=None):
+            session = await self.create_session()
+            url = self.api.api_url(token=bot.token, method=method.__api_method__)
+            total = self.timeout if timeout is None else timeout
+            bounded = total if isinstance(total, aiohttp.ClientTimeout) else _direct_timeout(total)
+            try:
+                async with session.post(url, data=self.build_form_data(bot, method), timeout=bounded) as response:
+                    raw = await response.text()
+            except (aiohttp.ClientError, TimeoutError) as exc:
+                error = TelegramNetworkError(method=method, message=type(exc).__name__)
+                error.original = exc
+                raise error from None
+            return self.check_response(bot=bot, method=method, status_code=response.status, content=raw).result
+
+    session = BoundedSession(limit=telegram_api_connection_limit(relay=relay))
+    settings = telegram_relay_settings() if relay else telegram_direct_settings()
+    if settings is not None and settings.enabled:
+        session._connector_init["resolver"] = TelegramRelayResolver(settings)
     return session
 
 
@@ -465,6 +513,8 @@ def _new_fallback_session():
                     return result
                 except TelegramNetworkError as exc:
                     _circuit.on_fail(api_method, source, exc)
+                    if not safe_to_retry(api_method, exc):
+                        raise
             try:
                 result = await self._relay.make_request(bot, method, timeout=timeout)
             except Exception as exc:
@@ -489,6 +539,7 @@ def _new_fallback_session():
         ):
             source = "aiogram"
             method = "download_file"
+            emitted = False
             if _circuit.should_try_direct():
                 try:
                     async for chunk in self._direct.stream_content(
@@ -498,11 +549,14 @@ def _new_fallback_session():
                         chunk_size=chunk_size,
                         raise_for_status=raise_for_status,
                     ):
+                        emitted = True
                         yield chunk
                     _circuit.on_ok(method, source)
                     return
                 except (aiohttp.ClientError, TimeoutError, OSError) as exc:
                     _circuit.on_fail(method, source, exc)
+                    if emitted:
+                        raise
             try:
                 async for chunk in self._relay.stream_content(
                     url,
@@ -561,14 +615,12 @@ def create_telegram_bot(token: str, **kwargs):
 
 
 def telegram_aiohttp_connector(*, relay: bool) -> aiohttp.TCPConnector | None:
-    if not relay:
-        return None
-    settings = telegram_relay_settings()
-    if not settings.enabled:
+    settings = telegram_relay_settings() if relay else telegram_direct_settings()
+    if settings is None or not settings.enabled:
         return None
     return aiohttp.TCPConnector(
         resolver=TelegramRelayResolver(settings),
-        limit=telegram_api_connection_limit(relay=True),
+        limit=telegram_api_connection_limit(relay=relay),
         ttl_dns_cache=3600,
     )
 
@@ -617,6 +669,8 @@ async def telegram_aiohttp_post_json(
             return data
         except (aiohttp.ClientError, TimeoutError, OSError) as exc:
             _circuit.on_fail(method, source, exc)
+            if not safe_to_retry(method, exc):
+                raise
     try:
         data = await _once(relay=True)
     except Exception as exc:
@@ -645,7 +699,12 @@ class _TelegramRelayHTTPSConnection(http.client.HTTPSConnection):
             self.source_address,
         )
         context = self._context or ssl.create_default_context()
-        self.sock = context.wrap_socket(self.sock, server_hostname=self.host)
+        raw = self.sock
+        try:
+            self.sock = context.wrap_socket(raw, server_hostname=self.host)
+        except BaseException:
+            raw.close()
+            raise
 
 
 def _https_post_form(
@@ -657,6 +716,7 @@ def _https_post_form(
     relay: TelegramRelaySettings | None,
 ) -> tuple[int, bytes]:
     context = ssl.create_default_context()
+    relay = relay or telegram_direct_settings()
     if relay is not None:
         conn: http.client.HTTPSConnection = _TelegramRelayHTTPSConnection(
             TELEGRAM_API_HOST,
@@ -672,6 +732,10 @@ def _https_post_form(
             context=context,
         )
     try:
+        try:
+            conn.connect()
+        except OSError as exc:
+            raise TelegramConnectError(type(exc).__name__) from exc
         body = urllib.parse.urlencode(fields).encode("utf-8")
         conn.request(
             "POST",
@@ -706,8 +770,10 @@ def telegram_api_post_form(
             result = _https_post_form(token, method, fields, timeout=timeout, relay=None)
             _circuit.on_ok(method, source)
             return result
-        except (TimeoutError, OSError) as exc:
+        except (TimeoutError, OSError, http.client.HTTPException) as exc:
             _circuit.on_fail(method, source, exc)
+            if not safe_to_retry(method, exc):
+                raise
     try:
         result = _https_post_form(token, method, fields, timeout=timeout, relay=settings)
     except Exception as exc:
