@@ -1,0 +1,207 @@
+name: Switch Telegram to verified direct IP
+# Owner-authorized environment-only switch. Preflight, backup and automatic rollback.
+on:
+  push:
+    branches:
+      - codex/telegram-direct-diagnostic-20261126
+    paths:
+      - '.github/workflows/telegram-ip-switch.yml'
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify IP and switch with rollback
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key_file=$(mktemp)
+          hosts_file=$(mktemp)
+          trap 'rm -f "$key_file" "$hosts_file"' EXIT
+          printf '%s\n' "$VPS_SSH_KEY" > "$key_file"
+          ssh-keyscan -T 10 -H "$VPS_HOST" > "$hosts_file" 2>/dev/null
+          ssh -T -i "$key_file" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts_file" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE_DIAGNOSTIC'
+          set -eu
+          test -d /home/standup/app
+          cd /home/standup/app
+          /home/standup/app/venv/bin/python -B -u - <<'PY_DIAGNOSTIC'
+          try:
+              import asyncio
+              import hashlib
+              import importlib.util
+              import json
+              import os
+              import re
+              import shutil
+              import stat
+              import subprocess
+              import sys
+              import tempfile
+              import time
+              from datetime import datetime, timezone
+              from pathlib import Path
+              from dotenv import dotenv_values
+              
+              ROOT = Path('/home/standup/app')
+              ENV = ROOT / '.env'
+              TARGET = {'TELEGRAM_RELAY_HOST': '149.154.167.220', 'TELEGRAM_RELAY_PORT': '443'}
+              
+              class CheckFailure(Exception):
+                  pass
+              
+              def emit(**data):
+                  print(json.dumps(data), flush=True)
+              
+              def command(args, timeout=15):
+                  return subprocess.run(args, text=True, capture_output=True, timeout=timeout)
+              
+              def check(condition, message):
+                  if not condition:
+                      raise CheckFailure(message)
+              
+              def atomic_write(data, mode):
+                  fd, name = tempfile.mkstemp(prefix='.telegram-env-', dir=ROOT)
+                  try:
+                      os.fchmod(fd, mode)
+                      with os.fdopen(fd, 'wb') as out:
+                          out.write(data)
+                          out.flush()
+                          os.fsync(out.fileno())
+                      os.replace(name, ENV)
+                  finally:
+                      if os.path.exists(name):
+                          os.unlink(name)
+              
+              check(ENV.is_file() and not ENV.is_symlink(), 'env_not_regular_file')
+              original = ENV.read_bytes()
+              metadata = ENV.stat()
+              check(metadata.st_uid == os.geteuid(), 'env_owner_mismatch')
+              config = dotenv_values(ENV)
+              check(config.get('TELEGRAM_RELAY_MODE') == 'always', 'transport_mode_changed')
+              check(config.get('BOT_TOKEN'), 'bot_token_missing')
+              check(config.get('TELEGRAM_RELAY_HOST') in ('127.0.0.1', 'localhost'), 'unexpected_existing_transport')
+              sha = command(['git', '-C', str(ROOT), 'rev-parse', 'HEAD']).stdout.strip()
+              check(sha == 'f8cecfdb694b00324721bdeb8f7ea909a34cde42', 'deployed_code_changed')
+              emit(stage='preflight', deployed_sha=sha, configured_mode='always')
+              
+              restart_commands = []
+              for unit in ('standup-bot', 'standup-admin'):
+                  check(command(['systemctl', 'is-active', '--quiet', unit]).returncode == 0, unit + '_not_active_before_change')
+                  inherited = command(['systemctl', 'show', unit, '--property=Environment', '--value']).stdout
+                  check(not any(key + '=' in inherited for key in TARGET), 'systemd_transport_override')
+                  for name in (unit, unit + '.service'):
+                      args = ['/usr/bin/systemctl', 'restart', name]
+                      if command(['sudo', '-n', '-l', *args]).returncode == 0:
+                          restart_commands.append(['sudo', '-n', *args])
+                          break
+                  else:
+                      raise CheckFailure(unit + '_restart_not_authorized')
+              
+              os.environ.update({key: value for key, value in config.items() if value is not None})
+              os.environ.update(TARGET)
+              spec = importlib.util.spec_from_file_location('standup_transport_probe', ROOT / 'bot/utils/telegram_relay.py')
+              transport = importlib.util.module_from_spec(spec)
+              sys.modules[spec.name] = transport
+              spec.loader.exec_module(transport)
+              for attempt in range(1, 6):
+                  start = time.monotonic()
+                  status, body = transport.telegram_api_post_form(config['BOT_TOKEN'], 'getMe', {}, timeout=8)
+                  check(status == 200 and json.loads(body).get('ok') is True, 'pinned_getMe_failed')
+                  emit(stage='preflight', probe='pinned_getMe', attempt=attempt, http_status=status, seconds=round(time.monotonic()-start, 3))
+              
+              async def verify_application_transport(stage):
+                  bot = transport.create_telegram_bot(config['BOT_TOKEN'])
+                  try:
+                      me = await bot.get_me(request_timeout=8)
+                      info = await bot.get_webhook_info(request_timeout=8)
+                      check(me.is_bot, 'getMe_not_bot')
+                      check(not info.url, 'unexpected_webhook_for_polling_bot')
+                      emit(stage=stage, aiogram_getMe=True, webhook_present=bool(info.url), pending_update_count=info.pending_update_count)
+                  finally:
+                      await bot.session.close()
+              
+              asyncio.run(verify_application_transport('preflight'))
+              text = original.decode('utf-8')
+              for key, value in TARGET.items():
+                  pattern = r'(?m)^(?:export[ \t]+)?' + re.escape(key) + r'[ \t]*=.*$'
+                  check(len(re.findall(pattern, text)) == 1, 'transport_key_missing_or_duplicate')
+                  text = re.sub(pattern, key + '=' + value, text)
+              updated = text.encode('utf-8')
+              check(dotenv_values(stream=__import__('io').StringIO(text)).get('BOT_TOKEN') == config['BOT_TOKEN'], 'unrelated_token_change')
+              check(ENV.read_bytes() == original, 'env_changed_during_preflight')
+              stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+              backup = Path('/home/standup/backups') / ('telegram-ip-' + stamp)
+              backup.mkdir(mode=0o700)
+              shutil.copy2(ENV, backup / 'env.before')
+              os.chmod(backup / 'env.before', 0o600)
+              rollback_source = '''import hashlib, os, subprocess, tempfile
+              from pathlib import Path
+              target = Path(ENV_PATH)
+              backup = Path(BACKUP_PATH)
+              if hashlib.sha256(target.read_bytes()).hexdigest() != EXPECTED_HASH:
+                  raise SystemExit('Rollback refused: .env changed after this switch')
+              fd, name = tempfile.mkstemp(prefix='.telegram-env-rollback-', dir=target.parent)
+              os.fchmod(fd, ORIGINAL_MODE)
+              with os.fdopen(fd, 'wb') as out:
+                  out.write(backup.read_bytes())
+                  out.flush()
+                  os.fsync(out.fileno())
+              os.replace(name, target)
+              for args in RESTART_COMMANDS:
+                  subprocess.run(args, check=True, timeout=45)
+              print('Previous Telegram settings restored; bot and admin restarted')
+              '''
+              for key, value in {'ENV_PATH': str(ENV), 'BACKUP_PATH': str(backup / 'env.before'), 'EXPECTED_HASH': hashlib.sha256(updated).hexdigest(), 'ORIGINAL_MODE': stat.S_IMODE(metadata.st_mode), 'RESTART_COMMANDS': restart_commands}.items():
+                  rollback_source = rollback_source.replace(key, repr(value))
+              compile(rollback_source, 'rollback.py', 'exec')
+              (backup / 'rollback.py').write_text(rollback_source)
+              os.chmod(backup / 'rollback.py', 0o700)
+              emit(stage='backup', rollback_command='/home/standup/app/venv/bin/python ' + str(backup / 'rollback.py'))
+              
+              changed = False
+              try:
+                  check(ENV.read_bytes() == original, 'env_changed_before_write')
+                  atomic_write(updated, stat.S_IMODE(metadata.st_mode))
+                  changed = True
+                  restarted_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+                  for args in restart_commands:
+                      result = command(args, timeout=45)
+                      check(result.returncode == 0, 'service_restart_failed')
+                  time.sleep(12)
+                  live = dotenv_values(ENV)
+                  check(all(live.get(key) == value for key, value in TARGET.items()), 'saved_transport_mismatch')
+                  for unit in ('standup-bot', 'standup-admin'):
+                      result = command(['systemctl', 'is-active', '--quiet', unit])
+                      check(result.returncode == 0, unit + '_inactive_after_restart')
+                      emit(stage='postcheck', service=unit, active=True)
+                  asyncio.run(verify_application_transport('postcheck'))
+                  logs = command(['sudo', '-n', '/usr/bin/journalctl', '-u', 'standup-bot', '--since', restarted_at, '--no-pager', '-o', 'cat'])
+                  if logs.returncode != 0:
+                      logs = command(['journalctl', '-u', 'standup-bot', '--since', restarted_at, '--no-pager', '-o', 'cat'])
+                  lines = logs.stdout.splitlines() if logs.returncode == 0 else []
+                  polling_started = any('Run polling for bot' in line for line in lines)
+                  network_failures = sum('Failed to fetch updates' in line or 'TelegramNetworkError' in line for line in lines)
+                  emit(stage='postcheck', logs_readable=logs.returncode == 0, polling_started=polling_started, telegram_network_failures=network_failures)
+                  check(network_failures == 0, 'network_failures_after_restart')
+                  emit(stage='complete', switched=True, target_ip='149.154.167.220', target_port=443, mode='always', rollback=str(backup / 'rollback.py'))
+              except BaseException:
+                  if changed:
+                      if ENV.read_bytes() == updated:
+                          atomic_write(original, stat.S_IMODE(metadata.st_mode))
+                          rollback_ok = all(command(args, timeout=45).returncode == 0 for args in restart_commands)
+                          emit(stage='rollback', original_env_restored=True, services_restarted=rollback_ok)
+                      else:
+                          emit(stage='rollback', original_env_restored=False, reason='concurrent_env_change')
+                  raise
+          except BaseException as exc:
+              reason = str(exc) if isinstance(exc, CheckFailure) else type(exc).__name__
+              print('switch_failed=' + reason, flush=True)
+              raise SystemExit(1)
+          PY_DIAGNOSTIC
+          REMOTE_DIAGNOSTIC
