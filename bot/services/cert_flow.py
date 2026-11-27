@@ -16,6 +16,7 @@ from bot.db.cert_store import (
     booking_context,
     certificate_booking_ids,
     close_drafts,
+    code_already_used,
     get_draft,
     get_session,
     get_session_by_booking,
@@ -25,6 +26,7 @@ from bot.db.cert_store import (
 )
 from bot.db.crud import create_booking, update_booking_status
 from bot.services.cert_codes import (
+    is_manual_host_code,
     is_preview_code,
     normalize_certificate_code,
     safe_ref,
@@ -49,6 +51,7 @@ from bot.services.cert_texts import (
     FORMAT_BUTTONS,
     FORMAT_LABELS,
     JACKPOT_TEXT,
+    MANUAL_USED_TEXT,
     MISMATCH_TEXT,
     NAME_ASK_TEXT,
     NUMBER_ASK_TEXT,
@@ -127,6 +130,11 @@ def _guest_error(exc: Exception) -> str:
     return UNAVAILABLE_TEXT
 
 
+def _skip_site_registry(session: dict[str, Any] | None) -> bool:
+    """Рукописный номер ведущего не ищем на сайте: его там нет."""
+    return is_manual_host_code((session or {}).get("code") or "")
+
+
 def _identity(session: dict[str, Any]) -> dict[str, str]:
     channel = session["channel"]
     user_id = session["vk_id"] if channel == "vk" else session["telegram_id"]
@@ -191,6 +199,11 @@ async def submit_number(session: dict[str, Any], raw: str) -> dict[str, Any]:
     known = normalize_certificate_code(session.get("code") or "")
     if known and code != known:
         return _step(MISMATCH_TEXT, expect="number")
+    if is_manual_host_code(code):
+        if code_already_used(code, except_session_id=session.get("id")):
+            return _step(MANUAL_USED_TEXT, expect="number")
+        update_session(session["id"], code=code, state="await_photo")
+        return _step(PHOTO_ASK_TEMPLATE.format(code=code), expect="photo")
     try:
         data = await registry.resolve(code=code)
     except (RegistryNotConfigured, RegistryTemporary, RegistryRefusal) as exc:
@@ -230,20 +243,22 @@ async def submit_photo(
         "name": "",
         "phone": "",
     }
-    try:
-        data = await registry.claim(payload)
-    except RegistryTemporary:
-        return _step(
-            "Фото не дошло до сайта. Пришли его ещё раз — это будет новая попытка.",
-            expect="photo",
-        )
-    except (RegistryNotConfigured, RegistryRefusal) as exc:
-        update_session(session["id"], state="await_photo")
-        return _step(_guest_error(exc), expect="photo")
+    claim_id = None
+    if not _skip_site_registry(session):
+        try:
+            data = await registry.claim(payload)
+        except RegistryTemporary:
+            return _step(
+                "Фото не дошло до сайта. Пришли его ещё раз — это будет новая попытка.",
+                expect="photo",
+            )
+        except (RegistryNotConfigured, RegistryRefusal) as exc:
+            update_session(session["id"], state="await_photo")
+            return _step(_guest_error(exc), expect="photo")
 
-    claim_id = data.get("claim_id")
-    if not claim_id:
-        return _step("Сайт не вернул номер заявки. Пришли фото ещё раз.", expect="photo")
+        claim_id = data.get("claim_id")
+        if not claim_id:
+            return _step("Сайт не вернул номер заявки. Пришли фото ещё раз.", expect="photo")
     from bot.services.cert_moderation import send_certificate_photo
 
     sent = await send_certificate_photo(
@@ -274,26 +289,27 @@ async def review(
         return None, "Заявка не найдена"
     if session.get("state") != "pending_review":
         return session, "Уже обработано"
-    if not session.get("claim_id"):
-        return session, "Нет номера заявки на сайте"
-    if not registry.configured(staff=True):
-        return session, "Нет ключа сотрудника"
-    payload = {
-        "code": session["code"],
-        "claim_id": int(session["claim_id"]),
-        "decision": "approve" if approve else "reject",
-        "kind": "pair",
-        "reviewer": safe_ref(f"moderator:{int(reviewer_id)}"),
-        "reason": (reason or "").strip()[:500],
-    }
-    try:
-        await registry.review(payload)
-    except RegistryTemporary:
-        return session, "Сайт не ответил. Нажми кнопку ещё раз."
-    except RegistryRefusal as exc:
-        return session, exc.message or "Сайт не принял решение"
-    except RegistryNotConfigured:
-        return session, "Нет ключа сотрудника"
+    if not _skip_site_registry(session):
+        if not session.get("claim_id"):
+            return session, "Нет номера заявки на сайте"
+        if not registry.configured(staff=True):
+            return session, "Нет ключа сотрудника"
+        payload = {
+            "code": session["code"],
+            "claim_id": int(session["claim_id"]),
+            "decision": "approve" if approve else "reject",
+            "kind": "pair",
+            "reviewer": safe_ref(f"moderator:{int(reviewer_id)}"),
+            "reason": (reason or "").strip()[:500],
+        }
+        try:
+            await registry.review(payload)
+        except RegistryTemporary:
+            return session, "Сайт не ответил. Нажми кнопку ещё раз."
+        except RegistryRefusal as exc:
+            return session, exc.message or "Сайт не принял решение"
+        except RegistryNotConfigured:
+            return session, "Нет ключа сотрудника"
     if approve:
         session = update_session(session_id, state="need_name")
         return session, APPROVED_TEXT
@@ -531,7 +547,8 @@ async def reserve_event(session: dict[str, Any], event_id: int) -> dict[str, Any
     if replace_id:
         payload["replace_booking_ref"] = safe_ref(f"booking:{int(replace_id)}")
     try:
-        await registry.reserve(payload)
+        if not _skip_site_registry(session):
+            await registry.reserve(payload)
     except RegistryTemporary:
         try:
             await registry.booking_status(
@@ -649,7 +666,8 @@ async def confirm_booking(booking_id: int, *, telegram_id: int | None = None, vk
         return _step(CONFIRM_TOO_EARLY_TEXT)
     payload = _booking_payload(session, booking_id)
     try:
-        await registry.confirm(payload)
+        if not _skip_site_registry(session):
+            await registry.confirm(payload)
     except RegistryTemporary:
         return _step("Сайт не ответил. Нажми «Подтвердить бронь» ещё раз. Вторую бронь создавать не нужно.")
     except (RegistryRefusal, RegistryNotConfigured) as exc:
@@ -673,7 +691,8 @@ async def cancel_booking(booking_id: int, *, telegram_id: int | None = None, vk_
         return _step("Эта бронь уже неактивна.")
     payload = _booking_payload(session, booking_id)
     try:
-        await registry.cancel(payload)
+        if not _skip_site_registry(session):
+            await registry.cancel(payload)
     except RegistryTemporary:
         return _step("Сайт не ответил. Нажми отмену ещё раз. Номер пока не освобождён.")
     except (RegistryRefusal, RegistryNotConfigured) as exc:
@@ -709,6 +728,9 @@ async def expire_booking(booking_id: int) -> str:
         return "retry"
     payload = _booking_payload(session, booking_id)
     try:
+        if _skip_site_registry(session):
+            update_session(session["id"], state="need_format", booking_id=None, booking_ref=None)
+            return "ok"
         await registry.expire(payload)
     except RegistryRefusal as exc:
         if exc.code in _EXPIRE_OK:
@@ -742,6 +764,15 @@ async def release_unconfirmed(booking_id: int) -> str:
         logger.error("certificate staff cancel without session booking_id=%s", booking_id)
         return "retry"
     try:
+        if _skip_site_registry(session):
+            update_session(
+                session["id"],
+                state="need_format",
+                booking_id=None,
+                booking_ref=None,
+                registry_confirmed=False,
+            )
+            return "ok"
         await registry.cancel(_booking_payload(session, booking_id))
     except RegistryRefusal as exc:
         if exc.code in _EXPIRE_OK:

@@ -4,18 +4,26 @@ from __future__ import annotations
 
 import re
 
-_CODE_RE = re.compile(r"[A-Z0-9]+(?:-[A-Z0-9]+)*")
+_CODE_RE = re.compile(r"[A-ZА-ЯЁ0-9]+(?:[/\-][A-ZА-ЯЁ0-9]+)*")
+_MANUAL_HOST_RE = re.compile(r"[0-9]{1,6}/[A-ZА-ЯЁ]{2,20}")
 _REF_SAFE = re.compile(r"[^A-Za-z0-9:._-]+")
 
 
 def normalize_certificate_code(raw: str | None) -> str | None:
-    """Верхний регистр, без пробелов. Буквы, цифры и дефис."""
+    """Верхний регистр, без пробелов. Буквы, цифры, дефис и слэш."""
     text = re.sub(r"\s+", "", (raw or "").strip().upper())
+    text = text.replace("\\", "/").replace("／", "/")
+    text = text.lstrip("№#")
     if not text or len(text) > 40:
         return None
     if not _CODE_RE.fullmatch(text):
         return None
     return text
+
+
+def is_manual_host_code(code: str | None) -> bool:
+    """Номер, который ведущий сам написал на бланке: 201/ЛОТО."""
+    return bool(_MANUAL_HOST_RE.fullmatch((code or "").strip().upper()))
 
 
 def is_preview_code(code: str | None) -> bool:

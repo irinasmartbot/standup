@@ -4,6 +4,7 @@ from datetime import timedelta
 import unittest
 
 from bot.services.cert_codes import (
+    is_manual_host_code,
     is_preview_code,
     looks_like_certificate_start,
     normalize_certificate_code,
@@ -29,8 +30,27 @@ class CertificateCodeTests(unittest.TestCase):
     def test_normalize_code(self):
         self.assertEqual(normalize_certificate_code(" mss-000001 "), "MSS-000001")
         self.assertEqual(normalize_certificate_code("MSS 000001"), "MSS000001")
+        self.assertEqual(normalize_certificate_code("20 1/лото"), "201/ЛОТО")
+        self.assertEqual(normalize_certificate_code("№201/ЛОТО"), "201/ЛОТО")
         self.assertIsNone(normalize_certificate_code("номер!"))
         self.assertTrue(is_preview_code("TEST-1"))
+
+    def test_manual_host_code(self):
+        self.assertTrue(is_manual_host_code("201/ЛОТО"))
+        self.assertTrue(is_manual_host_code(normalize_certificate_code("20 1/лото")))
+        self.assertTrue(is_manual_host_code("15/BEST"))
+        self.assertFalse(is_manual_host_code("MSS-000001"))
+        self.assertFalse(is_manual_host_code("0007"))
+        self.assertFalse(is_manual_host_code("201"))
+        self.assertFalse(is_manual_host_code("201/"))
+        import os
+
+        os.environ.setdefault("BOT_TOKEN", "123456789:" + ("A" * 35))
+        from bot.services.cert_flow import _skip_site_registry
+
+        self.assertTrue(_skip_site_registry({"code": "201/ЛОТО"}))
+        self.assertFalse(_skip_site_registry({"code": "MSS-000001"}))
+        self.assertFalse(_skip_site_registry({"code": "0007"}))
 
     def test_parse_start(self):
         self.assertEqual(parse_certificate_start("msscert_abc"), ("abc", ""))
@@ -133,6 +153,8 @@ class CertificateCodeTests(unittest.TestCase):
         self.assertNotIn("Такой номер не найден", NUMBER_NOT_FOUND_TEXT)
         self.assertIn("QR", NUMBER_NOT_FOUND_TEXT)
         self.assertIn("MSS-000001", NUMBER_NOT_FOUND_TEXT)
+        self.assertIn("201/ЛОТО", NUMBER_NOT_FOUND_TEXT)
+        self.assertIn("201/ЛОТО", START_TEXT)
 
     def test_my_bookings_confirm_only_in_ticket_window(self):
         import os

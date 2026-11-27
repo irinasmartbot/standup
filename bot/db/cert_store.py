@@ -158,6 +158,26 @@ def get_session(session_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def code_already_used(code: str, *, except_session_id: int | None = None) -> bool:
+    """Номер уже списан или висит в активной брони — другой гость его не берёт."""
+    if not postgres_ready() or not (code or "").strip():
+        return False
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM certificate_sessions
+                WHERE code = %s
+                  AND (registry_confirmed OR state = 'booked')
+                  AND (%s::bigint IS NULL OR id <> %s)
+                LIMIT 1
+                """,
+                (code, except_session_id, except_session_id),
+            )
+            return cur.fetchone() is not None
+
+
 def list_sessions_for_user(
     *,
     telegram_id: int | None = None,
