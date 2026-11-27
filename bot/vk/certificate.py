@@ -16,6 +16,7 @@ from bot.services.cert_flow import (
     begin_transfer,
     cancel_booking,
     confirm_booking,
+    number_hint_photo_path,
     reserve_event,
     save_name,
     save_phone,
@@ -24,7 +25,7 @@ from bot.services.cert_flow import (
     submit_photo,
     use_saved_phone,
 )
-from bot.services.cert_texts import PHOTO_ASK_TEMPLATE
+from bot.services.cert_texts import NUMBER_HINT_SCREEN, PHOTO_ASK_TEMPLATE
 from bot.vk.formatting import format_vk_text
 from bot.vk.keyboards import VKKeyboardBuilder
 from bot.vk.raffle import download_screenshot_bytes, extract_photo_from_message
@@ -67,11 +68,27 @@ def _keyboard(step: dict) -> str | None:
 
 
 async def _send(client, peer_id: int, step: dict) -> None:
-    await client.send_message(
-        peer_id,
-        format_vk_text(step.get("text") or ""),
-        keyboard=_keyboard(step),
-    )
+    text = format_vk_text(step.get("text") or "")
+    keyboard = _keyboard(step)
+    if step.get("screen") == NUMBER_HINT_SCREEN:
+        path = number_hint_photo_path()
+        if path:
+            try:
+                attachment = await client.upload_message_photo(
+                    peer_id,
+                    path.read_bytes(),
+                    filename=path.name,
+                )
+                await client.send_message(
+                    peer_id,
+                    text,
+                    keyboard=keyboard,
+                    attachment=attachment,
+                )
+                return
+            except Exception:
+                logger.exception("certificate number hint photo failed")
+    await client.send_message(peer_id, text, keyboard=keyboard)
 
 
 def is_certificate_ref(raw_ref: str, ref_source: str = "") -> bool:

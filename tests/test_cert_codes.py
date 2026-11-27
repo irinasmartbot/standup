@@ -152,9 +152,17 @@ class CertificateCodeTests(unittest.TestCase):
         self.assertIn("соответствующее поле", PHOTO_ASK_TEMPLATE)
         self.assertNotIn("Такой номер не найден", NUMBER_NOT_FOUND_TEXT)
         self.assertIn("QR", NUMBER_NOT_FOUND_TEXT)
-        self.assertIn("MSS-000001", NUMBER_NOT_FOUND_TEXT)
-        self.assertIn("201/ЛОТО", NUMBER_NOT_FOUND_TEXT)
+        self.assertIn("как 001.", NUMBER_NOT_FOUND_TEXT)
+        self.assertNotIn("MSS-000001", NUMBER_NOT_FOUND_TEXT)
         self.assertIn("201/ЛОТО", START_TEXT)
+        import os
+
+        os.environ.setdefault("BOT_TOKEN", "123456789:" + ("A" * 35))
+        from bot.services.cert_flow import _number_step, number_hint_photo_path
+
+        hint = _number_step(NUMBER_NOT_FOUND_TEXT)
+        self.assertEqual(hint["screen"], "cert_number_hint")
+        self.assertTrue(number_hint_photo_path())
 
     def test_my_bookings_confirm_only_in_ticket_window(self):
         import os

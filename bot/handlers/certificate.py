@@ -9,7 +9,7 @@ from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import CallbackQuery, FSInputFile, KeyboardButton, Message, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import MODERATION_CHAT_ID, bot
@@ -25,6 +25,7 @@ from bot.services.cert_flow import (
     cancel_booking,
     confirm_booking,
     draft_for,
+    number_hint_photo_path,
     reserve_event,
     review,
     save_name,
@@ -34,7 +35,7 @@ from bot.services.cert_flow import (
     submit_photo,
     use_saved_phone,
 )
-from bot.services.cert_texts import APPROVED_TEXT, PHOTO_ASK_TEMPLATE, REJECT_TEXT
+from bot.services.cert_texts import APPROVED_TEXT, NUMBER_HINT_SCREEN, PHOTO_ASK_TEMPLATE, REJECT_TEXT
 from bot.utils.reply_keyboard import clear_reply_keyboard, mark_reply_keyboard
 
 logger = logging.getLogger(__name__)
@@ -123,6 +124,18 @@ async def _send_step(message: Message, step: dict):
     parse_mode = _parse_mode(step)
     text = step.get("text") or ""
     screen = step.get("screen") or "text"
+    if screen == NUMBER_HINT_SCREEN:
+        path = number_hint_photo_path()
+        if path:
+            try:
+                return await message.answer_photo(
+                    photo=FSInputFile(path),
+                    caption=text,
+                    reply_markup=markup,
+                    parse_mode=parse_mode,
+                )
+            except Exception:
+                logger.exception("certificate number hint photo failed")
     if screen == "dates":
         photo = _format_cover(str(step.get("event_format") or ""))
         if photo:

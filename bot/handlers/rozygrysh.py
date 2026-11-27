@@ -122,6 +122,7 @@ SYSTEM_PHOTO_FILES = {
     "residents_start.jpg",
     "photo_2026-10-02_19-50-45.jpg",
     "pushkin-2026-09-15.jpg",
+    "cert_number_hint.jpg",
 }
 RAFFLE_DATES_PAGE_SIZE = 10
 RAFFLE_DATES_CAPTION = "Выбирай дату мероприятия в рамках розыгрыша 👇"

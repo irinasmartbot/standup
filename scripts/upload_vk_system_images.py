@@ -49,6 +49,7 @@ _EXCLUDED_RANDOM_NAMES = {
     "nebar.jpg",
     "ticket_template.jpg",
     "photo_2026-07-21_01-59-43.jpg",
+    "cert_number_hint.jpg",
 }
 # VK message photo upload is picky; keep under ~5 MB to avoid empty photo responses.
 _MAX_RANDOM_PHOTO_SIZE = 5 * 1024 * 1024

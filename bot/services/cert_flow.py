@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from bot.db.cert_store import (
@@ -55,6 +56,7 @@ from bot.services.cert_texts import (
     MISMATCH_TEXT,
     NAME_ASK_TEXT,
     NUMBER_ASK_TEXT,
+    NUMBER_HINT_SCREEN,
     NUMBER_NOT_FOUND_TEXT,
     START_TEXT,
     START_WORDS,
@@ -114,6 +116,16 @@ def _step(
         "html": html,
         "booking_id": booking_id,
     }
+
+
+def number_hint_photo_path() -> Path | None:
+    path = Path(__file__).resolve().parents[2] / "фото" / "cert_number_hint.jpg"
+    return path if path.is_file() else None
+
+
+def _number_step(text: str) -> dict[str, Any]:
+    screen = NUMBER_HINT_SCREEN if text == NUMBER_NOT_FOUND_TEXT else "text"
+    return _step(text, expect="number", screen=screen)
 
 
 def _guest_error(exc: Exception) -> str:
@@ -207,7 +219,7 @@ async def submit_number(session: dict[str, Any], raw: str) -> dict[str, Any]:
     try:
         data = await registry.resolve(code=code)
     except (RegistryNotConfigured, RegistryTemporary, RegistryRefusal) as exc:
-        return _step(_guest_error(exc), expect="number")
+        return _number_step(_guest_error(exc))
     return await _accept_resolved(session, data, typed=code)
 
 
