@@ -65,7 +65,6 @@ from bot.services.cert_texts import (
     PHONE_CONFIRM_TEXT,
     PHONE_OK_BUTTON,
     PHONE_OTHER_BUTTON,
-    PHOTO_ASK_TEMPLATE,
     PREVIEW_TEXT,
     REJECT_TEXT,
     RESERVE_PENDING_TEXT,
@@ -75,6 +74,7 @@ from bot.services.cert_texts import (
     confirmed_caption,
     date_ask_text,
     event_card_caption,
+    photo_ask_text,
 )
 from bot.services.sheets import get_event_by_id, load_events
 from bot.utils.reminder_schedule import plan_booking_reminders
@@ -197,7 +197,7 @@ async def _accept_resolved(session: dict[str, Any], data: dict[str, Any], *, typ
     if typed and normalize_certificate_code(typed) != code:
         return _step(MISMATCH_TEXT, expect="number")
     update_session(session["id"], code=code, state="await_photo")
-    return _step(PHOTO_ASK_TEMPLATE.format(code=code), expect="photo")
+    return _step(photo_ask_text(code), expect="photo")
 
 
 async def submit_number(session: dict[str, Any], raw: str) -> dict[str, Any]:
@@ -215,7 +215,7 @@ async def submit_number(session: dict[str, Any], raw: str) -> dict[str, Any]:
         if code_already_used(code, except_session_id=session.get("id")):
             return _step(MANUAL_USED_TEXT, expect="number")
         update_session(session["id"], code=code, state="await_photo")
-        return _step(PHOTO_ASK_TEMPLATE.format(code=code), expect="photo")
+        return _step(photo_ask_text(code), expect="photo")
     try:
         data = await registry.resolve(code=code)
     except (RegistryNotConfigured, RegistryTemporary, RegistryRefusal) as exc:

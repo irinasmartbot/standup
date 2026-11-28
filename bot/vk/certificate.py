@@ -25,7 +25,7 @@ from bot.services.cert_flow import (
     submit_photo,
     use_saved_phone,
 )
-from bot.services.cert_texts import NUMBER_HINT_SCREEN, PHOTO_ASK_TEMPLATE
+from bot.services.cert_texts import NUMBER_HINT_SCREEN, photo_ask_text
 from bot.vk.formatting import format_vk_text
 from bot.vk.keyboards import VKKeyboardBuilder
 from bot.vk.raffle import download_screenshot_bytes, extract_photo_from_message
@@ -173,9 +173,7 @@ async def handle_incoming(
         code = session.get("code") or ""
         await client.send_message(
             peer_id,
-            format_vk_text(
-                PHOTO_ASK_TEMPLATE.format(code=code) if code else "Пришли фото сертификата 📸"
-            ),
+            format_vk_text(photo_ask_text(code)),
         )
         return True
     if state == "need_name":

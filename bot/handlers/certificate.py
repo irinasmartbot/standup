@@ -35,7 +35,7 @@ from bot.services.cert_flow import (
     submit_photo,
     use_saved_phone,
 )
-from bot.services.cert_texts import APPROVED_TEXT, NUMBER_HINT_SCREEN, PHOTO_ASK_TEMPLATE, REJECT_TEXT
+from bot.services.cert_texts import APPROVED_TEXT, NUMBER_HINT_SCREEN, REJECT_TEXT, photo_ask_text
 from bot.utils.reply_keyboard import clear_reply_keyboard, mark_reply_keyboard
 
 logger = logging.getLogger(__name__)
@@ -279,7 +279,7 @@ async def on_photo_text(message: Message, state: FSMContext):
     else:
         code = session.get("code") or ""
         step = {
-            "text": PHOTO_ASK_TEMPLATE.format(code=code) if code else "Пришли фото сертификата.",
+            "text": photo_ask_text(code),
             "expect": "photo",
             "buttons": [],
         }

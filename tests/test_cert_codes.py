@@ -19,6 +19,7 @@ from bot.services.cert_texts import (
     NUMBER_NOT_FOUND_TEXT,
     PHOTO_ASK_TEMPLATE,
     START_TEXT,
+    photo_ask_text,
     booked_thanks_text,
     date_ask_text,
     event_card_caption,
@@ -148,11 +149,19 @@ class CertificateCodeTests(unittest.TestCase):
         self.assertIn("по твоему бумажному сертификату", START_TEXT)
         self.assertIn("отсканировал QR", START_TEXT)
         self.assertIn("соответствующее поле", START_TEXT)
-        self.assertIn("как 001.", START_TEXT)
+        self.assertIn("в формате 00XX.", START_TEXT)
         self.assertIn("уже написал номер сам", START_TEXT)
         self.assertIn("одним сообщением", START_TEXT)
         self.assertIn("{code}", PHOTO_ASK_TEMPLATE)
         self.assertIn("соответствующее поле", PHOTO_ASK_TEMPLATE)
+        site_photo = photo_ask_text("0016")
+        self.assertIn("0016", site_photo)
+        self.assertIn("соответствующее поле", site_photo)
+        host_photo = photo_ask_text("100/ЛОТО")
+        self.assertIn("100/ЛОТО", host_photo)
+        self.assertIn("фото бумажного сертификата", host_photo)
+        self.assertNotIn("соответствующее поле", host_photo)
+        self.assertIn("фото бумажного сертификата", photo_ask_text("100/LOTO"))
         self.assertNotIn("Такой номер не найден", NUMBER_NOT_FOUND_TEXT)
         self.assertIn("QR", NUMBER_NOT_FOUND_TEXT)
         self.assertIn("как 001.", NUMBER_NOT_FOUND_TEXT)
